@@ -10,8 +10,16 @@ Backend repository for VitaLoom. The application uses Java 21, Spring Boot 4.1.1
 - [Package Structure](./docs/architecture/package-structure.md) — feature ownership, package layout and dependency direction.
 - [Implementation Conventions](./docs/architecture/implementation-conventions.md) — coding, HTTP, service, persistence and testing conventions.
 
-The current demo implementation remains available in [`vitaloom-demo/demo`](https://github.com/vitaloom/vitaloom-demo/tree/main/demo). The API behavior baseline remains in [`vitaloom-demo/API_CONTRACT.md`](https://github.com/vitaloom/vitaloom-demo/blob/main/API_CONTRACT.md) until the contract is formally moved here.
+The previous demo implementation remains available in [`vitaloom-demo/demo`](https://github.com/vitaloom/vitaloom-demo/tree/main/demo) as a migration reference. The canonical MVP API contract now lives in [`docs/api/api-contract.md`](./docs/api/api-contract.md).
 
+
+## Development status
+
+The runtime and local MongoDB infrastructure are ready for feature implementation. Business features are being migrated from the demo into this repository; the API contract documents the expected behavior but does not guarantee that every listed endpoint is already available.
+
+The repository is the source of truth for new backend implementation and API-contract changes. Keep Mobile and Data Producer compatibility in mind when changing request/response shapes, statuses, identifiers, timestamps or aggregation behavior.
+
+The local Compose stack starts MongoDB and Mongo Express only. Spring Boot runs on the host. It does not start the demo Nginx gateway, Mobile app or Go Data Producer.
 ## Prerequisites
 
 - Java 21
