@@ -2,13 +2,13 @@
 
 These conventions apply to new code and code being refactored in VitaLoom Backend. They are a baseline for this repository, not a mandate to mechanically rewrite the current demo implementation. Inspect relevant callers, stored data, tests and API behavior before changing an existing pattern. Do not expand a task into unrelated cleanup.
 
-Package placement and module boundaries will be defined in a separate package-structure document. Until that document is established, preserve the package layout of the code being changed and do not use this document as a reason for broad package moves.
+Package ownership, package placement and dependency direction are defined in [Package Structure](package-structure.md). This document defines coding and implementation behavior within those boundaries. Follow the target layout for new code and code migrated into this repository; do not use it as a reason for unrelated broad refactoring.
 
 ## 1. Naming
 
 | Kind | Convention | Example |
 |---|---|---|
-| Java package | Lowercase, no underscores | `health.event` |
+| Java package | Lowercase, no underscores | `event.service` |
 | Java class/interface | PascalCase; name the owned responsibility | `DailyStatisticsService` |
 | Java field/method | camelCase | `occurredAt`, `getDailyStatistics()` |
 | HTTP request DTO | Purpose + `Request` suffix | `WaterIntakeRequest` |
