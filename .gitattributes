@@ -1,0 +1,6 @@
+# Keep shell scripts compatible with Linux containers
+*.sh text eol=lf
+
+# Keep Docker Compose and application configuration consistent
+*.yaml text eol=lf
+*.yml text eol=lf
