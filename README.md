@@ -46,7 +46,7 @@ docker compose ps
 The Compose stack starts:
 
 - **MongoDB 8** as a single-node authenticated replica set named `vitaloom-rs`.
-- **Mongo Express** as a local administration UI at [http://localhost:8081](http://localhost:8081).
+- **Mongo Express** as a local administration UI at [http://localhost:8082](http://localhost:8082) (port 8082 avoids Expo/Metro's default 8081).
 
 The MongoDB root user is for administration. The backend connects with a separate `APP_USER` account that receives only `readWrite` on `APP_DB`.
 
