@@ -1,23 +1,25 @@
 # VitaLoom Backend — API Contract v1
 
-**Status:** Canonical MVP API contract, adopted from the VitaLoom demo  
+**Status:** Canonical MVP API behavior contract  
 **Daily timezone:** `Asia/Ho_Chi_Minh`  
 **Timestamp format:** ISO 8601 with an explicit timezone offset. Producers should send UTC timestamps ending in `Z`.
 
-This contract defines the agreed local-MVP API baseline for VitaLoom Backend and its Mobile and Data Producer consumers. It is the canonical API reference for new backend implementation. It is not a production multi-user API specification, and a listed endpoint is not considered implemented until its code is present and verified in this repository.
+This contract defines the target local-MVP API baseline for VitaLoom Backend and its Mobile and Data Producer consumers. It is the canonical API reference for new backend implementation. It is not a production multi-user API specification, and a listed endpoint is not considered implemented until its code is present and verified in this repository.
 
 ## 1. Conventions
 
 - API paths use the `/api` prefix. The backend local-development Compose stack exposes MongoDB and Mongo Express; Spring Boot runs directly on the host. The former demo's Nginx gateway is not required by this contract.
 - JSON request and response bodies use `Content-Type: application/json`.
-- `occurredAt` records when a measurement or user action happened. The backend adds `receivedAt` when it accepts an event.
-- Keep raw events/records as the source of truth. Spring Boot is responsible for validation, persistence, and daily aggregation; clients and the producer must not calculate and submit authoritative daily totals.
+- `occurredAt` records when a measurement or user action happened. The backend adds `receivedAt` when it receives an ingestion batch; the same receipt instant is assigned to newly accepted measurements in that batch.
+- Persist event instants as UTC. Java code uses `Instant`; MongoDB BSON Date stores millisecond precision.
+- Keep raw events/records as the source of truth. Spring Boot is responsible for validation, persistence and aggregation; clients and the producer must not calculate and submit authoritative daily totals.
 - A missing metric is represented by `null`, not zero.
-- For the MVP, a day starts at 00:00 in `Asia/Ho_Chi_Minh`. The backend derives the local statistics date from the original timestamp.
-- Clients/producers create stable IDs for their own write records and must reuse the same ID when retrying that record.
+- For the MVP, a day starts at 00:00 in `Asia/Ho_Chi_Minh`. The backend derives the local statistics date from the original `occurredAt`.
+- Clients/producers create stable IDs for their own retryable write records and must reuse the same ID when retrying that record.
 - Spring Boot enforces uniqueness, backed by MongoDB unique indexes. An API gateway, if present, does not create business IDs or decide whether a record is a duplicate.
-- A retry with an already accepted ID must not create a second record or double-count the metric.
-- Authentication and user-specific data isolation are not implemented in this local MVP. Do not use this contract as a production multi-user API.
+- A retry with an already accepted ID must not create a second record or double-count a metric.
+- Authentication and user-specific data isolation are not implemented yet. Personal-data ingestion must derive account ownership from an authenticated principal; do not accept `accountId` from the request body. Do not use this contract as a production multi-user API until the Authentication dependency is implemented.
+- The Heart Rate persistence schema and indexes are defined in [Heart Rate Data Model & Persistence Design](../architecture/heart-rate-data-design.md).
 
 ## 2. Health Check
 
@@ -35,7 +37,7 @@ Successful response — `200 OK`:
 
 ### `GET /api/statistics/daily`
 
-Returns all four metric values for the current date in `Asia/Ho_Chi_Minh`.
+Returns metric values for the current date in `Asia/Ho_Chi_Minh`.
 
 Successful response — `200 OK`:
 
@@ -43,7 +45,7 @@ Successful response — `200 OK`:
 {
   "date": "2026-10-24",
   "timezone": "Asia/Ho_Chi_Minh",
-  "heartRateBpm": 92,
+  "dailyAverageHeartRateBpm": 92,
   "steps": 1840,
   "sleepHours": 7.5,
   "waterMl": 1200
@@ -54,10 +56,12 @@ Successful response — `200 OK`:
 |---|---|---|
 | `date` | string | Current local date, `YYYY-MM-DD` |
 | `timezone` | string | Timezone used for the day's boundaries |
-| `heartRateBpm` | number or `null` | Latest heart-rate measurement by `occurredAt` within the day |
+| `dailyAverageHeartRateBpm` | number or `null` | Unweighted arithmetic mean of accepted Heart Rate measurements by `occurredAt` within the day; `null` if no measurement exists |
 | `steps` | integer or `null` | Sum of accepted step increments within the day; `null` if no step event exists |
 | `sleepHours` | number or `null` | Sleep duration stored for the day |
 | `waterMl` | integer or `null` | Sum of accepted water-intake records within the day; `null` if none exist |
+
+The Heart Rate value follows AHM's Daily Average policy. It is not the latest observation. If the product later needs a latest/live observation, it must be represented as a separate field and must not be labelled as Daily Average.
 
 The response is a read model. It may combine results from multiple metric-specific records; it does not imply the underlying metrics use the same write or processing logic.
 
@@ -175,64 +179,122 @@ Successful response — `202 Accepted`:
 
 Counts describe this submission. Retrying a previously accepted batch may return `accepted: 0` and a positive `duplicates` count.
 
-## 7. Heart Rate
+## 7. Heart Rate Batch Ingestion
 
 ### `POST /api/heart-rate/batch`
 
-Accepts raw heart-rate observations from the Go producer.
+Accepts raw Heart Rate measurements from one physical or simulated device per batch. Batch interval is controlled by the Producer (currently targeted at approximately 3–5 seconds); it is not an API timing constraint.
 
 Request:
 
 ```json
 {
-  "runId": "demo-run-001",
+  "deviceId": "device-001",
+  "runId": "run-20261105-001",
   "events": [
     {
-      "eventId": "demo-run-001-hr-0001",
-      "occurredAt": "2026-10-24T02:00:00Z",
-      "heartRateBpm": 92
+      "eventId": "hr-run-001-000001",
+      "occurredAt": "2026-11-05T12:30:15.000Z",
+      "heartRateBpm": 82
     },
     {
-      "eventId": "demo-run-001-hr-0002",
-      "occurredAt": "2026-10-24T02:00:05Z",
-      "heartRateBpm": 98
+      "eventId": "hr-run-001-000002",
+      "occurredAt": "2026-11-05T12:30:16.000Z",
+      "heartRateBpm": 84
     }
   ]
 }
 ```
 
-Rules:
+### Request fields
 
-- Use the same event identity, retry, timestamp, and duplicate-handling rules as step events.
-- `heartRateBpm` is a raw measurement in beats per minute. Validate that it is a plausible positive value; the implementation may use a bounded range such as 20–250 bpm.
-- Store accepted observations. Do not sum heart-rate measurements.
-- The dashboard uses the observation with the latest `occurredAt` within the local day.
-- If two observations have the same timestamp, use a deterministic tie-breaker such as event ID.
+| Field | Type | Required | Rule |
+|---|---|---:|---|
+| `deviceId` | string | Yes | Stable identifier for the device; reuse it across Producer runs. One batch contains measurements from one device only. |
+| `runId` | string | Yes | Identifies the Producer run for diagnostics; it is not part of measurement identity. |
+| `events` | array | Yes | Contains 1–500 measurements per request. |
+| `events[].eventId` | string | Yes | Stable unique measurement ID within the account/device. Reuse it for every retry of that measurement. |
+| `events[].occurredAt` | ISO 8601 timestamp | Yes | Device measurement time. Producers should send UTC with `Z`; Backend parses it as an `Instant`. |
+| `events[].heartRateBpm` | integer | Yes | Must be between 1 and 300 inclusive. This is an input sanity boundary, not a clinical normal range. |
 
-Successful response — `202 Accepted`:
+Additional rules:
+
+- `accountId` is not accepted in the request. Backend resolves it from the authenticated principal. The current Backend does not yet implement Authentication or account isolation; this is a prerequisite for a real multi-user deployment.
+- `deviceId` is a source identifier, not an authentication credential. The MVP has no Device registry or device-registration workflow.
+- `eventId` is the primary idempotency key for an individual measurement. The Producer generates it once and preserves it across retries.
+- `occurredAt` is authoritative for history and statistics-day assignment. Out-of-order delivery is allowed.
+- Multiple measurements may have the same `occurredAt`, including measurements from different devices. Timestamp is not a unique key.
+- Backend creates `receivedAt`; clients cannot set or override it.
+- Persist accepted items to the separate `heart_rate_measurements` collection. Do not store Heart Rate and Steps in a generic shared event collection.
+- The measurement document, unique index and history index are defined in [Heart Rate Data Model & Persistence Design](../architecture/heart-rate-data-design.md).
+
+### Partial-acceptance response
+
+A structurally valid batch is processed item by item. One invalid or duplicate measurement does not cause valid measurements in the same batch to be discarded.
+
+Successful processing — `200 OK`:
 
 ```json
 {
-  "runId": "demo-run-001",
-  "received": 2,
-  "accepted": 2,
-  "duplicates": 0
+  "runId": "run-20261105-001",
+  "received": 3,
+  "accepted": 1,
+  "duplicates": 1,
+  "rejected": 1,
+  "results": [
+    {
+      "index": 0,
+      "eventId": "hr-run-001-000001",
+      "status": "ACCEPTED"
+    },
+    {
+      "index": 1,
+      "eventId": "hr-run-001-000002",
+      "status": "DUPLICATE"
+    },
+    {
+      "index": 2,
+      "eventId": "hr-run-001-000003",
+      "status": "REJECTED",
+      "error": {
+        "code": "INVALID_HEART_RATE",
+        "message": "heartRateBpm must be an integer between 1 and 300."
+      }
+    }
+  ]
 }
 ```
 
+Response rules:
+
+- `received` is the number of input items.
+- `accepted` counts newly persisted measurements.
+- `duplicates` counts already accepted measurements resent with the same account, device, event ID and measurement payload.
+- `rejected` counts items not persisted because of invalid measurement data or conflicting reuse of an event ID.
+- The invariant is `received = accepted + duplicates + rejected`.
+- `results` preserves request order. `index` is zero-based and lets the Producer correlate a rejected item even when its `eventId` is missing or invalid.
+- Each result has one status: `ACCEPTED`, `DUPLICATE` or `REJECTED`.
+- A repeated identity with the same normalized `occurredAt` and `heartRateBpm` is `DUPLICATE`. Reusing the same account/device/event ID with different measurement content is `REJECTED` with code `EVENT_ID_CONFLICT`.
+- Validation errors are item-level results. Malformed JSON or an invalid batch envelope (missing `deviceId`, missing `runId`, or an empty/oversized `events` array) returns `400 Bad Request` for the whole request.
+- A transient infrastructure/database failure returns a server error. The batch may have partially persisted before the failure; retry the same measurement IDs. The unique index makes already persisted items safe to resend.
+- The endpoint processes synchronously and returns item outcomes; it does not use `202 Accepted`.
+
+A separate HTTP `Idempotency-Key` header and batch-response replay store are deferred. Stable measurement `eventId` values and the MongoDB unique index are sufficient for the MVP's retry-safe persistence.
+
 ## 8. Duplicate and Error Handling
 
-### Event identity
+### Record identity
 
-- The producer creates a unique `eventId` for every raw event.
-- The mobile client creates an `intakeId` for every water-intake action.
-- Retrying the same logical event/action must reuse its ID.
+- Heart Rate measurements use `accountId + deviceId + eventId` as their unique persisted identity.
+- Steps continues to use its existing per-event `eventId` contract; its metric-specific persistence design is separate.
+- Water intake uses `intakeId` for each drinking action.
+- Retrying the same logical record must reuse its ID.
 - The backend must enforce uniqueness in persistence, not rely only on a check-then-insert query.
-- For this MVP, per-record IDs are the primary idempotency mechanism. A separate HTTP `Idempotency-Key` header for whole requests is deferred.
+- Identical retries must never double-count a metric. Conflicting reuse of an ID must remain distinguishable from an identical retry.
 
-### Error response
+### Generic error response
 
-Use a consistent error shape:
+Use a consistent error shape for request-level errors:
 
 ```json
 {
@@ -243,7 +305,7 @@ Use a consistent error shape:
 }
 ```
 
-Use `400 Bad Request` for invalid payloads, `409 Conflict` when an existing `eventId` or `intakeId` is reused with a different payload, and `500 Internal Server Error` for unexpected failures. Identical retries are reported as duplicates and must never double-count a metric.
+Water's single-record ID conflict continues to return `409 Conflict`. Heart Rate item-level ID conflicts are represented in the partial-acceptance result as `REJECTED / EVENT_ID_CONFLICT`, so valid items in the same batch can still be accepted. Other metric-specific conflict behavior remains defined in its section.
 
 ## 9. MVP Acceptance Checks
 
@@ -252,8 +314,10 @@ Use `400 Bad Request` for invalid payloads, `409 Conflict` when an existing `eve
 - [ ] Water intake creates separate records and sums them for the day.
 - [ ] Sleep upserts one record for the current local day.
 - [ ] Steps endpoint accepts raw increments and calculates daily totals without counting duplicate events twice.
-- [ ] Heart-rate endpoint stores individual observations and dashboard chooses the latest one by event time.
-- [ ] Producer and mobile retries reuse stable record IDs.
+- [ ] Heart Rate endpoint accepts one device per batch and stores each accepted measurement in `heart_rate_measurements`.
+- [ ] Heart Rate Daily Average is the unweighted mean of accepted measurements by `occurredAt`, not the latest observation.
+- [ ] Heart Rate batch responses expose per-item accepted, duplicate and rejected outcomes.
+- [ ] Heart Rate retries reuse stable `eventId` values; duplicate and concurrent writes do not create a second measurement.
 - [ ] MongoDB unique indexes prevent concurrent duplicate inserts.
 - [ ] Daily boundaries use `Asia/Ho_Chi_Minh`, starting at 00:00.
 - [ ] Raw event timestamps are preserved independently of server receipt time.
@@ -261,4 +325,4 @@ Use `400 Bad Request` for invalid payloads, `409 Conflict` when an existing `eve
 
 ## 10. Explicitly Deferred
 
-Authentication, user-specific data isolation, historical-date query parameters, personalized daily cutoff times, overnight sleep-session attribution, HTTP-level idempotency keys, pagination, asynchronous processing, advanced analytics, and production-grade rate limiting are outside this local MVP contract. Revisit them before a real multi-user deployment.
+Authentication implementation and user-specific data isolation, Device registration/management, history pagination, personalized daily cutoff times, overnight sleep-session attribution, HTTP-level idempotency keys, batch-result replay storage, asynchronous processing, advanced analytics, load-generation orchestration and production-grade rate limiting are outside this contract's current implementation scope. Revisit the relevant items before a real multi-user deployment or physical wearable integration.
