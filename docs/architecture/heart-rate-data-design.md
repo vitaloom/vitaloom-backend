@@ -1,7 +1,7 @@
 # Heart Rate Data Model & Persistence Design
 
-**Status:** Approved design baseline for the Heart Rate MVP  
-**Scope:** MongoDB measurement document, ownership, identity, indexes and retention  
+**Status:** Approved design baseline for the Heart Rate MVP
+**Scope:** MongoDB measurement document, ownership, identity, indexes and retention
 **Related API contract:** [Heart Rate batch ingestion](../api/api-contract.md#7-heart-rate-batch-ingestion)
 
 This design is specific to Heart Rate. Steps has its own model, collection, repository and ingestion behavior; do not generalize both metrics into a shared event document or collection.

@@ -13,6 +13,12 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.AuthenticationEntryPoint;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.MediaType;
+import tools.jackson.databind.ObjectMapper;
+import java.util.Map;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -23,14 +29,6 @@ public class SecurityConfig {
 
     private final List<String> allowedOrigins;
 
-    public SecurityConfig(
-            @Value("${vitaloom.cors.allowed-origins:http://localhost:8081}") String allowedOrigins) {
-        this.allowedOrigins = Arrays.stream(allowedOrigins.split(","))
-                .map(String::trim)
-                .filter(origin -> !origin.isEmpty())
-                .toList();
-    }
-
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
@@ -40,10 +38,32 @@ public class SecurityConfig {
                 .formLogin(AbstractHttpConfigurer::disable)
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/health", "/api/auth/register", "/api/auth/login", "/api/auth/refresh").permitAll()
+                        .requestMatchers("/api/auth/me").authenticated()
                         .requestMatchers("/api/**").permitAll()
-                        .anyRequest().denyAll());
+                        .anyRequest().denyAll())
+                .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.decoder(accessJwtDecoder))
+                        .authenticationEntryPoint(authenticationEntryPoint));
 
         return http.build();
+    }
+
+    private final JwtDecoder accessJwtDecoder;
+    private final AuthenticationEntryPoint authenticationEntryPoint;
+
+    public SecurityConfig(
+            @Value("${vitaloom.cors.allowed-origins:http://localhost:8081}") String allowedOrigins,
+            @Qualifier("accessJwtDecoder") JwtDecoder accessJwtDecoder,
+            ObjectMapper objectMapper) {
+        this.allowedOrigins = Arrays.stream(allowedOrigins.split(","))
+                .map(String::trim).filter(origin -> !origin.isEmpty()).toList();
+        this.accessJwtDecoder = accessJwtDecoder;
+        this.authenticationEntryPoint = (request, response, exception) -> {
+            response.setStatus(401);
+            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+            objectMapper.writeValue(response.getOutputStream(), Map.of("error", Map.of(
+                    "code", "UNAUTHORIZED", "message", "Authentication is required.")));
+        };
     }
 
     @Bean

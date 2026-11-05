@@ -1,6 +1,6 @@
 # VitaLoom Backend — API Contract v1
 
-**Status:** Canonical MVP API behavior contract  
+**Status:** Canonical MVP API behavior contract
 **Daily timezone:** `Asia/Ho_Chi_Minh`  
 **Timestamp format:** ISO 8601 with an explicit timezone offset. Producers should send UTC timestamps ending in `Z`.
 
@@ -18,7 +18,7 @@ This contract defines the target local-MVP API baseline for VitaLoom Backend and
 - Clients/producers create stable IDs for their own retryable write records and must reuse the same ID when retrying that record.
 - Spring Boot enforces uniqueness, backed by MongoDB unique indexes. An API gateway, if present, does not create business IDs or decide whether a record is a duplicate.
 - A retry with an already accepted ID must not create a second record or double-count a metric.
-- Authentication and user-specific data isolation are not implemented yet. Personal-data ingestion must derive account ownership from an authenticated principal; do not accept `accountId` from the request body. Do not use this contract as a production multi-user API until the Authentication dependency is implemented.
+- Basic authentication is specified in section 11. Existing metric APIs remain public and lack per-user data isolation. Personal-data ingestion must derive account ownership from an authenticated principal; do not accept `accountId` from the request body. Do not use this contract as a production multi-user API until data isolation is implemented.
 - The Heart Rate persistence schema and indexes are defined in [Heart Rate Data Model & Persistence Design](../architecture/heart-rate-data-design.md).
 
 ## 2. Health Check
@@ -219,7 +219,7 @@ Request:
 
 Additional rules:
 
-- `accountId` is not accepted in the request. Backend resolves it from the authenticated principal. The current Backend does not yet implement Authentication or account isolation; this is a prerequisite for a real multi-user deployment.
+- `accountId` is not accepted in the request. Backend must resolve it from the authenticated principal when Heart Rate ingestion is implemented. Basic Authentication now exists, but Heart Rate ingestion and account isolation are still prerequisites for a real multi-user deployment.
 - `deviceId` is a source identifier, not an authentication credential. The MVP has no Device registry or device-registration workflow.
 - `eventId` is the primary idempotency key for an individual measurement. The Producer generates it once and preserves it across retries.
 - `occurredAt` is authoritative for history and statistics-day assignment. Out-of-order delivery is allowed.
@@ -325,4 +325,19 @@ Water's single-record ID conflict continues to return `409 Conflict`. Heart Rate
 
 ## 10. Explicitly Deferred
 
-Authentication implementation and user-specific data isolation, Device registration/management, history pagination, personalized daily cutoff times, overnight sleep-session attribution, HTTP-level idempotency keys, batch-result replay storage, asynchronous processing, advanced analytics, load-generation orchestration and production-grade rate limiting are outside this contract's current implementation scope. Revisit the relevant items before a real multi-user deployment or physical wearable integration.
+User-specific health data isolation, device registration/management, history pagination, personalized daily cutoff times, overnight sleep-session attribution, HTTP-level idempotency keys, batch-result replay storage, asynchronous processing, advanced analytics, load-generation orchestration and production-grade rate limiting are outside this contract's current implementation scope. Authentication beyond section 11—including verification, MFA, rate limiting, refresh rotation/revocation and device management—is deferred. Revisit the relevant items before a real multi-user deployment or physical wearable integration.
+
+## 11. Basic Authentication MVP
+
+The implementation baseline for this section is `note/authentication-v1/03-api-contract-auth.md`. All endpoints use JSON. The authenticated user shape is `{ "id": "<Mongo id>", "email": "name+tag@example.com" }`. Email is trimmed at the edges and compared case-insensitively; dots and plus tags are retained. Passwords are never trimmed, and registration requires at least eight characters.
+
+| Endpoint | Auth | Success | Failure |
+| --- | --- | --- | --- |
+| `POST /api/auth/register` `{ "email": "...", "password": "..." }` | Public | `201` `{ "user": {"id":"...","email":"..."}, "accessToken":"...", "refreshToken":"...", "expiresInSeconds":900 }` | `400 VALIDATION_ERROR`; `409 EMAIL_ALREADY_REGISTERED` |
+| `POST /api/auth/login` `{ "email": "...", "password": "..." }` | Public | `200` same token and user shape as register | `400 VALIDATION_ERROR`; `401 INVALID_CREDENTIALS` |
+| `POST /api/auth/refresh` `{ "refreshToken": "..." }` | Public | `200` `{ "accessToken":"...", "expiresInSeconds":900 }` | `400 VALIDATION_ERROR`; `401 INVALID_REFRESH_TOKEN` |
+| `GET /api/auth/me` | Bearer access JWT | `200` `{ "id":"...", "email":"..." }` | `401 UNAUTHORIZED` |
+
+If registration persisted the account but token issuance fails, return `201` `{ "user": {"id":"...","email":"..."}, "authStatus":"LOGIN_REQUIRED" }`. The client offers login rather than retrying registration. Error responses use `{ "error": { "code": "...", "message": "..." } }`. Login uses the same error for unknown email and wrong password.
+
+Access JWTs expire after 15 minutes; refresh JWTs after 30 days. They use separate signing keys from environment configuration and distinct token-type claims. A refresh JWT is never accepted as a Bearer access credential. Refresh returns only a new access JWT and does not rotate the refresh JWT. `GET /api/health` stays public. Adding authentication does not secure or isolate the existing metric endpoints.
