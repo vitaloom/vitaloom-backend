@@ -8,11 +8,12 @@ The intended stack is Java 21, Spring Boot and MongoDB. The backend source has n
 
 Read the documents relevant to the task:
 
+- `docs/architecture/package-structure.md` — feature ownership, package layout and dependency direction.
 - `docs/architecture/implementation-conventions.md` — coding, HTTP, service, persistence and testing conventions.
 - `docs/agent/working-agreement.md` — task workflow, implementation loop and failure/retry discipline.
 - `docs/agent/definition-of-done.md` — completion and verification criteria.
 
-Until the dedicated package-structure document is established, preserve the existing package layout of the code being changed. Do not perform broad package moves as part of an unrelated task.
+For new code and code migrated into this repository, follow the target layout in `docs/architecture/package-structure.md`. A package migration must still be explicit in task scope; do not perform broad package moves as part of unrelated work.
 
 The current API behavior baseline is documented in [vitaloom-demo/API_CONTRACT.md](https://github.com/vitaloom/vitaloom-demo/blob/main/API_CONTRACT.md). It remains the reference until the API contract is formally moved into this repository.
 
