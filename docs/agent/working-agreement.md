@@ -41,12 +41,11 @@ Reuse valid verification results while the relevant code, configuration, inputs 
 ## 4. Verification discipline
 
 - Use the build and test commands that actually exist in the current checkout. Do not assume a Maven wrapper or project structure exists before inspecting it.
-- During implementation, prefer focused unit or integration tests that answer a specific question.
-- For application code or configuration changes, run the project's full change-level verification command before declaring the change fully verified when the environment supports it. For Maven projects this will normally be the repository's documented `verify` command.
-- For documentation-only changes, verify the changed paths, links, commands and examples as appropriate. Do not run the application test suite without a reason.
-- Do not create disposable tests or repeatedly run full builds unless they resolve a concrete uncertainty.
-
-A checked task box is a status record, not proof that a check ran.
+- During implementation, prefer focused tests or checks that answer a specific question.
+- Select the final verification scope according to the change's risk. Use full test-suite/build verification for broad-impact changes, persistence or data-contract changes, significant configuration/build changes, or substantial work before merge when the environment supports it. Do not run a full suite mechanically for every small isolated change.
+- For documentation-only changes, verify the changed paths, links, commands and examples as appropriate. Do not run the application test suite without a concrete reason.
+- Do not create disposable tests or repeatedly run full builds unless they resolve a specific uncertainty.
+- Never weaken, disable, suppress or bypass a check merely to obtain a passing result.
 
 ## 5. Finish with evidence
 
@@ -54,7 +53,7 @@ The final report must distinguish:
 
 - checks actually run and their observed results;
 - checks that failed or were not run, including why;
-- manual actions still required;
+- manual steps still required;
 - known limitations or unresolved blockers.
 
-Never claim that a command, test, build or manual flow passed unless its result was observed. If required verification cannot run, report the task as not fully verified rather than implying it is Done.
+Never claim that a command, test, build or manual flow passed unless its result was observed. When an important check cannot run, state what remains unverified and follow the [Definition of Done](definition-of-done.md) when describing completion status.
