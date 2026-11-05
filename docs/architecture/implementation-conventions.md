@@ -8,7 +8,7 @@ Package ownership, package placement and dependency direction are defined in [Pa
 
 | Kind | Convention | Example |
 |---|---|---|
-| Java package | Lowercase, no underscores | `health.event` |
+| Java package | Lowercase, no underscores | `event.service` |
 | Java class/interface | PascalCase; name the owned responsibility | `DailyStatisticsService` |
 | Java field/method | camelCase | `occurredAt`, `getDailyStatistics()` |
 | HTTP request DTO | Purpose + `Request` suffix | `WaterIntakeRequest` |
