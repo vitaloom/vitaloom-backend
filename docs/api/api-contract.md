@@ -99,7 +99,7 @@ Successful response — `201 Created`:
 
 ### `PUT /api/sleep/daily`
 
-Creates or replaces the current day's sleep-duration record. The demo supports one sleep record per local calendar day.
+Creates or replaces the current day's sleep-duration record. The MVP supports one sleep record per local calendar day.
 
 Request:
 
@@ -155,7 +155,7 @@ Request:
 
 Rules:
 
-- `runId` identifies a producer run and is useful for demo diagnostics.
+- `runId` identifies a producer run and is useful for producer-run diagnostics.
 - `eventId` is generated when the producer creates an event. It must remain unchanged when that event is retried.
 - `occurredAt` is when the simulated steps occurred.
 - `stepsDelta` is a non-negative integer increment, not a cumulative snapshot.

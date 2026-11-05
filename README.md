@@ -20,6 +20,7 @@ The runtime and local MongoDB infrastructure are ready for feature implementatio
 The repository is the source of truth for new backend implementation and API-contract changes. Keep Mobile and Data Producer compatibility in mind when changing request/response shapes, statuses, identifiers, timestamps or aggregation behavior.
 
 The local Compose stack starts MongoDB and Mongo Express only. Spring Boot runs on the host. It does not start the demo Nginx gateway, Mobile app or Go Data Producer.
+
 ## Prerequisites
 
 - Java 21
@@ -80,7 +81,7 @@ Windows:
 
 The application listens on port `8080` by default. Override it with `SERVER_PORT` in `.env`.
 
-This infrastructure bootstrap does not yet migrate the demo controllers or metric services. API endpoints become available as the feature source is moved into this repository.
+The runtime bootstrap does not include the business controllers or metric services yet. Implemented endpoints become available incrementally as their features are added to this repository.
 
 ## 4. Run tests
 
@@ -103,6 +104,6 @@ Windows:
 
 ## Security scope
 
-Spring Security is configured for a stateless API with environment-driven CORS. The current VitaLoom demo has no account, login, role or per-user data-isolation feature, so `/api/**` remains publicly accessible in this baseline. This is not production multi-user authentication.
+Spring Security is configured for a stateless API with environment-driven CORS. The current MVP baseline has no account, login, role or per-user data-isolation feature, so `/api/**` remains publicly accessible. This is not production multi-user authentication.
 
 JWT cookie filters, refresh sessions, password encoding and user-role authorization are intentionally not copied from EngoLearn. Introduce them together with an approved VitaLoom account/authentication feature and its API/data-isolation requirements. CSRF is disabled only for the current stateless, non-cookie API; revisit it before introducing cookie-based authentication.
