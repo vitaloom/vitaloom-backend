@@ -1,0 +1,14 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: vitaloom
+  config:
+    import: optional:file:.env[.properties]
+  mongodb:
+    host: ${MONGO_HOST:localhost}
+    port: ${MONGO_PORT:27017}
+    database: ${APP_DB:vitaloom_db}
+    username: ${APP_USER:vitaloom_app}
+    password: ${APP_PASSWORD}
