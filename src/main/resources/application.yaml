@@ -15,8 +15,15 @@ spring:
     database: ${APP_DB:vitaloom_db}
     username: ${APP_USER:vitaloom_app}
     password: ${APP_PASSWORD:change-me-local-app-password}
+  data:
+    mongodb:
+      auto-index-creation: true
 
 vitaloom:
+  auth:
+    issuer: ${JWT_ISSUER:https://api.vitaloom.local}
+    access-secret: ${JWT_ACCESS_SECRET}
+    refresh-secret: ${JWT_REFRESH_SECRET}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:8081,http://127.0.0.1:8081}
   mongodb:

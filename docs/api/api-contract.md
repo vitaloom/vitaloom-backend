@@ -17,7 +17,7 @@ This contract defines the agreed local-MVP API baseline for VitaLoom Backend and
 - Clients/producers create stable IDs for their own write records and must reuse the same ID when retrying that record.
 - Spring Boot enforces uniqueness, backed by MongoDB unique indexes. An API gateway, if present, does not create business IDs or decide whether a record is a duplicate.
 - A retry with an already accepted ID must not create a second record or double-count the metric.
-- Authentication and user-specific data isolation are not implemented in this local MVP. Do not use this contract as a production multi-user API.
+- Basic authentication is specified in section 11. Existing metric APIs remain public and lack per-user data isolation. Do not use them for real multi-user health data.
 
 ## 2. Health Check
 
@@ -261,4 +261,19 @@ Use `400 Bad Request` for invalid payloads, `409 Conflict` when an existing `eve
 
 ## 10. Explicitly Deferred
 
-Authentication, user-specific data isolation, historical-date query parameters, personalized daily cutoff times, overnight sleep-session attribution, HTTP-level idempotency keys, pagination, asynchronous processing, advanced analytics, and production-grade rate limiting are outside this local MVP contract. Revisit them before a real multi-user deployment.
+User-specific health data isolation, historical-date query parameters, personalized daily cutoff times, overnight sleep-session attribution, HTTP-level idempotency keys, pagination, asynchronous processing, advanced analytics, and production-grade rate limiting are outside this local MVP contract. Authentication beyond section 11—including verification, MFA, rate limiting, refresh rotation/revocation, and device management—is deferred. Revisit these before a real multi-user deployment.
+
+## 11. Basic Authentication MVP
+
+The implementation baseline for this section is `note/authentication-v1/03-api-contract-auth.md`. All endpoints use JSON. The authenticated user shape is `{ "id": "<Mongo id>", "email": "name+tag@example.com" }`. Email is trimmed at the edges and compared case-insensitively; dots and plus tags are retained. Passwords are never trimmed, and registration requires at least eight characters.
+
+| Endpoint | Auth | Success | Failure |
+| --- | --- | --- | --- |
+| `POST /api/auth/register` `{ "email": "...", "password": "..." }` | Public | `201` `{ "user": {"id":"...","email":"..."}, "accessToken":"...", "refreshToken":"...", "expiresInSeconds":900 }` | `400 VALIDATION_ERROR`; `409 EMAIL_ALREADY_REGISTERED` |
+| `POST /api/auth/login` `{ "email": "...", "password": "..." }` | Public | `200` same token and user shape as register | `400 VALIDATION_ERROR`; `401 INVALID_CREDENTIALS` |
+| `POST /api/auth/refresh` `{ "refreshToken": "..." }` | Public | `200` `{ "accessToken":"...", "expiresInSeconds":900 }` | `400 VALIDATION_ERROR`; `401 INVALID_REFRESH_TOKEN` |
+| `GET /api/auth/me` | Bearer access JWT | `200` `{ "id":"...", "email":"..." }` | `401 UNAUTHORIZED` |
+
+If registration persisted the account but token issuance fails, return `201` `{ "user": {"id":"...","email":"..."}, "authStatus":"LOGIN_REQUIRED" }`. The client offers login rather than retrying registration. Error responses use `{ "error": { "code": "...", "message": "..." } }`. Login uses the same error for unknown email and wrong password.
+
+Access JWTs expire after 15 minutes; refresh JWTs after 30 days. They use separate signing keys from environment configuration and distinct token-type claims. A refresh JWT is never accepted as a Bearer access credential. Refresh returns only a new access JWT and does not rotate the refresh JWT. `GET /api/health` stays public. Adding authentication does not secure or isolate the existing metric endpoints.

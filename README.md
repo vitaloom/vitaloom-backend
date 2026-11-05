@@ -15,7 +15,7 @@ The previous demo implementation remains available in [`vitaloom-demo/demo`](htt
 
 ## Development status
 
-The runtime and local MongoDB infrastructure are ready for feature implementation. Business features are being migrated from the demo into this repository; the API contract documents the expected behavior but does not guarantee that every listed endpoint is already available.
+The runtime and local MongoDB infrastructure are ready for feature implementation. Basic authentication endpoints are implemented; other business features are being migrated from the demo. The API contract documents expected behavior but does not guarantee that every listed metric endpoint is available.
 
 The repository is the source of truth for new backend implementation and API-contract changes. Keep Mobile and Data Producer compatibility in mind when changing request/response shapes, statuses, identifiers, timestamps or aggregation behavior.
 
@@ -44,6 +44,8 @@ Copy-Item .env.example .env
 ```
 
 Change the sample passwords before starting the stack. The checked-in example values are for local development only.
+
+For authentication, set `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` in the untracked `.env`. Use two different random values of at least 32 bytes each. `JWT_ISSUER` is optional. The application refuses to start without usable signing secrets. Keep these values out of source control and out of the mobile `EXPO_PUBLIC_` configuration.
 
 ## 2. Start MongoDB infrastructure
 
@@ -81,7 +83,7 @@ Windows:
 
 The application listens on port `8080` by default. Override it with `SERVER_PORT` in `.env`.
 
-The runtime bootstrap does not include the business controllers or metric services yet. Implemented endpoints become available incrementally as their features are added to this repository.
+The auth feature provides `POST /api/auth/register`, `/login`, `/refresh` and protected `GET /api/auth/me`; see the [API contract](./docs/api/api-contract.md). Other metric endpoints become available incrementally as their features are added.
 
 ## 4. Run tests
 
@@ -104,6 +106,4 @@ Windows:
 
 ## Security scope
 
-Spring Security is configured for a stateless API with environment-driven CORS. The current MVP baseline has no account, login, role or per-user data-isolation feature, so `/api/**` remains publicly accessible. This is not production multi-user authentication.
-
-JWT cookie filters, refresh sessions, password encoding and user-role authorization are intentionally not copied from EngoLearn. Introduce them together with an approved VitaLoom account/authentication feature and its API/data-isolation requirements. CSRF is disabled only for the current stateless, non-cookie API; revisit it before introducing cookie-based authentication.
+Spring Security uses stateless Bearer access JWT authentication for `/api/auth/me`. Registration, login, refresh and health check are public. Existing metric APIs remain public and have no per-user data isolation; do not use them for real private health data. Refresh JWTs are stateless and have no server-side revocation or rotation in this Basic MVP. Local sign-out clears the mobile credential but cannot invalidate a previously issued refresh JWT. CSRF is disabled for the stateless, non-cookie API; revisit it if cookies are introduced.
