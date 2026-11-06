@@ -21,6 +21,8 @@ This design is specific to Heart Rate. Steps has its own model, collection, repo
 | Ordering | Out-of-order measurements and multiple measurements with the same `occurredAt` are allowed |
 | Retention | Keep raw measurements for the MVP; no TTL index |
 
+An event with `occurredAt` strictly later than the batch receipt instant is rejected item by item with `FUTURE_OCCURRED_AT`; there is no clock-skew grace period. The service captures one receipt instant for the batch. Before persistence, `occurredAt` is truncated to MongoDB BSON Date millisecond precision so retry comparison uses the same canonical value MongoDB stores.
+
 The BPM range is an input sanity boundary only. It is not a definition of a normal, abnormal or clinically safe heart rate. Values inside the boundary are stored as received; the ingestion path does not reinterpret or silently normalize them.
 
 ## 2. MongoDB document
@@ -124,12 +126,12 @@ The metric policy is the unweighted arithmetic mean of valid accepted `heartRate
 If there are no accepted measurements, the result is absent / no data, not zero BPM. The Statistics feature accesses this capability through the Heart Rate service; it does not query the collection directly.
 
 The Heart Rate details screen uses `GET /api/heart-rate/summary?date=YYYY-MM-DD` to read both:
-- **Latest Recorded HR:** one accepted measurement with the maximum `occurredAt` in the authenticated account's **full history**, independent of the selected day. It returns its BPM and original measurement timestamp. A deterministic tie-break for identical maximum timestamps is required before implementation.
+- **Latest Recorded HR:** one accepted measurement with the maximum `occurredAt` in the authenticated account's **full history**, independent of the selected day. It returns its BPM and original measurement timestamp. When the maximum timestamp ties, choose ascending lexical `deviceId`, then ascending lexical `eventId` (MongoDB's default simple collation).
 - **Daily Average HR:** the existing account-scoped, half-open day-range query and unweighted arithmetic mean for the selected local day, with nullable BPM and explicit data status. Today is partial; history remains unverified unless positively confirmed.
 - The existing `{ accountId: 1, occurredAt: 1 }` index can serve a reverse-order latest lookup and day-range reads; no new index, collection or persisted aggregate is required solely for these views.
 - The Backend owns both calculations. Do not substitute `receivedAt` for `occurredAt`; the last record received can be older than the most recently measured record.
 
-This design does not define a materialized aggregate collection, background aggregation pipeline, retention period or history pagination. The GET contract and status semantics are canonical in the API contract; clock-skew, equal-timestamp tie-break and verified-completeness criteria require Technical Design decisions.
+This design does not define a materialized aggregate collection, background aggregation pipeline, retention period or history pagination. Historical completeness remains unverified without an approved positive verification mechanism; `HISTORY_VERIFIED` is not emitted.
 
 ## 6. Dependencies and explicit non-goals
 

@@ -258,7 +258,7 @@ Example — user has no accepted Heart Rate measurements (past date requested):
 
 **Errors:** `400 INVALID_REPORT_DATE` for malformed/invalid/future `date`, `401 UNAUTHORIZED` for missing/invalid access credentials, and a standard `5xx` error for retrieval failure. Use the section 8 error envelope. A failed read must not return `200` with null BPM as though there were simply no measurements.
 
-**Technical Design handoff:** define same-`occurredAt` deterministic tie-break, device clock skew/future measurements, late/corrected data and a formal historical-completeness verification method before using `HISTORY_VERIFIED`. These are not new persistence fields or an authorization to infer realtime behavior.
+**Implementation decisions:** equal-`occurredAt` latest records use ascending lexical `deviceId`, then `eventId`. Heart Rate ingestion rejects an event whose `occurredAt` is strictly later than the receipt instant captured for its batch with item-level `FUTURE_OCCURRED_AT`; there is no clock-skew grace period. Historical completeness and late/corrected-data policy remain open; do not emit `HISTORY_VERIFIED` without a positive verification mechanism.
 
 ### `POST /api/heart-rate/batch`
 
@@ -298,10 +298,11 @@ Request:
 
 Additional rules:
 
-- `accountId` is not accepted in the request. Backend must resolve it from the authenticated principal when Heart Rate ingestion is implemented. Basic Authentication now exists, but Heart Rate ingestion and account isolation are still prerequisites for a real multi-user deployment.
+- `accountId` is not accepted in the request. Backend resolves it from the authenticated JWT subject for both ingestion and reads.
 - `deviceId` is a source identifier, not an authentication credential. The MVP has no Device registry or device-registration workflow.
 - `eventId` is the primary idempotency key for an individual measurement. The Producer generates it once and preserves it across retries.
 - `occurredAt` is authoritative for history and statistics-day assignment. Out-of-order delivery is allowed.
+- An `occurredAt` later than the batch receipt instant is rejected item by item with `FUTURE_OCCURRED_AT`; no clock-skew tolerance is applied. Accepted values are persisted at BSON Date millisecond precision.
 - Multiple measurements may have the same `occurredAt`, including measurements from different devices. Timestamp is not a unique key.
 - Backend creates `receivedAt`; clients cannot set or override it.
 - Persist accepted items to the separate `heart_rate_measurements` collection. Do not store Heart Rate and Steps in a generic shared event collection.
