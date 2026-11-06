@@ -61,7 +61,7 @@ Successful response — `200 OK`:
 | `sleepHours` | number or `null` | Sleep duration stored for the day |
 | `waterMl` | integer or `null` | Sum of accepted water-intake records within the day; `null` if none exist |
 
-The Heart Rate value follows AHM's Daily Average policy. It is not the latest observation. If the product later needs a latest/live observation, it must be represented as a separate field and must not be labelled as Daily Average.
+The Heart Rate value follows AHM's Daily Average policy; it is not the latest observation. The distinct `GET /api/heart-rate/summary` endpoint returns Latest Recorded Heart Rate together with selected-day Daily Average. This dashboard response remains unchanged.
 
 The response is a read model. It may combine results from multiple metric-specific records; it does not imply the underlying metrics use the same write or processing logic.
 
@@ -179,7 +179,86 @@ Successful response — `202 Accepted`:
 
 Counts describe this submission. Retrying a previously accepted batch may return `accepted: 0` and a positive `duplicates` count.
 
-## 7. Heart Rate Batch Ingestion
+## 7. Heart Rate Metrics & Batch Ingestion
+
+### `GET /api/heart-rate/summary`
+
+Read-only Heart Rate screen summary for an authenticated account. Returns **Latest Recorded Heart Rate** from the account's entire accepted history plus **Daily Average Heart Rate** for the selected calendar date. The Backend selects and calculates both; the mobile client must not calculate authoritative values.
+
+**Authentication:** Bearer access JWT is required. Derive `accountId` from the authenticated principal, never from the request. Do not expose account-scoped health reads against unisolated/shared metric records; ingest and read paths must both enforce account ownership before handling real multi-user data.
+
+**Query parameters:**
+
+| Parameter | Type | Required | Behavior |
+| --- | --- | --- | --- |
+| `date` | `YYYY-MM-DD` | No | Statistics day in `Asia/Ho_Chi_Minh`; defaults to today's local date. Accept only today or past dates. Invalid or future dates return `400 INVALID_REPORT_DATE`. |
+
+Successful response — `200 OK` (example assumes local today is `2026-11-06`):
+
+```json
+{
+  "date": "2026-11-06",
+  "timezone": "Asia/Ho_Chi_Minh",
+  "asOf": "2026-11-06T07:31:00.000Z",
+  "latestRecorded": {
+    "heartRateBpm": 82,
+    "occurredAt": "2026-11-06T07:30:15.000Z"
+  },
+  "dailyAverage": {
+    "heartRateBpm": 76.5,
+    "dataStatus": "CURRENT_DAY_PARTIAL"
+  }
+}
+```
+
+| Response field | Type | Meaning |
+| --- | --- | --- |
+| `date` | local calendar date | Selected date used **only** by Daily Average. |
+| `timezone` | string | Always `Asia/Ho_Chi_Minh` for the MVP. |
+| `asOf` | UTC ISO 8601 instant | Server snapshot/read time; **not** the measurement time. |
+| `latestRecorded` | object or `null` | Latest accepted measurement by `occurredAt` across **all dates** for this account; `null` if no eligible measurement exists. |
+| `latestRecorded.heartRateBpm` | integer | BPM of one accepted measurement, not an average. |
+| `latestRecorded.occurredAt` | UTC ISO 8601 instant | Time the measurement occurred; show as “Đo lúc ...”, never substitute `receivedAt` or `asOf`. |
+| `dailyAverage` | object | Always present for successful requests. |
+| `dailyAverage.heartRateBpm` | number or `null` | Arithmetic mean of accepted BPM values for `date`, or `null` when no accepted measurement is recorded for that date. |
+| `dailyAverage.dataStatus` | enum | Daily-result temporal/completeness state; independent of whether BPM is null. |
+
+**Allowed `dailyAverage.dataStatus` values:**
+
+| Value | When to return | UI meaning |
+| --- | --- | --- |
+| `CURRENT_DAY_PARTIAL` | Selected date is today | Provisional: reflects only accepted samples available when read. |
+| `HISTORY_UNVERIFIED` | Selected date is past and data completeness has not been verified | Historical result may be incomplete; default for historical dates without a completeness mechanism. |
+| `HISTORY_VERIFIED` | Historical-day completeness is positively confirmed under an approved metric-owner policy | Use only once a verification mechanism exists; never infer verification from date alone. |
+
+**Business / read semantics:**
+
+- Latest is selected by the **maximum measurement time `occurredAt`** within the authenticated account, not by `receivedAt` or latest ingestion batch. Out-of-order batches must not displace a later-measured sample. Records with identical `occurredAt` are allowed; Technical Design must provide a stable deterministic tie-break before implementation.
+- Daily Average is `sum(heartRateBpm) / count(accepted measurements)` for the half-open interval `[startOfDay, startOfNextDay)` determined in `Asia/Ho_Chi_Minh`. It is an unweighted arithmetic mean; no min/max, zones, trend or medical inference.
+- The `date` query filters **only Daily Average**. Switching from today to a past day does **not** change `latestRecorded`, unless the actual underlying accepted account records have changed.
+- A missing latest value and a missing daily average are independent. Never use `0` or one metric as a substitute for missing data in the other. Null means no accepted record currently available; it does not certify completeness of a historical day.
+- Latest must be labelled *Latest Recorded* rather than *Current*, *Live* or *Realtime*. Always show the actual `occurredAt` of the observation, even if that observation is old. No realtime stream, refresh interval, device-connection claim or freshness threshold is defined.
+- Both metrics are read-only and sourced from accepted `heart_rate_measurements` documents; no new persistent aggregate/collection is introduced. Account isolation and authentication are mandatory.
+- `GET /api/statistics/daily` remains unchanged: it only returns today's `dailyAverageHeartRateBpm` for the dashboard, not Latest Recorded HR.
+
+Example — user has no accepted Heart Rate measurements (past date requested):
+
+```json
+{
+  "date": "2026-11-05",
+  "timezone": "Asia/Ho_Chi_Minh",
+  "asOf": "2026-11-06T07:31:00.000Z",
+  "latestRecorded": null,
+  "dailyAverage": {
+    "heartRateBpm": null,
+    "dataStatus": "HISTORY_UNVERIFIED"
+  }
+}
+```
+
+**Errors:** `400 INVALID_REPORT_DATE` for malformed/invalid/future `date`, `401 UNAUTHORIZED` for missing/invalid access credentials, and a standard `5xx` error for retrieval failure. Use the section 8 error envelope. A failed read must not return `200` with null BPM as though there were simply no measurements.
+
+**Technical Design handoff:** define same-`occurredAt` deterministic tie-break, device clock skew/future measurements, late/corrected data and a formal historical-completeness verification method before using `HISTORY_VERIFIED`. These are not new persistence fields or an authorization to infer realtime behavior.
 
 ### `POST /api/heart-rate/batch`
 
@@ -316,6 +395,10 @@ Water's single-record ID conflict continues to return `409 Conflict`. Heart Rate
 - [ ] Steps endpoint accepts raw increments and calculates daily totals without counting duplicate events twice.
 - [ ] Heart Rate endpoint accepts one device per batch and stores each accepted measurement in `heart_rate_measurements`.
 - [ ] Heart Rate Daily Average is the unweighted mean of accepted measurements by `occurredAt`, not the latest observation.
+- [ ] `GET /api/heart-rate/summary` returns account-scoped Latest Recorded HR across all days and Daily Average for the chosen day; requires Bearer authentication and rejects future/invalid dates.
+- [ ] Changing the day leaves Latest unchanged; out-of-order measurements do not replace newer `occurredAt` values; same-time ties have a deterministic resolution.
+- [ ] Daily status distinguishes current-day partial from historical unverified, and claims historical verification only when explicitly supported.
+- [ ] No-data returns null without 0 placeholders, and failed retrieval produces an error instead of an empty successful response.
 - [ ] Heart Rate batch responses expose per-item accepted, duplicate and rejected outcomes.
 - [ ] Heart Rate retries reuse stable `eventId` values; duplicate and concurrent writes do not create a second measurement.
 - [ ] MongoDB unique indexes prevent concurrent duplicate inserts.

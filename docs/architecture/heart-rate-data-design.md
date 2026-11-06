@@ -2,7 +2,7 @@
 
 **Status:** Approved design baseline for the Heart Rate MVP
 **Scope:** MongoDB measurement document, ownership, identity, indexes and retention
-**Related API contract:** [Heart Rate batch ingestion](../api/api-contract.md#7-heart-rate-batch-ingestion)
+**Related API contract:** [Heart Rate metrics and ingestion](../api/api-contract.md#7-heart-rate-metrics--batch-ingestion)
 
 This design is specific to Heart Rate. Steps has its own model, collection, repository and ingestion behavior; do not generalize both metrics into a shared event document or collection.
 
@@ -123,7 +123,13 @@ The metric policy is the unweighted arithmetic mean of valid accepted `heartRate
 
 If there are no accepted measurements, the result is absent / no data, not zero BPM. The Statistics feature accesses this capability through the Heart Rate service; it does not query the collection directly.
 
-This design does not define a materialized aggregate collection, background aggregation pipeline, retention period, history pagination or a new statistics endpoint.
+The Heart Rate details screen uses `GET /api/heart-rate/summary?date=YYYY-MM-DD` to read both:
+- **Latest Recorded HR:** one accepted measurement with the maximum `occurredAt` in the authenticated account's **full history**, independent of the selected day. It returns its BPM and original measurement timestamp. A deterministic tie-break for identical maximum timestamps is required before implementation.
+- **Daily Average HR:** the existing account-scoped, half-open day-range query and unweighted arithmetic mean for the selected local day, with nullable BPM and explicit data status. Today is partial; history remains unverified unless positively confirmed.
+- The existing `{ accountId: 1, occurredAt: 1 }` index can serve a reverse-order latest lookup and day-range reads; no new index, collection or persisted aggregate is required solely for these views.
+- The Backend owns both calculations. Do not substitute `receivedAt` for `occurredAt`; the last record received can be older than the most recently measured record.
+
+This design does not define a materialized aggregate collection, background aggregation pipeline, retention period or history pagination. The GET contract and status semantics are canonical in the API contract; clock-skew, equal-timestamp tie-break and verified-completeness criteria require Technical Design decisions.
 
 ## 6. Dependencies and explicit non-goals
 
