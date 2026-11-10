@@ -16,7 +16,7 @@ This file is the navigation and shared-conventions entry point. Detailed endpoin
 | Heart Rate | [Heart Rate API](./metrics/heart-rate.md) |
 | Steps | [Steps API](./metrics/steps.md) |
 | Sleep | [Sleep API](./metrics/sleep.md) |
-| Water | [Water API](./metrics/water.md) |
+| Water | [Water Tracking API](../features/water/api-contract.md) |
 
 ## 2. Shared conventions
 
@@ -26,11 +26,11 @@ This file is the navigation and shared-conventions entry point. Detailed endpoin
 - Persist event instants as UTC. Java code uses `Instant`; MongoDB BSON Date stores millisecond precision.
 - Keep raw events/records as the source of truth. Spring Boot is responsible for validation, persistence and aggregation; clients and the producer must not calculate and submit authoritative daily totals.
 - A missing metric is represented by `null`, not zero. For Steps, an empty statistics bucket is `steps: null` and `eventCount: 0`; it does not prove zero activity or complete data coverage.
-- For the MVP, a day starts at 00:00 in `Asia/Ho_Chi_Minh`. The backend derives the local statistics date from the original `occurredAt`.
+- For the MVP, a day starts at 00:00 in `Asia/Ho_Chi_Minh`. The backend derives the local statistics date from the original `occurredAt`. Water Tracking reads use the requested `timeZone` as defined in the Water Tracking contract.
 - Clients/producers create stable IDs for their own retryable write records and must reuse the same ID when retrying that record.
 - Spring Boot enforces uniqueness, backed by MongoDB unique indexes. An API gateway, if present, does not create business IDs or decide whether a record is a duplicate.
 - A retry with an already accepted ID must not create a second record or double-count a metric.
-- Authentication and route-level access requirements are documented in [Authentication](./authentication.md). Heart Rate and Steps batch ingestion and Statistics routes require a Bearer access JWT and scope data to its subject. Sleep/Water routes and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation. Do not use unisolated paths for real multi-user private health data. Personal-data ingestion must derive account ownership from an authenticated principal; do not accept `accountId` from the request body.
+- Authentication and route-level access requirements are documented in [Authentication](./authentication.md). Heart Rate and Steps batch ingestion and Statistics routes require a Bearer access JWT and scope data to its subject. Water Tracking routes also require a Bearer access JWT and scope data to its subject. Sleep routes and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation. Do not use unisolated paths for real multi-user private health data. Personal-data ingestion must derive account ownership from an authenticated principal; do not accept `accountId` from the request body.
 - Metric-specific persistence schemas and indexes are documented under [Architecture](../architecture/). Heart Rate and Steps have separate raw-data designs: [Heart Rate Data Model & Persistence Design](../architecture/heart-rate-data-design.md) and [Steps Data Model & Persistence Design](../architecture/steps-data-design.md).
 
 ## 3. Health Check
@@ -51,8 +51,8 @@ Successful response — `200 OK`:
 
 - Heart Rate measurements use `accountId + deviceId + eventId` as their unique persisted identity.
 - Steps events use `accountId + deviceId + eventId` as their unique persisted identity.
-- Water intake uses `intakeId` for each drinking action.
-- Retrying the same logical record must reuse its ID.
+- Retrying the same logical ingestion event must reuse its ID.
+- `POST /api/water/logs` has no client idempotency key or safe automatic replay. A connection failure after the server commits can leave the write outcome unknown.
 - The backend must enforce uniqueness in persistence, not rely only on a check-then-insert query.
 - Identical retries must never double-count a metric. Conflicting reuse of an ID must remain distinguishable from an identical retry.
 
@@ -69,11 +69,11 @@ Use a consistent error shape for request-level errors:
 }
 ```
 
-Water's single-record ID conflict continues to return `409 Conflict`. Heart Rate and Steps item-level ID conflicts are represented in the partial-acceptance result as `REJECTED / EVENT_ID_CONFLICT`, so valid items in the same batch can still be accepted. Other metric-specific conflict behavior remains defined in its section.
+Heart Rate and Steps item-level ID conflicts are represented in the partial-acceptance result as `REJECTED / EVENT_ID_CONFLICT`, so valid items in the same batch can still be accepted. Other metric-specific conflict behavior remains defined in the corresponding contract.
 
 ## 5. Cross-cutting deferred capabilities
 
-Per-user access and data isolation for Sleep/Water and the cross-metric daily dashboard, device registration/management, history pagination, personalized daily cutoff times, overnight sleep-session attribution, HTTP-level idempotency keys, batch-result replay storage, asynchronous processing, advanced analytics, load-generation orchestration and production-grade rate limiting are outside this contract's current implementation scope. Revisit the relevant items before a real multi-user deployment or physical wearable integration.
+Per-user access and data isolation for Sleep and the cross-metric daily dashboard, device registration/management, history pagination, personalized daily cutoff times, overnight sleep-session attribution, HTTP-level idempotency keys, batch-result replay storage, asynchronous processing, advanced analytics, load-generation orchestration and production-grade rate limiting are outside this contract's current implementation scope. Revisit the relevant items before a real multi-user deployment or physical wearable integration.
 
 ## 6. Cross-cutting acceptance checks
 
