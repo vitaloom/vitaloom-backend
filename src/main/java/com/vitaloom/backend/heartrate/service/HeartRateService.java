@@ -2,24 +2,20 @@ package com.vitaloom.backend.heartrate.service;
 
 import com.vitaloom.backend.heartrate.dto.HeartRateBatchRequest;
 import com.vitaloom.backend.heartrate.dto.HeartRateBatchResponse;
-import com.vitaloom.backend.heartrate.dto.HeartRateSummaryResponse;
 import com.vitaloom.backend.heartrate.model.HeartRateMeasurement;
 import com.vitaloom.backend.heartrate.repository.HeartRateRepository;
 import java.time.Clock;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
-import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
 public class HeartRateService {
-    public static final ZoneId TIMEZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     private final HeartRateRepository repository;
     private final Clock clock;
 
@@ -72,23 +68,15 @@ public class HeartRateService {
         return new HeartRateBatchResponse(request.runId(), request.events().size(), accepted, duplicates, rejected, results);
     }
 
-    public HeartRateSummaryResponse summary(String accountId, String date) {
-        Instant asOf = clock.instant();
-        LocalDate selected;
-        try { selected = date == null ? LocalDate.now(clock.withZone(TIMEZONE)) : LocalDate.parse(date); }
-        catch (DateTimeParseException ex) { throw invalidDate(); }
-        LocalDate today = LocalDate.now(clock.withZone(TIMEZONE));
-        if (selected.isAfter(today) || (date != null && !selected.toString().equals(date))) throw invalidDate();
-        var latest = repository.latest(accountId).map(m -> new HeartRateSummaryResponse.LatestRecorded(
-                m.getHeartRateBpm(), m.getOccurredAt())).orElse(null);
-        Instant start = selected.atStartOfDay(TIMEZONE).toInstant();
-        Instant end = selected.plusDays(1).atStartOfDay(TIMEZONE).toInstant();
-        List<HeartRateMeasurement> samples = repository.forDay(accountId, start, end);
-        Double average = samples.isEmpty() ? null : samples.stream().mapToLong(HeartRateMeasurement::getHeartRateBpm)
-                .average().orElseThrow();
-        String status = selected.equals(today) ? "CURRENT_DAY_PARTIAL" : "HISTORY_UNVERIFIED";
-        return new HeartRateSummaryResponse(selected, TIMEZONE.getId(), asOf, latest,
-                new HeartRateSummaryResponse.DailyAverage(average, status));
+    public Optional<HeartRateSample> findLatestSample(String accountId) {
+        return repository.latest(accountId)
+                .map(measurement -> new HeartRateSample(measurement.getHeartRateBpm(), measurement.getOccurredAt()));
+    }
+
+    public List<HeartRateSample> findSamplesBetween(String accountId, Instant startInclusive, Instant endExclusive) {
+        return repository.forDay(accountId, startInclusive, endExclusive).stream()
+                .map(measurement -> new HeartRateSample(measurement.getHeartRateBpm(), measurement.getOccurredAt()))
+                .toList();
     }
 
     private static String validate(HeartRateBatchRequest.HeartRateEventRequest event, Instant receivedAt) {
@@ -116,8 +104,5 @@ public class HeartRateService {
             case "EVENT_ID_CONFLICT" -> "eventId already exists with different measurement content.";
             default -> "Invalid measurement.";
         };
-    }
-    private static InvalidHeartRateRequestException invalidDate() {
-        return new InvalidHeartRateRequestException("INVALID_REPORT_DATE", "date must be a valid YYYY-MM-DD date that is not in the future.");
     }
 }
