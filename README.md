@@ -79,7 +79,7 @@ Linux / macOS:
 Windows:
 
 ```powershell
-.\\mvnw.cmd spring-boot:run
+.\mvnw.cmd spring-boot:run
 ```
 
 The application listens on port `8080` by default. Override it with `SERVER_PORT` in `.env`.
@@ -95,7 +95,7 @@ The auth feature provides `POST /api/auth/register`, `/login`, `/refresh` and pr
 Windows:
 
 ```powershell
-.\\mvnw.cmd test
+.\mvnw.cmd test
 ```
 
 ## MongoDB lifecycle notes
