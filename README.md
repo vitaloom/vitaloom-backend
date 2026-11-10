@@ -11,8 +11,7 @@ Backend repository for VitaLoom. The application uses Java 21, Spring Boot 4.1.1
 - [Architecture Decisions](./docs/architecture/decisions/README.md) — accepted architectural decisions, their rationale and future implementation direction.
 - [Implementation Conventions](./docs/architecture/implementation-conventions.md) — coding, HTTP, service, persistence and testing conventions.
 
-The previous demo implementation remains available in [`vitaloom-demo/demo`](https://github.com/vitaloom/vitaloom-demo/tree/main/demo) as a migration reference. The canonical MVP API contract now lives in [`docs/api/api-contract.md`](./docs/api/api-contract.md).
-
+The previous demo implementation remains available in [`vitaloom-demo/demo`](https://github.com/vitaloom/vitaloom-demo/tree/main/demo) as a migration reference. The API-contract index is [`docs/api/api-contract.md`](./docs/api/api-contract.md); detailed contracts are split by area, with one file per metric under [`docs/api/metrics/`](./docs/api/metrics/).
 
 ## Development status
 
@@ -107,4 +106,4 @@ Windows:
 
 ## Security scope
 
-Spring Security uses stateless Bearer access JWT authentication for `/api/auth/me`. Registration, login, refresh and health check are public. Heart Rate batch ingestion (`POST /api/heart-rate/batch`) and its Statistics summary (`GET /api/statistics/heart-rate/summary`) require a Bearer access token and scope Heart Rate records to the authenticated account. Other metric APIs and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation; do not use those unisolated paths for real private health data. Refresh JWTs are stateless and have no server-side revocation or rotation in this Basic MVP. Local sign-out clears the mobile credential but cannot invalidate a previously issued refresh JWT. CSRF is disabled for the stateless, non-cookie API; revisit it if cookies are introduced.
+Spring Security currently implements stateless Bearer access JWT authentication for `/api/auth/me`, Heart Rate batch ingestion (`POST /api/heart-rate/batch`) and all Statistics Heart Rate routes; Heart Rate reads and writes are scoped to the authenticated account. The Steps API contract also requires Bearer authentication and JWT-subject account scoping for `POST /api/steps/batch` and all Statistics Steps routes, but those Steps endpoints are not implemented yet. Registration, login, refresh and health check are public. Sleep/Water APIs and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation; do not use those unisolated paths for real private health data. Refresh JWTs are stateless and have no server-side revocation or rotation in this Basic MVP. Local sign-out clears the mobile credential but cannot invalidate a previously issued refresh JWT. CSRF is disabled for the stateless, non-cookie API; revisit it if cookies are introduced.
