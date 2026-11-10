@@ -75,7 +75,7 @@ public class HeartRateService {
     }
 
     public List<HeartRateSample> findSamplesBetween(String accountId, Instant startInclusive, Instant endExclusive) {
-        return repository.forDay(accountId, startInclusive, endExclusive).stream()
+        return repository.findBetween(accountId, startInclusive, endExclusive).stream()
                 .map(measurement -> new HeartRateSample(measurement.getHeartRateBpm(), measurement.getOccurredAt()))
                 .toList();
     }
