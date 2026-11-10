@@ -82,7 +82,7 @@ Example — user has no accepted Heart Rate measurements (past date requested):
 }
 ```
 
-**Errors:** `400 INVALID_REPORT_DATE` for malformed/invalid/future `date`, `401 UNAUTHORIZED` for missing/invalid access credentials, and a standard `5xx` error for retrieval failure. Use the section 8 error envelope. A failed read must not return `200` with null BPM as though there were simply no measurements.
+**Errors:** `400 INVALID_REPORT_DATE` for malformed/invalid/future `date`, `401 UNAUTHORIZED` for missing/invalid access credentials, and a standard `5xx` error for retrieval failure. Use the shared error envelope in the [API Contract Index](../api-contract.md#4-duplicate-and-error-handling). A failed read must not return `200` with null BPM as though there were simply no measurements.
 
 **Implementation decisions:** equal-`occurredAt` latest records use ascending lexical `deviceId`, then `eventId`. Heart Rate ingestion rejects an event whose `occurredAt` is strictly later than the receipt instant captured for its batch with item-level `FUTURE_OCCURRED_AT`; there is no clock-skew grace period. Historical completeness and late/corrected-data policy remain open; do not emit `HISTORY_VERIFIED` without a positive verification mechanism.
 
