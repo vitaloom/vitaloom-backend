@@ -50,8 +50,10 @@ com.vitaloom.backend
 │   └── service
 ├── statistics
 │   ├── controller
+│   │   └── exceptionhandler
 │   ├── dto
 │   │   └── response
+│   ├── exception
 │   └── service
 ├── healthcheck
 │   ├── controller

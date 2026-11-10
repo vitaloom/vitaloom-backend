@@ -40,7 +40,7 @@ public class HeartRateRepository {
         return Optional.ofNullable(mongo.findOne(query, HeartRateMeasurement.class));
     }
 
-    public List<HeartRateMeasurement> forDay(String accountId, Instant start, Instant end) {
+    public List<HeartRateMeasurement> findBetween(String accountId, Instant start, Instant end) {
         Query query = Query.query(Criteria.where("accountId").is(accountId).and("occurredAt").gte(start).lt(end));
         return mongo.find(query, HeartRateMeasurement.class);
     }
