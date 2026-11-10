@@ -18,7 +18,7 @@ This contract defines the target local-MVP API baseline for VitaLoom Backend and
 - Clients/producers create stable IDs for their own retryable write records and must reuse the same ID when retrying that record.
 - Spring Boot enforces uniqueness, backed by MongoDB unique indexes. An API gateway, if present, does not create business IDs or decide whether a record is a duplicate.
 - A retry with an already accepted ID must not create a second record or double-count a metric.
-- Basic authentication is specified in section 11. Existing metric APIs remain public and lack per-user data isolation. Personal-data ingestion must derive account ownership from an authenticated principal; do not accept `accountId` from the request body. Do not use this contract as a production multi-user API until data isolation is implemented.
+- Basic authentication is specified in section 11. `POST /api/heart-rate/batch` and `GET /api/statistics/heart-rate/summary` require a Bearer access JWT and scope Heart Rate data to its subject. Other metric endpoints and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation. Do not use those unisolated paths for real multi-user private health data. Personal-data ingestion must derive account ownership from an authenticated principal; do not accept `accountId` from the request body.
 - The Heart Rate persistence schema and indexes are defined in [Heart Rate Data Model & Persistence Design](../architecture/heart-rate-data-design.md).
 
 ## 2. Health Check
@@ -61,7 +61,7 @@ Successful response — `200 OK`:
 | `sleepHours` | number or `null` | Sleep duration stored for the day |
 | `waterMl` | integer or `null` | Sum of accepted water-intake records within the day; `null` if none exist |
 
-The Heart Rate value follows AHM's Daily Average policy; it is not the latest observation. The distinct `GET /api/heart-rate/summary` endpoint returns Latest Recorded Heart Rate together with selected-day Daily Average. This dashboard response remains unchanged.
+The Heart Rate value follows AHM's Daily Average policy; it is not the latest observation. The distinct `GET /api/statistics/heart-rate/summary` endpoint returns Latest Recorded Heart Rate together with selected-day Daily Average. This dashboard response remains unchanged.
 
 The response is a read model. It may combine results from multiple metric-specific records; it does not imply the underlying metrics use the same write or processing logic.
 
@@ -181,7 +181,7 @@ Counts describe this submission. Retrying a previously accepted batch may return
 
 ## 7. Heart Rate Metrics & Batch Ingestion
 
-### `GET /api/heart-rate/summary`
+### `GET /api/statistics/heart-rate/summary`
 
 Read-only Heart Rate screen summary for an authenticated account. Returns **Latest Recorded Heart Rate** from the account's entire accepted history plus **Daily Average Heart Rate** for the selected calendar date. The Backend selects and calculates both; the mobile client must not calculate authoritative values.
 
@@ -396,7 +396,7 @@ Water's single-record ID conflict continues to return `409 Conflict`. Heart Rate
 - [ ] Steps endpoint accepts raw increments and calculates daily totals without counting duplicate events twice.
 - [ ] Heart Rate endpoint accepts one device per batch and stores each accepted measurement in `heart_rate_measurements`.
 - [ ] Heart Rate Daily Average is the unweighted mean of accepted measurements by `occurredAt`, not the latest observation.
-- [ ] `GET /api/heart-rate/summary` returns account-scoped Latest Recorded HR across all days and Daily Average for the chosen day; requires Bearer authentication and rejects future/invalid dates.
+- [ ] `GET /api/statistics/heart-rate/summary` returns account-scoped Latest Recorded HR across all days and Daily Average for the chosen day; requires Bearer authentication and rejects future/invalid dates.
 - [ ] Changing the day leaves Latest unchanged; out-of-order measurements do not replace newer `occurredAt` values; same-time ties have a deterministic resolution.
 - [ ] Daily status distinguishes current-day partial from historical unverified, and claims historical verification only when explicitly supported.
 - [ ] No-data returns null without 0 placeholders, and failed retrieval produces an error instead of an empty successful response.
@@ -409,7 +409,7 @@ Water's single-record ID conflict continues to return `409 Conflict`. Heart Rate
 
 ## 10. Explicitly Deferred
 
-User-specific health data isolation, device registration/management, history pagination, personalized daily cutoff times, overnight sleep-session attribution, HTTP-level idempotency keys, batch-result replay storage, asynchronous processing, advanced analytics, load-generation orchestration and production-grade rate limiting are outside this contract's current implementation scope. Authentication beyond section 11—including verification, MFA, rate limiting, refresh rotation/revocation and device management—is deferred. Revisit the relevant items before a real multi-user deployment or physical wearable integration.
+Per-user access and data isolation for metrics other than Heart Rate and for the cross-metric daily dashboard, device registration/management, history pagination, personalized daily cutoff times, overnight sleep-session attribution, HTTP-level idempotency keys, batch-result replay storage, asynchronous processing, advanced analytics, load-generation orchestration and production-grade rate limiting are outside this contract's current implementation scope. Authentication beyond section 11—including verification, MFA, rate limiting, refresh rotation/revocation and device management—is deferred. Revisit the relevant items before a real multi-user deployment or physical wearable integration.
 
 ## 11. Basic Authentication MVP
 
@@ -424,4 +424,4 @@ The implementation baseline for this section is `note/authentication-v1/03-api-c
 
 If registration persisted the account but token issuance fails, return `201` `{ "user": {"id":"...","email":"..."}, "authStatus":"LOGIN_REQUIRED" }`. The client offers login rather than retrying registration. Error responses use `{ "error": { "code": "...", "message": "..." } }`. Login uses the same error for unknown email and wrong password.
 
-Access JWTs expire after 15 minutes; refresh JWTs after 30 days. They use separate signing keys from environment configuration and distinct token-type claims. A refresh JWT is never accepted as a Bearer access credential. Refresh returns only a new access JWT and does not rotate the refresh JWT. `GET /api/health` stays public. Adding authentication does not secure or isolate the existing metric endpoints.
+Access JWTs expire after 15 minutes; refresh JWTs after 30 days. They use separate signing keys from environment configuration and distinct token-type claims. A refresh JWT is never accepted as a Bearer access credential. Refresh returns only a new access JWT and does not rotate the refresh JWT. `GET /api/health` stays public. Heart Rate batch ingestion and the Statistics Heart Rate summary explicitly require Bearer access JWTs and scope reads/writes by the JWT subject. Other metric endpoints and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation.
