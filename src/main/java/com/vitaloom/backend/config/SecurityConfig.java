@@ -39,7 +39,7 @@ public class SecurityConfig {
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/health", "/api/auth/register", "/api/auth/login", "/api/auth/refresh").permitAll()
-                        .requestMatchers("/api/heart-rate/**").authenticated()
+                        .requestMatchers("/api/heart-rate/**", "/api/statistics/heart-rate/**").authenticated()
                         .requestMatchers("/api/auth/me").authenticated()
                         .requestMatchers("/api/**").permitAll()
                         .anyRequest().denyAll())
