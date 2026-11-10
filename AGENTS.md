@@ -6,7 +6,7 @@ VitaLoom Backend owns backend application behavior, persistence and the API cont
 
 This repository already contains the Java 21 / Spring Boot application bootstrap, Maven Wrapper, MongoDB local-development infrastructure and baseline Spring configuration. Business features are migrated into this repository incrementally.
 
-`docs/api/api-contract.md` is the canonical MVP API behavior reference. It describes the expected contract; it does **not** mean every listed endpoint is already implemented. Before changing or relying on an endpoint, inspect the current controllers, services and tests.
+`docs/api/api-contract.md` is the canonical API-contract index and shared-conventions entry point. Detailed contracts are split by area under `docs/api/` (including one file per metric in `docs/api/metrics/`). A documented endpoint describes expected behavior; it does **not** mean it is implemented. Read the relevant contract and inspect current controllers, services and tests before changing or relying on an endpoint.
 
 The former demo implementation remains available in [`vitaloom-demo/demo`](https://github.com/vitaloom/vitaloom-demo/tree/main/demo) as a migration and behavior reference. The backend repository and its API contract are the source of truth for new backend work.
 
@@ -15,7 +15,8 @@ The former demo implementation remains available in [`vitaloom-demo/demo`](https
 Read the documents relevant to the task:
 
 - [`README.md`](./README.md) — prerequisites, local environment, infrastructure and run/test commands.
-- [`docs/api/api-contract.md`](./docs/api/api-contract.md) — endpoint paths, payloads, statuses, error codes, timestamps, idempotency and daily statistics behavior.
+- [`docs/api/api-contract.md`](./docs/api/api-contract.md) — API-contract index and shared conventions.
+- [`docs/api/`](./docs/api/) — detailed authentication, dashboard and metric-specific API contracts; read the file relevant to your task.
 - [`docs/architecture/package-structure.md`](./docs/architecture/package-structure.md) — feature ownership, package layout and dependency direction.
 - [`docs/architecture/decisions/README.md`](./docs/architecture/decisions/README.md) — accepted architecture decisions and their rationale; read relevant ADRs before changing an established design.
 - [`docs/architecture/implementation-conventions.md`](./docs/architecture/implementation-conventions.md) — coding, HTTP, service, persistence and testing conventions.

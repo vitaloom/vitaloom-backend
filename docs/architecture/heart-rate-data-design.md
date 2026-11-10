@@ -2,7 +2,7 @@
 
 **Status:** Approved design baseline for the Heart Rate MVP
 **Scope:** MongoDB measurement document, ownership, identity, indexes and retention
-**Related API contract:** [Heart Rate metrics and ingestion](../api/api-contract.md#7-heart-rate-metrics--batch-ingestion)
+**Related API contract:** [Heart Rate metrics and ingestion](../api/metrics/heart-rate.md#batch-ingestion)
 
 This design is specific to Heart Rate. Steps has its own model, collection, repository and ingestion behavior; do not generalize both metrics into a shared event document or collection.
 
@@ -130,7 +130,7 @@ The Statistics feature uses those query capabilities to compose the Heart Rate s
 - The selected `date` filters Daily Average only. It does not change Latest Recorded.
 - Latest and Daily Average are calculated on read for the MVP. No aggregate collection, materialized read model, background aggregation pipeline or extra index is introduced for these values.
 
-The API endpoint and response DTO belong to Statistics, even though the source observations are owned and queried by Heart Rate. The current summary endpoint is `GET /api/statistics/heart-rate/summary?date=YYYY-MM-DD`; its external behavior is defined in the [API Contract](../api/api-contract.md#7-heart-rate-metrics--batch-ingestion).
+The API endpoint and response DTO belong to Statistics, even though the source observations are owned and queried by Heart Rate. The current summary endpoint is `GET /api/statistics/heart-rate/summary?date=YYYY-MM-DD`; its external behavior is defined in the [Heart Rate API Contract](../api/metrics/heart-rate.md#batch-ingestion).
 
 Statistics must not access the Heart Rate repository, Mongo document or collection directly. It obtains raw observations only through the Heart Rate service's query capabilities. Future aggregate persistence, if justified, is owned by Statistics under [ADR-001](./decisions/ADR-001-statistics-owns-aggregate-read-models.md).
 

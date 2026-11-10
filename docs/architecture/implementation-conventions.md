@@ -85,7 +85,7 @@ Avoid vague names such as `Helper`, `Manager` or `Processor` unless the name is 
 
 ## 7. API compatibility
 
-- The [API Contract](../api/api-contract.md) is the source of truth for endpoint paths, request/response shapes, statuses, error codes, timestamp semantics, idempotency and daily-statistics behavior.
+- The [API Contract Index](../api/api-contract.md) is the entry point and source for shared API conventions. Detailed endpoint paths, request/response shapes, statuses, error codes, timestamp semantics and idempotency rules live in the relevant area or metric contract under `docs/api/`.
 - Make API changes deliberately and update the contract when behavior changes.
 - Consider the separate Mobile and Data Producer repositories as API consumers. A backend-only implementation change can still be a cross-repository breaking change.
 - Do not add authentication, user-level isolation, historical queries, asynchronous infrastructure or other deferred capabilities without an approved scope.

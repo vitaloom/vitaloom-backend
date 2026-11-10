@@ -11,7 +11,7 @@ Backend repository for VitaLoom. The application uses Java 21, Spring Boot 4.1.1
 - [Architecture Decisions](./docs/architecture/decisions/README.md) — accepted architectural decisions, their rationale and future implementation direction.
 - [Implementation Conventions](./docs/architecture/implementation-conventions.md) — coding, HTTP, service, persistence and testing conventions.
 
-The previous demo implementation remains available in [`vitaloom-demo/demo`](https://github.com/vitaloom/vitaloom-demo/tree/main/demo) as a migration reference. The canonical MVP API contract now lives in [`docs/api/api-contract.md`](./docs/api/api-contract.md).
+The previous demo implementation remains available in [`vitaloom-demo/demo`](https://github.com/vitaloom/vitaloom-demo/tree/main/demo) as a migration reference. The API-contract index is [`docs/api/api-contract.md`](./docs/api/api-contract.md); detailed contracts are split by area, with one file per metric under [`docs/api/metrics/`](./docs/api/metrics/).
 
 
 ## Development status
