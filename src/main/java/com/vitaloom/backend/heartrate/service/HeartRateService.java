@@ -6,6 +6,7 @@ import com.vitaloom.backend.heartrate.model.HeartRateMeasurement;
 import com.vitaloom.backend.heartrate.repository.HeartRateRepository;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
