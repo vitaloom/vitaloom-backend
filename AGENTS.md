@@ -34,7 +34,7 @@ For new code and code migrated into this repository, follow the target layout in
 - Preserve event identity and idempotency. A retry of the same logical event must not create a second measurement or double-count a metric; conflicting reuse of an ID must remain distinguishable from an identical retry.
 - Daily statistics currently use `Asia/Ho_Chi_Minh`. Do not change the timezone, day boundaries or timestamp interpretation without an explicit contract decision.
 - Do not invent health-domain rules, clinical interpretations or medical claims. The application tracks and displays data; it must not silently turn implementation assumptions into health advice.
-- Database authentication is not user authentication. The current MVP has no account, login, role or per-user data isolation; do not imply that the API is safe for real multi-user health data.
+- Basic registration/login/refresh and authenticated-account endpoints exist, but metric APIs currently remain public and do not enforce per-user data isolation. Do not imply that metric data is safe for real multi-user private health data, and do not assume a metric request is scoped to an authenticated account unless the current implementation proves it.
 - Do not add dependencies, top-level package roots, architectural abstractions or persistence migrations merely to match another repository's conventions.
 - Do not weaken, disable, suppress or bypass tests and checks to obtain a passing result.
 
