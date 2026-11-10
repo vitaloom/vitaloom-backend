@@ -45,7 +45,7 @@ Each event requires:
 | `stepsDelta` | Int32 / Java `int` | Integer from 1 through 5 inclusive under the MVP one-second Producer contract |
 | `occurredAt` | BSON Date / Java `Instant` | Valid absolute instant; persisted at millisecond precision |
 
-Proposed collection: `step_measurements`.
+Collection: `step_measurements`.
 
 Example:
 

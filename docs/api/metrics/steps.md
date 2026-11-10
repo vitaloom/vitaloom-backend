@@ -118,11 +118,11 @@ Response rules:
 **Status:** Approved MVP read contract.  
 **Purpose:** Define backend capabilities independently of current Mobile UI consumption.
 
-The three query use cases have separate endpoints and separate public Statistics service methods. They may reuse a Steps-specific aggregation implementation where appropriate, but the service must not infer the mode from a generic `period` parameter.
+The three query use cases have separate endpoints and separate public Statistics service methods. They may reuse a Steps-specific aggregation implementation where appropriate, but the service must not infer the mode from a generic `period` parameter. These routes are implemented in VitaLoom Backend.
 
-### Proposed routes
+### Routes
 
-| Endpoint | Parameters | Proposed range | Proposed output buckets |
+| Endpoint | Parameters | Range | Output buckets |
 |---|---|---|---|
 | `GET /api/statistics/steps/daily` | Optional `date=YYYY-MM-DD`; defaults to today's local date | One local calendar day | 24 hourly buckets (60 minutes each) |
 | `GET /api/statistics/steps/weekly` | Optional `weekStartDate=YYYY-MM-DD`; defaults to current local Monday | Monday 00:00 through next Monday 00:00, end exclusive | 7 daily buckets (1440 minutes each) |
@@ -130,7 +130,7 @@ The three query use cases have separate endpoints and separate public Statistics
 
 All calendar boundaries use `Asia/Ho_Chi_Minh`. The three endpoints have separate query parameters and service methods. Daily uses hourly buckets; Weekly and Custom use daily buckets.
 
-### Proposed response shape
+### Response shape
 
 The three endpoints should share one Steps-specific response DTO. Do not reuse the Heart Rate response DTO because the aggregation semantics differ.
 
@@ -158,7 +158,7 @@ The three endpoints should share one Steps-specific response DTO. Do not reuse t
 }
 ```
 
-Proposed field semantics:
+Field semantics:
 
 - Top-level `startAt` is inclusive and `endAt` is exclusive. All serialized timestamps are absolute UTC instants.
 - Each bucket has inclusive `startAt` and exclusive `endAt`; buckets are chronological and contiguous.
@@ -170,13 +170,13 @@ Proposed field semantics:
 - Empty buckets remain present in the response so the client receives a stable time axis. Empty data does not establish that the user did not walk or that the Producer was continuously online.
 - `bucketSizeMinutes` is the bucket duration in minutes: `60` for Daily and `1440` for Weekly/Custom. The value describes the actual bucket duration; it is not a separate enum.
 
-### Proposed query validation and security
+### Query validation and security
 
 - Daily date must be a valid local calendar date and cannot be in the future.
 - Weekly start date must be Monday; the current week is allowed and future weeks are rejected. Future positions within the current week remain empty until their event times occur.
 - Custom requires both dates, an ordered inclusive range of 1–30 calendar days and an end date no later than today.
 - All Steps Statistics routes require a Bearer access JWT and derive `accountId` from the authenticated subject. No account identifier is accepted in query parameters.
-- The endpoint contract is defined here, but the Steps routes are not implemented in the Backend yet.
+- Daily, Weekly and Custom are separate authenticated routes implemented by the Backend.
 
 No Mobile UI behavior is implied by this contract. The Mobile team can later choose which documented APIs to consume.
 
