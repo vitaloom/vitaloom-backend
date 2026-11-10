@@ -83,7 +83,7 @@ Windows:
 
 The application listens on port `8080` by default. Override it with `SERVER_PORT` in `.env`.
 
-The auth feature provides `POST /api/auth/register`, `/login`, `/refresh` and protected `GET /api/auth/me`; see the [API contract](./docs/api/api-contract.md). Other metric endpoints become available incrementally as their features are added.
+The auth feature provides `POST /api/auth/register`, `/login`, `/refresh` and protected `GET /api/auth/me`. The protected Water Tracking MVP provides daily and weekly reads plus log creation; see the [Water contract](./docs/features/water/api-contract.md). Other metric endpoints become available incrementally as their features are added.
 
 ## 4. Run tests
 
@@ -106,4 +106,4 @@ Windows:
 
 ## Security scope
 
-Spring Security uses stateless Bearer access JWT authentication for `/api/auth/me`. Registration, login, refresh and health check are public. Existing metric APIs remain public and have no per-user data isolation; do not use them for real private health data. Refresh JWTs are stateless and have no server-side revocation or rotation in this Basic MVP. Local sign-out clears the mobile credential but cannot invalidate a previously issued refresh JWT. CSRF is disabled for the stateless, non-cookie API; revisit it if cookies are introduced.
+Spring Security uses stateless Bearer access JWT authentication for `/api/auth/me` and `/api/water/**`. Registration, login, refresh and health check are public. Other existing metric APIs remain public and have no per-user data isolation; do not use them for real private health data. Water logs are scoped to their authenticated account. Refresh JWTs are stateless and have no server-side revocation or rotation in this Basic MVP. Local sign-out clears the mobile credential but cannot invalidate a previously issued refresh JWT. CSRF is disabled for the stateless, non-cookie API; revisit it if cookies are introduced.
