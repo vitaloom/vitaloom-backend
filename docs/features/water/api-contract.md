@@ -44,13 +44,19 @@ The mobile client requests daily-summary when the user selects a chart day.
 
 ## POST `/api/water/logs`
 
-Request:
+Request for a Quick Add or an entry recorded now:
+
+```json
+{ "amountMl": 250 }
+```
+
+The server supplies `loggedAt` from its clock when the property is omitted. For a manually selected historical time, send `loggedAt` explicitly:
 
 ```json
 { "amountMl": 250, "loggedAt": "2026-11-06T09:15:00+07:00" }
 ```
 
-`amountMl` must be an integer from 1 through 2000. `loggedAt` must include a UTC marker or numeric offset and must not be later than server time. The server obtains account identity from the authenticated principal, never from request fields. Success is `201 Created`:
+`amountMl` must be an integer from 1 through 2000. An explicit `loggedAt` must be a string with a UTC marker or numeric offset and must not be later than server time. A missing `loggedAt` uses the server time captured while processing the request. An explicit `null`, non-string, malformed timestamp, timestamp without an offset, or future timestamp is invalid. The server obtains account identity from the authenticated principal, never from request fields. Success is `201 Created`:
 
 ```json
 { "id": "log-id", "amountMl": 250, "loggedAt": "2026-11-06T02:15:00Z" }
@@ -60,4 +66,4 @@ The response normalizes the instant to UTC. `source` remains UI metadata and is 
 
 ## Errors
 
-`401` with code `UNAUTHORIZED` indicates missing, expired, or invalid authentication; the existing mobile auth client performs one refresh and retry when appropriate. `400` with code `VALIDATION_ERROR` indicates malformed date, non-Monday `weekStart`, missing/unknown timezone, invalid amount, timestamp without offset, or future timestamp. Errors use the backend's existing `{error:{code,message}}` envelope.
+`401` with code `UNAUTHORIZED` indicates missing, expired, or invalid authentication; the existing mobile auth client performs one refresh and retry when appropriate. `400` with code `VALIDATION_ERROR` indicates malformed date, non-Monday `weekStart`, missing/unknown timezone, invalid amount, timestamp without offset, or future timestamp. An explicitly future `loggedAt` returns `loggedAt cannot be in the future.` Errors use the backend's existing `{error:{code,message}}` envelope.

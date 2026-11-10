@@ -93,4 +93,27 @@ class WaterServiceTest {
                 .isInstanceOf(WaterValidationException.class);
         assertThat(stored).hasSize(1);
     }
+
+    @Test void omittedTimestampUsesServerClockAndExplicitTimestampIsPreserved() {
+        var createdNow = service.create("u1", 250, null);
+        var createdAtBoundary = service.create("u1", 100, "2026-11-06T10:00:00Z");
+
+        assertThat(createdNow.loggedAt()).isEqualTo(Instant.parse("2026-11-06T10:00:00Z"));
+        assertThat(createdAtBoundary.loggedAt()).isEqualTo(Instant.parse("2026-11-06T10:00:00Z"));
+        assertThat(stored).hasSize(2);
+    }
+
+    @Test void omittedTimestampMatchesMongoMillisecondPrecision() {
+        service = new WaterService(logs, Clock.fixed(Instant.parse("2026-11-06T10:00:00.000500Z"), ZoneOffset.UTC));
+
+        var created = service.create("u1", 250, null);
+
+        assertThat(created.loggedAt()).isEqualTo(Instant.parse("2026-11-06T10:00:00Z"));
+    }
+
+    @Test void futureTimestampHasSpecificValidationMessage() {
+        assertThatThrownBy(() -> service.create("u1", 250, "2026-11-06T10:00:00.001Z"))
+                .isInstanceOf(WaterValidationException.class)
+                .hasMessage("loggedAt cannot be in the future.");
+    }
 }

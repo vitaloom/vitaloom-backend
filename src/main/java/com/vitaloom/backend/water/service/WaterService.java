@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -70,16 +71,23 @@ public class WaterService {
     }
 
     public WaterLogResponse create(String userId, Integer amountMl, String loggedAtText) {
-        if (amountMl == null || amountMl < 1 || amountMl > 2000 || loggedAtText == null) {
+        if (amountMl == null || amountMl < 1 || amountMl > 2000) {
             throw new WaterValidationException();
         }
-        final Instant loggedAt;
-        try {
-            loggedAt = OffsetDateTime.parse(loggedAtText).toInstant();
-        } catch (DateTimeException exception) {
-            throw new WaterValidationException();
+        Instant serverNow = clock.instant();
+        Instant loggedAt;
+        if (loggedAtText == null) {
+            loggedAt = serverNow.truncatedTo(ChronoUnit.MILLIS);
+        } else {
+            try {
+                loggedAt = OffsetDateTime.parse(loggedAtText).toInstant();
+            } catch (DateTimeException exception) {
+                throw new WaterValidationException();
+            }
+            if (loggedAt.isAfter(serverNow)) {
+                throw new WaterValidationException("loggedAt cannot be in the future.");
+            }
         }
-        if (loggedAt.isAfter(clock.instant())) throw new WaterValidationException();
         return WaterLogResponse.from(logs.save(new WaterLog(userId, amountMl, loggedAt)));
     }
 
