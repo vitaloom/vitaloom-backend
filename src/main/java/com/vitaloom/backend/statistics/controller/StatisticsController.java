@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/statistics/heart-rate")
+@RequestMapping("/api/statistics")
 public class StatisticsController {
     private final StatisticsService service;
 
@@ -17,7 +17,7 @@ public class StatisticsController {
         this.service = service;
     }
 
-    @GetMapping("/summary")
+    @GetMapping("/heart-rate/summary")
     public HeartRateSummaryResponse heartRateSummary(
             Authentication authentication,
             @RequestParam(required = false) String date) {
