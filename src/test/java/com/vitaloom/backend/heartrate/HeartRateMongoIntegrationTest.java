@@ -2,7 +2,9 @@ package com.vitaloom.backend.heartrate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
 import com.vitaloom.backend.auth.service.JwtTokenService;
 import com.vitaloom.backend.heartrate.model.HeartRateMeasurement;
@@ -79,9 +81,65 @@ class HeartRateMongoIntegrationTest {
         long persisted = mongo.count(Query.query(Criteria.where("accountId").is(accountId)), HeartRateMeasurement.class);
         assertEquals(1, persisted);
         String otherToken = tokens.issueAccess("hr-it-" + UUID.randomUUID(), Instant.now());
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/heart-rate/summary")
+        mvc.perform(get("/api/statistics/heart-rate/summary")
                         .header("Authorization", "Bearer " + otherToken))
                 .andExpect(status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.latestRecorded").isEmpty());
+    }
+
+    @Test
+    void dailyTimeSeriesStreamsOwnedSamplesAndKeepsHalfOpenBoundaries() throws Exception {
+        String accountId = "hr-series-it-" + UUID.randomUUID();
+        String otherAccountId = "hr-series-other-" + UUID.randomUUID();
+        testAccounts.add(accountId);
+        testAccounts.add(otherAccountId);
+        Instant dayStart = Instant.parse("2026-11-04T17:00:00Z");
+        Instant dayEnd = Instant.parse("2026-11-05T17:00:00Z");
+        mongo.insert(new HeartRateMeasurement(accountId, "device-a", "at-start-a", 60, dayStart, dayStart));
+        mongo.insert(new HeartRateMeasurement(accountId, "device-b", "at-start-b", 80, dayStart, dayStart));
+        mongo.insert(new HeartRateMeasurement(accountId, "device-a", "at-end", 100, dayEnd, dayEnd));
+        mongo.insert(new HeartRateMeasurement(otherAccountId, "device-a", "other-account", 120, dayStart, dayStart));
+
+        String token = tokens.issueAccess(accountId, Instant.now());
+        mvc.perform(get("/api/statistics/heart-rate/daily")
+                        .queryParam("date", "2026-11-05")
+                        .queryParam("accountId", otherAccountId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.startAt").value("2026-11-04T17:00:00Z"))
+                .andExpect(jsonPath("$.endAt").value("2026-11-05T17:00:00Z"))
+                .andExpect(jsonPath("$.timezone").value("Asia/Ho_Chi_Minh"))
+                .andExpect(jsonPath("$.intervalMinutes").value(15))
+                .andExpect(jsonPath("$.buckets.length()").value(96))
+                .andExpect(jsonPath("$.buckets[0].minBpm").value(60))
+                .andExpect(jsonPath("$.buckets[0].avgBpm").value(70.0))
+                .andExpect(jsonPath("$.buckets[0].maxBpm").value(80))
+                .andExpect(jsonPath("$.buckets[0].sampleCount").value(2))
+                .andExpect(jsonPath("$.buckets[1].minBpm").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.buckets[1].avgBpm").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.buckets[1].maxBpm").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.buckets[1].sampleCount").value(0));
+    }
+
+    @Test
+    void allTimeSeriesRoutesRequireBearerAuthentication() throws Exception {
+        for (String route : List.of("/api/statistics/heart-rate/daily",
+                "/api/statistics/heart-rate/weekly", "/api/statistics/heart-rate/custom")) {
+            mvc.perform(get(route)).andExpect(status().isUnauthorized());
+            mvc.perform(get(route).header("Authorization", "Bearer invalid-token"))
+                    .andExpect(status().isUnauthorized());
+        }
+    }
+
+    @Test
+    void malformedTimeSeriesDateUsesStatisticsErrorEnvelope() throws Exception {
+        String token = tokens.issueAccess("hr-series-invalid-" + UUID.randomUUID(), Instant.now());
+        mvc.perform(get("/api/statistics/heart-rate/daily").queryParam("date", "2026-11-6")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REPORT_DATE"));
+        mvc.perform(get("/api/statistics/heart-rate/custom").header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_DATE_RANGE"));
     }
 }

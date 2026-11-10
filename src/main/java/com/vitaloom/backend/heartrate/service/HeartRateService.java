@@ -11,6 +11,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -78,6 +80,16 @@ public class HeartRateService {
         return repository.findBetween(accountId, startInclusive, endExclusive).stream()
                 .map(measurement -> new HeartRateSample(measurement.getHeartRateBpm(), measurement.getOccurredAt()))
                 .toList();
+    }
+
+    public void forEachSampleBetween(String accountId, Instant startInclusive, Instant endExclusive,
+                                     Consumer<HeartRateSample> consumer) {
+        try (Stream<HeartRateMeasurement> measurements = repository.streamBetween(
+                accountId, startInclusive, endExclusive)) {
+            measurements.map(measurement -> new HeartRateSample(
+                    measurement.getHeartRateBpm(), measurement.getOccurredAt()))
+                    .forEach(consumer);
+        }
     }
 
     private static String validate(HeartRateBatchRequest.HeartRateEventRequest event, Instant receivedAt) {
