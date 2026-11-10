@@ -130,13 +130,13 @@ The Statistics feature uses those query capabilities to compose the Heart Rate s
 - The selected `date` filters Daily Average only. It does not change Latest Recorded.
 - Latest and Daily Average are calculated on read for the MVP. No aggregate collection, materialized read model, background aggregation pipeline or extra index is introduced for these values.
 
-The API endpoint and response DTO belong to Statistics, even though the source observations are owned and queried by Heart Rate. The current summary endpoint is `GET /api/statistics/heart-rate/summary?date=YYYY-MM-DD`; its external behavior is defined in the [Heart Rate API Contract](../api/metrics/heart-rate.md#batch-ingestion).
+The API endpoint and response DTO belong to Statistics, even though the source observations are owned and queried by Heart Rate. The current summary endpoint is `GET /api/statistics/heart-rate/summary?date=YYYY-MM-DD`; its external behavior is defined in the [Heart Rate API Contract](../api/metrics/heart-rate.md#summary).
 
 Statistics must not access the Heart Rate repository, Mongo document or collection directly. It obtains raw observations only through the Heart Rate service's query capabilities. Future aggregate persistence, if justified, is owned by Statistics under [ADR-001](./decisions/ADR-001-statistics-owns-aggregate-read-models.md).
 
 ## 6. Dependencies and explicit non-goals
 
-- Basic Authentication is implemented. Heart Rate batch ingestion and the Statistics Heart Rate summary require a Bearer access JWT and scope records by its subject (`accountId`). Other metric endpoints and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation.
+- Basic Authentication is implemented. Heart Rate batch ingestion and all Statistics Heart Rate routes require a Bearer access JWT and scope records by its subject (`accountId`). Other metric endpoints and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation.
 - There is no Device registry in this design. Device registration, revocation, metadata and ownership verification are deferred.
 - The current Producer represents one device. A future Producer load mode may start multiple device instances with different stable `deviceId` values and intervals. Worker count and load-generation controls are Producer concerns, not Heart Rate domain fields.
 - HTTP request-level `Idempotency-Key` storage is not added. Measurement-level `eventId` plus the unique index is the MVP idempotency mechanism.
