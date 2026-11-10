@@ -74,7 +74,7 @@ class HeartRateServiceTest {
     void exposesRawSamplesForRequestedTimeRangeThroughMetricQueryCapability() {
         var first = measurement("first", 70, "2026-11-05T17:00:00Z");
         var second = measurement("second", 81, "2026-11-05T17:30:00Z");
-        when(repository.forDay("account-a", first.getOccurredAt(), second.getOccurredAt()))
+        when(repository.findBetween("account-a", first.getOccurredAt(), second.getOccurredAt()))
                 .thenReturn(List.of(first, second));
 
         assertEquals(List.of(
