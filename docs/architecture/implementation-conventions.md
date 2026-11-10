@@ -81,7 +81,7 @@ Avoid vague names such as `Helper`, `Manager` or `Processor` unless the name is 
 - Use `Instant` for persisted event instants when the source timestamp represents an absolute point in time. Preserve the source offset when it is required by an external contract; do not silently reinterpret local timestamps.
 - Use an injected `Clock` for business logic that depends on the current time, so boundary behavior can be tested deterministically.
 - Keep timezone/day-boundary policy in one well-defined place as the backend evolves. Avoid scattering independent timezone literals across services.
-- Each metric retains its own aggregation meaning. For example, step increments are summed, while heart-rate observations are selected by event time; do not generalize all metrics into one aggregation rule.
+- Statistics owns aggregate calculations, while each metric's aggregation semantics remain metric-specific. For example, a Steps total sums valid increments, while a Heart Rate latest observation is selected by event time; do not generalize all metrics into one aggregation rule. See [ADR-001](./decisions/ADR-001-statistics-owns-aggregate-read-models.md).
 
 ## 7. API compatibility
 

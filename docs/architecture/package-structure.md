@@ -70,33 +70,45 @@ This is a target layout, not a requirement to create every directory immediately
 
 Every feature package above is a direct child of `com.vitaloom.backend`. There is no additional `health`, `system` or other domain-grouping package above them.
 
+### Metric features — raw measurement ownership
+
+The `heartrate`, `steps`, `sleep` and `water` features own their respective raw measurement lifecycles:
+
+- Input/ingestion endpoints and their request/response DTOs.
+- Metric-specific raw-data validation and business invariants.
+- Their own MongoDB collections, persistence models, indexes and write behavior.
+- Raw-record identity, duplicate/conflict handling and persistence guarantees where applicable.
+- Service-level raw-data query capabilities needed by Statistics.
+
+Metric features do not own derived aggregate calculations or aggregate read models. They must not depend on Statistics.
+
 ### `heartrate` — Heart Rate measurements
 
-Owns the Heart Rate metric lifecycle:
+Owns:
 
 - Heart Rate batch ingestion and its request/response DTOs.
 - Heart Rate measurement validation and persistence.
 - The `heart_rate_measurements` MongoDB collection and its indexes.
 - Heart Rate measurement identity and duplicate/conflicting-ID handling.
-- Queries over Heart Rate measurements and the Daily Average policy capability consumed by Statistics.
+- Raw Heart Rate measurement queries needed by Statistics.
 
 A Heart Rate measurement is persisted using its own metric-specific model. Do not place Heart Rate data in a generic cross-metric event document or collection.
 
 ### `steps` — Steps measurements
 
-Owns the Steps metric lifecycle:
+Owns:
 
 - Steps batch ingestion and its request/response DTOs.
 - Step increment validation and persistence.
 - The `step_measurements` MongoDB collection and its indexes.
 - Step measurement identity and duplicate/conflicting-ID handling.
-- Queries and aggregation capabilities for accepted step increments.
+- Raw Steps measurement queries needed by Statistics.
 
 Steps uses its own metric-specific model and persistence collection. Do not place Steps data in the Heart Rate collection or a generic cross-metric event collection.
 
 ### Metric separation and shared conventions
 
-Heart Rate and Steps have different measurement semantics, validation and aggregation. Keep their persistence models, repositories, validation and metric-specific behavior separate.
+Heart Rate and Steps have different measurement semantics and validation. Keep their persistence models, repositories and raw-data behavior separate.
 
 Both metrics follow the same cross-cutting principles where applicable: authenticated account ownership, source/device identity, stable source event IDs, event time (`occurredAt`), server receipt time (`receivedAt`) and database-enforced protection against duplicate writes.
 
@@ -104,19 +116,29 @@ This commonality does **not** require a generic `HealthEvent` model, shared coll
 
 ### `sleep` — manually entered sleep
 
-Owns sleep input and its persistence rules, including the current one-record-per-local-day behavior. It is independent of Heart Rate and Steps ingestion.
+Owns sleep input and its raw-record persistence rules, including the current one-record-per-local-day behavior. It exposes raw sleep data queries needed by Statistics. It is independent of Heart Rate and Steps ingestion.
 
 ### `water` — manually entered water intake
 
-Owns water-intake records, validation and duplicate handling. It is independent of Sleep and producer metric ingestion.
+Owns water-intake input, raw-record validation and persistence. It exposes raw water-intake queries needed by Statistics. It is independent of Sleep and producer metric ingestion.
 
-### `statistics` — daily read model
+### `statistics` — aggregate read model and cross-metric composition
 
-Owns the daily statistics endpoint, response DTO and orchestration that combines metric values.
+Statistics owns the derived view of health data. Its responsibilities include:
 
-Statistics is a read/composition feature, not the owner of metric persistence. It obtains values through the metric features' service-level query capabilities. It must not reach into another feature's repository, Mongo document or raw Mongo query.
+- Daily statistics endpoints and response DTOs.
+- Metric-specific aggregate calculations, such as Heart Rate daily average/latest observation, Steps totals, Sleep duration and Water intake totals.
+- Time-bucketed or other aggregate series when an API needs derived values rather than raw measurements.
+- Cross-metric composition for dashboard and overview responses.
+- The meaning and consistency of all derived aggregate/read-model values.
 
-No repository or persistence model package is needed under Statistics unless a future, explicitly designed read-model persistence requirement appears.
+Statistics obtains raw measurements through the owning metric features' service-level query capabilities. It must not reach into another feature's repository, Mongo document or raw Mongo query. Metric features do not calculate or persist aggregate read models on Statistics' behalf.
+
+**Current MVP strategy — calculate on read:** Statistics derives requested aggregates from raw metric records when the relevant read request is processed. Raw metric records remain the source of truth. Do not create aggregate collections, Statistics repositories/models, scheduled jobs, background workers or refresh infrastructure merely in anticipation of future scale.
+
+**Future direction — precomputed aggregates:** The architecture allows Statistics to persist precomputed/materialized aggregate read models when a concrete performance or product requirement justifies them. If that phase is approved, the aggregate schema, persistence, update/recalculation lifecycle and consistency policy belong to Statistics. The metric features continue to own the raw source records. The detailed precomputation mechanism is intentionally not decided by this document.
+
+The package tree above therefore shows only the current Statistics packages. Add Statistics `model` or `repository` packages only when an approved precomputed-read-model implementation actually needs them.
 
 ### `healthcheck` — application availability endpoint
 
@@ -160,18 +182,18 @@ The intended dependency is one-way:
 
 ```text
 statistics
-    ├── reads through heartrate service
-    ├── reads through steps service
-    ├── reads through sleep service
-    └── reads through water service
+    ├── queries raw Heart Rate data through heartrate service
+    ├── queries raw Steps data through steps service
+    ├── queries raw Sleep data through sleep service
+    └── queries raw Water data through water service
 
 heartrate / steps / sleep / water
     └── do not depend on statistics
 ```
 
-Metric services expose the small query operations that Statistics needs. For this application, a direct dependency on those service capabilities is sufficient; do not introduce an interface/contract layer solely for this call. Add a stronger public contract only if a real reuse, substitution or extraction requirement appears.
+Metric services expose only the raw-data query capabilities Statistics needs. A direct dependency on those service capabilities is sufficient; do not introduce an interface/contract layer solely for this call. Add a stronger public contract only if a real reuse, substitution or extraction requirement appears.
 
-Statistics must not bypass the service boundary by injecting another feature's repository or querying its Mongo collection directly.
+Statistics must not bypass the service boundary by injecting another feature's repository or querying its Mongo collection directly. Statistics owns aggregate calculation and any future aggregate persistence.
 
 ## 5. HTTP exception handling
 
@@ -197,7 +219,7 @@ src/test/java/com/vitaloom/backend/
 
 - Unit tests for a feature should normally live alongside that feature's package path.
 - Repository/integration tests belong under the owning feature.
-- Tests for cross-feature daily aggregation belong under `statistics`; use the metric service boundaries or focused test doubles as appropriate.
+- Tests for metric-specific and cross-metric aggregate calculations belong under `statistics`; use metric service boundaries or focused test doubles as appropriate.
 - Add architecture tests only when the package boundaries have stabilized and a rule is valuable to enforce automatically. Documentation remains the policy source for rules that are not automated.
 
 ## 7. Adoption and non-goals
@@ -205,7 +227,8 @@ src/test/java/com/vitaloom/backend/
 - Apply this structure to new code and code moved into `vitaloom-backend`.
 - Do not reorganize unrelated code in `vitaloom-demo` solely to make it match this target.
 - Heart Rate and Steps use separate metric-owned persistence models and collections. Do not create a generic cross-metric event collection as a shortcut.
-- During migration, preserve endpoint behavior, stored identifiers, Mongo collection/document compatibility, event idempotency and daily aggregation unless a separate change explicitly approves a behavior or data migration.
+- During migration, preserve endpoint behavior, stored identifiers, Mongo collection/document compatibility and event idempotency unless a separate change explicitly approves a behavior or data migration.
 - Keep this a modular monolith. Do not create separate Maven modules, microservices, message brokers or shared libraries for the current metrics.
 - Do not pre-create packages for future goals, reminders, journals, insights or other roadmap capabilities. Add a feature when its backend responsibility and ownership are real.
 - Update this document when the approved feature ownership or dependency direction changes.
+- Record significant accepted architecture decisions in [Architecture Decisions](./decisions/README.md), and link the relevant ADR here when it defines a package ownership or dependency rule.
