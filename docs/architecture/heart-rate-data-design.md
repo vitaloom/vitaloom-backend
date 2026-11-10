@@ -111,31 +111,32 @@ Do not add indexes on `receivedAt`, `deviceId` alone, or additional sort combina
 6. Keep accepted raw measurements as the source of truth. Daily Average is calculated from valid accepted measurements; it is not written back into this collection.
 7. No TTL or scheduled raw-data deletion is introduced in the MVP. Revisit retention only after Statistics requirements, recalculation needs and actual storage volume are understood.
 
-## 5. Query and aggregation boundary
+## 5. Raw query boundary and Statistics ownership
 
-For a requested local statistics day, the Heart Rate service queries by:
+The Heart Rate feature owns raw measurement persistence and exposes raw-data query capabilities through its service. Statistics owns the calculations and derived response values.
 
-- authenticated `accountId`;
-- `occurredAt >= dayStartInstant`;
-- `occurredAt < nextDayStartInstant`.
+The Heart Rate service exposes only the source data needed by Statistics:
 
-The metric policy is the unweighted arithmetic mean of valid accepted `heartRateBpm` measurements in that interval:
+- The latest accepted Heart Rate observation for an authenticated account, ordered by maximum `occurredAt`; ties use ascending lexical `deviceId`, then ascending lexical `eventId`.
+- Accepted Heart Rate observations within a supplied half-open instant range `[start, end)`.
 
-`sum(heartRateBpm) / count(measurements)`.
+The Heart Rate service does not calculate Daily Average, Latest Recorded summary DTOs, time-bucketed aggregates or dashboard values. It does not own an aggregate/read-model persistence layer.
 
-If there are no accepted measurements, the result is absent / no data, not zero BPM. The Statistics feature accesses this capability through the Heart Rate service; it does not query the collection directly.
+The Statistics feature uses those query capabilities to compose the Heart Rate summary:
 
-The Heart Rate details screen uses `GET /api/heart-rate/summary?date=YYYY-MM-DD` to read both:
-- **Latest Recorded HR:** one accepted measurement with the maximum `occurredAt` in the authenticated account's **full history**, independent of the selected day. It returns its BPM and original measurement timestamp. When the maximum timestamp ties, choose ascending lexical `deviceId`, then ascending lexical `eventId` (MongoDB's default simple collation).
-- **Daily Average HR:** the existing account-scoped, half-open day-range query and unweighted arithmetic mean for the selected local day, with nullable BPM and explicit data status. Today is partial; history remains unverified unless positively confirmed.
-- The existing `{ accountId: 1, occurredAt: 1 }` index can serve a reverse-order latest lookup and day-range reads; no new index, collection or persisted aggregate is required solely for these views.
-- The Backend owns both calculations. Do not substitute `receivedAt` for `occurredAt`; the last record received can be older than the most recently measured record.
+- **Latest Recorded HR:** one accepted observation with the maximum `occurredAt` across the account's full history, independent of the selected statistics date. It returns BPM and the original measurement timestamp.
+- **Daily Average HR:** the unweighted arithmetic mean of accepted BPM measurements whose `occurredAt` falls within the selected local calendar day, using the existing `Asia/Ho_Chi_Minh` half-open day boundaries.
+- A day with no accepted observations returns `null` BPM, not zero.
+- The selected `date` filters Daily Average only. It does not change Latest Recorded.
+- Latest and Daily Average are calculated on read for the MVP. No aggregate collection, materialized read model, background aggregation pipeline or extra index is introduced for these values.
 
-This design does not define a materialized aggregate collection, background aggregation pipeline, retention period or history pagination. Historical completeness remains unverified without an approved positive verification mechanism; `HISTORY_VERIFIED` is not emitted.
+The API endpoint and response DTO belong to Statistics, even though the source observations are owned and queried by Heart Rate. The current summary endpoint is `GET /api/statistics/heart-rate/summary?date=YYYY-MM-DD`; its external behavior is defined in the [API Contract](../api/api-contract.md#7-heart-rate-metrics--batch-ingestion).
+
+Statistics must not access the Heart Rate repository, Mongo document or collection directly. It obtains raw observations only through the Heart Rate service's query capabilities. Future aggregate persistence, if justified, is owned by Statistics under [ADR-001](./decisions/ADR-001-statistics-owns-aggregate-read-models.md).
 
 ## 6. Dependencies and explicit non-goals
 
-- The current Backend has no completed Authentication/account-isolation implementation. The target write contract derives `accountId` from an authenticated principal; the endpoint must not be treated as safe for real multi-user health data until that platform dependency is implemented.
+- Basic Authentication is implemented. Heart Rate batch ingestion and the Statistics Heart Rate summary require a Bearer access JWT and scope records by its subject (`accountId`). Other metric endpoints and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation.
 - There is no Device registry in this design. Device registration, revocation, metadata and ownership verification are deferred.
 - The current Producer represents one device. A future Producer load mode may start multiple device instances with different stable `deviceId` values and intervals. Worker count and load-generation controls are Producer concerns, not Heart Rate domain fields.
 - HTTP request-level `Idempotency-Key` storage is not added. Measurement-level `eventId` plus the unique index is the MVP idempotency mechanism.
