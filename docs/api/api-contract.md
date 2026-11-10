@@ -183,6 +183,8 @@ Counts describe this submission. Retrying a previously accepted batch may return
 
 ### `GET /api/statistics/heart-rate/summary`
 
+The former `GET /api/heart-rate/summary` path is replaced by this Statistics-owned route and is not retained as a compatibility alias. Heart Rate ingestion remains at `POST /api/heart-rate/batch`.
+
 Read-only Heart Rate screen summary for an authenticated account. Returns **Latest Recorded Heart Rate** from the account's entire accepted history plus **Daily Average Heart Rate** for the selected calendar date. The Backend selects and calculates both; the mobile client must not calculate authoritative values.
 
 **Authentication:** Bearer access JWT is required. Derive `accountId` from the authenticated principal, never from the request. Do not expose account-scoped health reads against unisolated/shared metric records; ingest and read paths must both enforce account ownership before handling real multi-user data.
