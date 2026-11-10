@@ -4,6 +4,7 @@ import com.vitaloom.backend.heartrate.model.HeartRateMeasurement;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Stream;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.index.IndexOperations;
@@ -41,7 +42,16 @@ public class HeartRateRepository {
     }
 
     public List<HeartRateMeasurement> findBetween(String accountId, Instant start, Instant end) {
-        Query query = Query.query(Criteria.where("accountId").is(accountId).and("occurredAt").gte(start).lt(end));
-        return mongo.find(query, HeartRateMeasurement.class);
+        return mongo.find(rangeQuery(accountId, start, end), HeartRateMeasurement.class);
+    }
+
+    public Stream<HeartRateMeasurement> streamBetween(String accountId, Instant start, Instant end) {
+        Query query = rangeQuery(accountId, start, end);
+        query.fields().include("heartRateBpm").include("occurredAt");
+        return mongo.stream(query, HeartRateMeasurement.class);
+    }
+
+    private static Query rangeQuery(String accountId, Instant start, Instant end) {
+        return Query.query(Criteria.where("accountId").is(accountId).and("occurredAt").gte(start).lt(end));
     }
 }

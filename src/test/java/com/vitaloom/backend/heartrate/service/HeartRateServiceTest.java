@@ -12,6 +12,8 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
 
@@ -81,6 +83,21 @@ class HeartRateServiceTest {
                         new HeartRateSample(70, first.getOccurredAt()),
                         new HeartRateSample(81, second.getOccurredAt())),
                 service.findSamplesBetween("account-a", first.getOccurredAt(), second.getOccurredAt()));
+    }
+
+    @Test
+    void streamsRawSamplesAndClosesRepositoryCursorWhenConsumptionCompletes() {
+        var sample = measurement("streamed", 77, "2026-11-05T17:00:00Z");
+        var cursorClosed = new AtomicBoolean();
+        when(repository.streamBetween("account-a", sample.getOccurredAt(), sample.getOccurredAt().plusSeconds(1)))
+                .thenReturn(Stream.of(sample).onClose(() -> cursorClosed.set(true)));
+        var received = new java.util.ArrayList<HeartRateSample>();
+
+        service.forEachSampleBetween("account-a", sample.getOccurredAt(), sample.getOccurredAt().plusSeconds(1),
+                received::add);
+
+        assertEquals(List.of(new HeartRateSample(77, sample.getOccurredAt())), received);
+        assertTrue(cursorClosed.get());
     }
 
     private static HeartRateBatchRequest batch(String id, String timestamp, int bpm) {

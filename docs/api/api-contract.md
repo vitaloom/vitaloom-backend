@@ -18,7 +18,7 @@ This contract defines the target local-MVP API baseline for VitaLoom Backend and
 - Clients/producers create stable IDs for their own retryable write records and must reuse the same ID when retrying that record.
 - Spring Boot enforces uniqueness, backed by MongoDB unique indexes. An API gateway, if present, does not create business IDs or decide whether a record is a duplicate.
 - A retry with an already accepted ID must not create a second record or double-count a metric.
-- Basic authentication is specified in section 11. `POST /api/heart-rate/batch` and `GET /api/statistics/heart-rate/summary` require a Bearer access JWT and scope Heart Rate data to its subject. Other metric endpoints and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation. Do not use those unisolated paths for real multi-user private health data. Personal-data ingestion must derive account ownership from an authenticated principal; do not accept `accountId` from the request body.
+- Basic authentication is specified in section 11. `POST /api/heart-rate/batch` and all `/api/statistics/heart-rate/**` routes require a Bearer access JWT and scope Heart Rate data to its subject. Other metric endpoints and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation. Do not use those unisolated paths for real multi-user private health data. Personal-data ingestion must derive account ownership from an authenticated principal; do not accept `accountId` from the request body.
 - The Heart Rate persistence schema and indexes are defined in [Heart Rate Data Model & Persistence Design](../architecture/heart-rate-data-design.md).
 
 ## 2. Health Check
@@ -262,6 +262,35 @@ Example — user has no accepted Heart Rate measurements (past date requested):
 
 **Implementation decisions:** equal-`occurredAt` latest records use ascending lexical `deviceId`, then `eventId`. Heart Rate ingestion rejects an event whose `occurredAt` is strictly later than the receipt instant captured for its batch with item-level `FUTURE_OCCURRED_AT`; there is no clock-skew grace period. Historical completeness and late/corrected-data policy remain open; do not emit `HISTORY_VERIFIED` without a positive verification mechanism.
 
+### Heart Rate time series
+
+The Daily, Weekly and Custom routes below require a Bearer access JWT. The authenticated JWT subject is the only account scope; no account identifier is accepted as a query parameter. Every timestamp is an absolute UTC instant serialized with an explicit UTC representation. All calendar boundaries use `Asia/Ho_Chi_Minh`.
+
+| Route | Query parameters | Range and buckets |
+| --- | --- | --- |
+| `GET /api/statistics/heart-rate/daily` | Optional `date=YYYY-MM-DD`; defaults to today's local date. | One local date, 96 buckets at 15 minutes each. Future dates are invalid. |
+| `GET /api/statistics/heart-rate/weekly` | Optional `weekStartDate=YYYY-MM-DD`; defaults to the current local Monday. | Monday 00:00 through the next Monday 00:00, end exclusive; 168 hourly buckets. The current week is allowed and future positions remain empty. A supplied date must be Monday. |
+| `GET /api/statistics/heart-rate/custom` | Required `startDate=YYYY-MM-DD` and `endDate=YYYY-MM-DD`. | Inclusive local dates, ordered, ending no later than today; 1–30 calendar days, one hourly bucket per hour (24–720 buckets). |
+
+Dates must be strict, valid `YYYY-MM-DD` calendar dates. A requested local day/week/range whose zone-derived duration differs from its nominal 24-hour days (for example, a historical timezone transition) is rejected with the route's corresponding invalid-date code, preserving the fixed bucket counts.
+
+All routes return the same shape. `endAt` is exclusive; bucket `startAt` values are chronological UTC instants. Each sample is assigned by `occurredAt` to a half-open bucket `[startAt, next bucket start)`. `minBpm`, `avgBpm` and `maxBpm` are calculated from raw accepted observations; average is the unweighted arithmetic mean. Empty buckets remain present with `null` min/average/max and `sampleCount: 0`.
+
+```json
+{
+  "startAt": "2026-11-09T17:00:00Z",
+  "endAt": "2026-11-10T17:00:00Z",
+  "timezone": "Asia/Ho_Chi_Minh",
+  "intervalMinutes": 15,
+  "buckets": [
+    {"startAt": "2026-11-09T17:00:00Z", "minBpm": 65, "avgBpm": 72.5, "maxBpm": 84, "sampleCount": 30},
+    {"startAt": "2026-11-09T17:15:00Z", "minBpm": null, "avgBpm": null, "maxBpm": null, "sampleCount": 0}
+  ]
+}
+```
+
+Invalid or impossible dates, future Daily dates, invalid/future weeks, missing or invalid Custom parameters, reversed ranges, ranges over 30 days and historical transition ranges return `400` with `INVALID_REPORT_DATE`, `INVALID_WEEK_START_DATE` or `INVALID_DATE_RANGE` as appropriate, using the section 8 error envelope. Missing or invalid Bearer credentials return `401 UNAUTHORIZED`.
+
 ### `POST /api/heart-rate/batch`
 
 Accepts raw Heart Rate measurements from one physical or simulated device per batch. Batch interval is controlled by the Producer (currently targeted at approximately 3–5 seconds); it is not an API timing constraint.
@@ -426,4 +455,4 @@ The implementation baseline for this section is `note/authentication-v1/03-api-c
 
 If registration persisted the account but token issuance fails, return `201` `{ "user": {"id":"...","email":"..."}, "authStatus":"LOGIN_REQUIRED" }`. The client offers login rather than retrying registration. Error responses use `{ "error": { "code": "...", "message": "..." } }`. Login uses the same error for unknown email and wrong password.
 
-Access JWTs expire after 15 minutes; refresh JWTs after 30 days. They use separate signing keys from environment configuration and distinct token-type claims. A refresh JWT is never accepted as a Bearer access credential. Refresh returns only a new access JWT and does not rotate the refresh JWT. `GET /api/health` stays public. Heart Rate batch ingestion and the Statistics Heart Rate summary explicitly require Bearer access JWTs and scope reads/writes by the JWT subject. Other metric endpoints and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation.
+Access JWTs expire after 15 minutes; refresh JWTs after 30 days. They use separate signing keys from environment configuration and distinct token-type claims. A refresh JWT is never accepted as a Bearer access credential. Refresh returns only a new access JWT and does not rotate the refresh JWT. `GET /api/health` stays public. Heart Rate batch ingestion and all Statistics Heart Rate routes explicitly require Bearer access JWTs and scope reads/writes by the JWT subject. Other metric endpoints and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation.
