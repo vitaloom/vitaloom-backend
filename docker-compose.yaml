@@ -44,6 +44,19 @@ services:
         condition: service_healthy
     networks:
       - vitaloom-network
+  nginx:
+    image: nginx:1.31.4-alpine
+    container_name: vitaloom_nginx_gateway
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+#    depends_on:
+#      server:
+#        condition: service_healthy
+    networks:
+      - vitaloom-network
 
 volumes:
   vitaloom_mongodb_data:
