@@ -1,6 +1,6 @@
 # Steps API Contract
 
-**Status:** Canonical MVP ingestion contract; Statistics read contract is pending the remaining decisions listed below  
+**Status:** Canonical MVP ingestion and Statistics read contract  
 **Timezone:** `Asia/Ho_Chi_Minh`  
 **Related data design:** [Steps Data Model & Persistence Design](../../architecture/steps-data-design.md)
 
@@ -113,9 +113,9 @@ Response rules:
 - The endpoint processes synchronously and returns item outcomes; it does not use `202 Accepted`.
 - A separate HTTP `Idempotency-Key` header and batch-response replay store are deferred. Stable event IDs and the MongoDB unique index provide retry-safe persistence for the MVP.
 
-## Steps Statistics APIs — proposed read contract
+## Steps Statistics APIs
 
-**Status:** Proposed; do not implement until the remaining range/resolution decisions below are confirmed.  
+**Status:** Approved MVP read contract.  
 **Purpose:** Define backend capabilities independently of current Mobile UI consumption.
 
 The three query use cases have separate endpoints and separate public Statistics service methods. They may reuse a Steps-specific aggregation implementation where appropriate, but the service must not infer the mode from a generic `period` parameter.
@@ -124,11 +124,11 @@ The three query use cases have separate endpoints and separate public Statistics
 
 | Endpoint | Parameters | Proposed range | Proposed output buckets |
 |---|---|---|---|
-| `GET /api/statistics/steps/daily` | Optional `date=YYYY-MM-DD`; defaults to today's local date | One local calendar day | 24 hourly buckets |
-| `GET /api/statistics/steps/weekly` | Optional `weekStartDate=YYYY-MM-DD`; defaults to current local Monday | Monday 00:00 through next Monday 00:00, end exclusive | 7 daily buckets |
-| `GET /api/statistics/steps/custom` | Required `startDate=YYYY-MM-DD`, `endDate=YYYY-MM-DD` | Inclusive local dates, proposed limit 1–30 days | One daily bucket per date |
+| `GET /api/statistics/steps/daily` | Optional `date=YYYY-MM-DD`; defaults to today's local date | One local calendar day | 24 hourly buckets (60 minutes each) |
+| `GET /api/statistics/steps/weekly` | Optional `weekStartDate=YYYY-MM-DD`; defaults to current local Monday | Monday 00:00 through next Monday 00:00, end exclusive | 7 daily buckets (1440 minutes each) |
+| `GET /api/statistics/steps/custom` | Required `startDate=YYYY-MM-DD`, `endDate=YYYY-MM-DD` | Inclusive local dates, maximum 30 calendar days | One daily bucket per date (1440 minutes each) |
 
-All calendar boundaries use `Asia/Ho_Chi_Minh`. The route separation is the intended API shape; bucket resolutions and the 30-day Custom limit remain proposals until explicitly confirmed.
+All calendar boundaries use `Asia/Ho_Chi_Minh`. The three endpoints have separate query parameters and service methods. Daily uses hourly buckets; Weekly and Custom use daily buckets.
 
 ### Proposed response shape
 
@@ -168,21 +168,15 @@ Proposed field semantics:
 - Because ingestion accepts only positive `stepsDelta`, a bucket with one or more accepted events has a positive `steps` total; a valid event-bearing bucket does not return `steps: 0`.
 - `totalSteps` is `null` if the entire requested range contains no accepted events; otherwise it is the sum of accepted increments in the requested range.
 - Empty buckets remain present in the response so the client receives a stable time axis. Empty data does not establish that the user did not walk or that the Producer was continuously online.
-- The proposed `bucketSizeMinutes` is 60 for Daily and 1440 for Weekly/Custom. Confirm whether this numeric field is preferred over a bucket-unit enum before implementation.
+- `bucketSizeMinutes` is the bucket duration in minutes: `60` for Daily and `1440` for Weekly/Custom. The value describes the actual bucket duration; it is not a separate enum.
 
 ### Proposed query validation and security
 
 - Daily date must be a valid local calendar date and cannot be in the future.
 - Weekly start date must be Monday; the current week is allowed and future weeks are rejected. Future positions within the current week remain empty until their event times occur.
-- Custom requires both dates, an ordered inclusive range and an end date no later than today. Its proposed maximum is 30 calendar days.
+- Custom requires both dates, an ordered inclusive range of 1–30 calendar days and an end date no later than today.
 - All Steps Statistics routes require a Bearer access JWT and derive `accountId` from the authenticated subject. No account identifier is accepted in query parameters.
 - The endpoint contract is defined here, but the Steps routes are not implemented in the Backend yet.
-
-### Remaining decisions before implementation
-
-1. Confirm the proposed bucket resolutions: 24 hourly buckets for Daily and 7 daily buckets for Weekly.
-2. Confirm the proposed Custom range limit of 1–30 calendar days.
-3. Confirm `bucketSizeMinutes` versus a bucket-unit enum. Proposed values are 60 for Daily and 1440 for Weekly/Custom.
 
 No Mobile UI behavior is implied by this contract. The Mobile team can later choose which documented APIs to consume.
 
@@ -195,4 +189,7 @@ No Mobile UI behavior is implied by this contract. The Mobile team can later cho
 - [ ] Identical retries are duplicates; conflicting reuse of an event ID is rejected; concurrent duplicates are prevented by a MongoDB unique index.
 - [ ] Out-of-order events are accepted and the full increment is assigned to the bucket containing `occurredAt`.
 - [ ] Batch responses provide per-item accepted, duplicate and rejected outcomes with consistent counters.
+- [ ] Daily returns 24 hourly buckets with `bucketSizeMinutes: 60`; Weekly returns 7 daily buckets; Custom returns one daily bucket per date and accepts ranges of 1–30 calendar days.
+- [ ] Weekly starts on Monday; all calendar boundaries use `Asia/Ho_Chi_Minh`.
+- [ ] Steps Statistics uses `bucketSizeMinutes` (`60` for Daily, `1440` for Weekly/Custom).
 - [ ] Statistics returns null for empty buckets and does not claim that no recorded event proves zero activity or complete data coverage.
