@@ -62,7 +62,7 @@ Example:
 
 The API carries `deviceId` once at the batch envelope; Backend copies it into each accepted measurement document. Device identity is a stable source identifier, not proof of device ownership or an authentication credential. The MVP does not introduce a Device collection or device-registration workflow.
 
-The exact BSON type for `accountId` follows the canonical Account identifier when Authentication persistence is designed. Do not invent a separate Heart Rate account ID representation.
+The authenticated User identifier is a string and is carried as the JWT subject. Store that same logical identifier in `accountId`; do not invent a separate Heart Rate account ID representation.
 
 ## 3. Indexes
 
@@ -108,7 +108,7 @@ Do not add indexes on `receivedAt`, `deviceId` alone, or additional sort combina
 3. Do not reject a measurement because it arrives out of chronological order.
 4. Do not use `occurredAt` as a unique key. Different measurements, including measurements from different devices, may share the same timestamp.
 5. Generate `receivedAt` on the Backend. Never accept it from the Producer.
-6. Keep accepted raw measurements as the source of truth. Daily Average is calculated from valid accepted measurements; it is not written back into this collection.
+6. Keep accepted raw measurements as the source of truth. Statistics calculates Daily Average from valid accepted measurements; it is not written back into this collection.
 7. No TTL or scheduled raw-data deletion is introduced in the MVP. Revisit retention only after Statistics requirements, recalculation needs and actual storage volume are understood.
 
 ## 5. Raw query boundary and Statistics ownership
