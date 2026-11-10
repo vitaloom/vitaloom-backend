@@ -17,6 +17,7 @@ Read the documents relevant to the task:
 - [`README.md`](./README.md) — prerequisites, local environment, infrastructure and run/test commands.
 - [`docs/api/api-contract.md`](./docs/api/api-contract.md) — endpoint paths, payloads, statuses, error codes, timestamps, idempotency and daily statistics behavior.
 - [`docs/architecture/package-structure.md`](./docs/architecture/package-structure.md) — feature ownership, package layout and dependency direction.
+- [`docs/architecture/decisions/README.md`](./docs/architecture/decisions/README.md) — accepted architecture decisions and their rationale; read relevant ADRs before changing an established design.
 - [`docs/architecture/implementation-conventions.md`](./docs/architecture/implementation-conventions.md) — coding, HTTP, service, persistence and testing conventions.
 - [`docs/agent/working-agreement.md`](./docs/agent/working-agreement.md) — task workflow, implementation loop and failure/retry discipline.
 - [`docs/agent/definition-of-done.md`](./docs/agent/definition-of-done.md) — completion and verification criteria.
@@ -28,7 +29,8 @@ For new code and code migrated into this repository, follow the target layout in
 - Inspect the relevant implementation, tests, configuration and API/persistence contract before changing behavior.
 - Preserve the agreed API and persistence contracts unless the task explicitly approves a change. Mobile and Data Producer are separate consumers; account for their compatibility.
 - Keep the application a maintainable modular backend. Do not introduce microservices, brokers, caches, extra Maven modules or infrastructure without a concrete requirement and approval.
-- Keep raw health events/records as the source of truth. Backend validation, persistence and aggregation remain authoritative; clients and the producer must not submit authoritative daily totals.
+- Metric features own their raw health records, ingestion validation, identity, persistence and raw-data query capabilities. Statistics owns the calculations and derived aggregate/read-model data built from those records, including metric-specific aggregates and cross-metric composition. Follow [ADR-001](./docs/architecture/decisions/ADR-001-statistics-owns-aggregate-read-models.md); do not move aggregate ownership back into metric features.
+- Keep raw health records as the source of truth. During the current MVP phase, Statistics calculates aggregates on read; do not add precomputed aggregate persistence, background aggregation workers or refresh infrastructure without a separately approved implementation scope.
 - Preserve event identity and idempotency. A retry of the same logical event must not create a second measurement or double-count a metric; conflicting reuse of an ID must remain distinguishable from an identical retry.
 - Daily statistics currently use `Asia/Ho_Chi_Minh`. Do not change the timezone, day boundaries or timestamp interpretation without an explicit contract decision.
 - Do not invent health-domain rules, clinical interpretations or medical claims. The application tracks and displays data; it must not silently turn implementation assumptions into health advice.
