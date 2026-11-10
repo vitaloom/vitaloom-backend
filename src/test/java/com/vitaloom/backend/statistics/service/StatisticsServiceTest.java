@@ -25,7 +25,7 @@ class StatisticsServiceTest {
     @Test
     void summaryCombinesLatestFromFullHistoryWithSelectedDayAverage() {
         when(heartRateService.findLatestSample("account-a"))
-                .thenReturn(Optional.of(new HeartRateSample(99, Instant.parse("2026-11-05T23:30:00Z"))));
+                .thenReturn(Optional.of(new HeartRateSample(99, Instant.parse("2026-11-06T01:00:00Z"))));
         when(heartRateService.findSamplesBetween(eq("account-a"), any(), any())).thenReturn(List.of(
                 new HeartRateSample(70, Instant.parse("2026-11-06T00:00:00Z")),
                 new HeartRateSample(81, Instant.parse("2026-11-06T00:30:00Z"))));
@@ -33,7 +33,7 @@ class StatisticsServiceTest {
         HeartRateSummaryResponse summary = service.heartRateSummary("account-a", "2026-11-06");
 
         assertEquals(99, summary.latestRecorded().heartRateBpm());
-        assertEquals(Instant.parse("2026-11-05T23:30:00Z"), summary.latestRecorded().occurredAt());
+        assertEquals(Instant.parse("2026-11-06T01:00:00Z"), summary.latestRecorded().occurredAt());
         assertEquals(75.5, summary.dailyAverage().heartRateBpm());
         assertEquals("CURRENT_DAY_PARTIAL", summary.dailyAverage().dataStatus());
         assertEquals("Asia/Ho_Chi_Minh", summary.timezone());
@@ -42,7 +42,7 @@ class StatisticsServiceTest {
     @Test
     void pastDayWithoutSamplesReturnsNullAverageAndKeepsLatestIndependent() {
         when(heartRateService.findLatestSample("account-a"))
-                .thenReturn(Optional.of(new HeartRateSample(99, Instant.parse("2026-11-05T23:30:00Z"))));
+                .thenReturn(Optional.of(new HeartRateSample(99, Instant.parse("2026-11-06T01:00:00Z"))));
         when(heartRateService.findSamplesBetween(eq("account-a"), any(), any())).thenReturn(List.of());
 
         HeartRateSummaryResponse summary = service.heartRateSummary("account-a", "2026-11-05");
