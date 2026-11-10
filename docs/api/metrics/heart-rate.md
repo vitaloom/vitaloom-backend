@@ -113,7 +113,7 @@ All routes return the same shape. `endAt` is exclusive; bucket `startAt` values 
 }
 ```
 
-Invalid or impossible dates, future Daily dates, invalid/future weeks, missing or invalid Custom parameters, reversed ranges, ranges over 30 days and historical transition ranges return `400` with `INVALID_REPORT_DATE`, `INVALID_WEEK_START_DATE` or `INVALID_DATE_RANGE` as appropriate, using the section 8 error envelope. Missing or invalid Bearer credentials return `401 UNAUTHORIZED`.
+Invalid or impossible dates, future Daily dates, invalid/future weeks, missing or invalid Custom parameters, reversed ranges, ranges over 30 days and historical transition ranges return `400` with `INVALID_REPORT_DATE`, `INVALID_WEEK_START_DATE` or `INVALID_DATE_RANGE` as appropriate, using the shared error envelope in the [API Contract Index](../api-contract.md#duplicate-and-error-handling). Missing or invalid Bearer credentials return `401 UNAUTHORIZED`.
 
 ## Batch ingestion
 
