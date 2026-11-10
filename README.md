@@ -8,6 +8,7 @@ Backend repository for VitaLoom. The application uses Java 21, Spring Boot 4.1.1
 - [Working Agreement](./docs/agent/working-agreement.md) — how to investigate, implement, retry and verify work.
 - [Definition of Done](./docs/agent/definition-of-done.md) — completion criteria and verification expectations.
 - [Package Structure](./docs/architecture/package-structure.md) — feature ownership, package layout and dependency direction.
+- [Architecture Decisions](./docs/architecture/decisions/README.md) — accepted architectural decisions, their rationale and future implementation direction.
 - [Implementation Conventions](./docs/architecture/implementation-conventions.md) — coding, HTTP, service, persistence and testing conventions.
 
 The previous demo implementation remains available in [`vitaloom-demo/demo`](https://github.com/vitaloom/vitaloom-demo/tree/main/demo) as a migration reference. The canonical MVP API contract now lives in [`docs/api/api-contract.md`](./docs/api/api-contract.md).
@@ -78,7 +79,7 @@ Linux / macOS:
 Windows:
 
 ```powershell
-.\mvnw.cmd spring-boot:run
+.\\mvnw.cmd spring-boot:run
 ```
 
 The application listens on port `8080` by default. Override it with `SERVER_PORT` in `.env`.
@@ -94,7 +95,7 @@ The auth feature provides `POST /api/auth/register`, `/login`, `/refresh` and pr
 Windows:
 
 ```powershell
-.\mvnw.cmd test
+.\\mvnw.cmd test
 ```
 
 ## MongoDB lifecycle notes
