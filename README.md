@@ -8,10 +8,10 @@ Backend repository for VitaLoom. The application uses Java 21, Spring Boot 4.1.1
 - [Working Agreement](./docs/agent/working-agreement.md) — how to investigate, implement, retry and verify work.
 - [Definition of Done](./docs/agent/definition-of-done.md) — completion criteria and verification expectations.
 - [Package Structure](./docs/architecture/package-structure.md) — feature ownership, package layout and dependency direction.
-- [Architecture Decisions](./docs/architecture/decisions/README.md) — accepted architectural decisions, their rationale and future implementation direction.
 - [Implementation Conventions](./docs/architecture/implementation-conventions.md) — coding, HTTP, service, persistence and testing conventions.
 
-The previous demo implementation remains available in [`vitaloom-demo/demo`](https://github.com/vitaloom/vitaloom-demo/tree/main/demo) as a migration reference. The API-contract index is [`docs/api/api-contract.md`](./docs/api/api-contract.md); detailed contracts are split by area, with one file per metric under [`docs/api/metrics/`](./docs/api/metrics/).
+The previous demo implementation remains available in [`vitaloom-demo/demo`](https://github.com/vitaloom/vitaloom-demo/tree/main/demo) as a migration reference. The canonical MVP API contract now lives in [`docs/api/api-contract.md`](./docs/api/api-contract.md).
+
 
 ## Development status
 
@@ -83,7 +83,7 @@ Windows:
 
 The application listens on port `8080` by default. Override it with `SERVER_PORT` in `.env`.
 
-The auth feature provides `POST /api/auth/register`, `/login`, `/refresh` and protected `GET /api/auth/me`; see the [API contract](./docs/api/api-contract.md). Other metric endpoints become available incrementally as their features are added.
+The auth feature provides `POST /api/auth/register`, `/login`, `/refresh` and protected `GET /api/auth/me`. The protected Water Tracking MVP provides daily and weekly reads plus log creation; see the [Water contract](./docs/features/water/api-contract.md). Other metric endpoints become available incrementally as their features are added.
 
 ## 4. Run tests
 
@@ -106,4 +106,4 @@ Windows:
 
 ## Security scope
 
-Spring Security currently implements stateless Bearer access JWT authentication for `/api/auth/me`, Heart Rate batch ingestion (`POST /api/heart-rate/batch`) and all Statistics Heart Rate routes; Heart Rate reads and writes are scoped to the authenticated account. The Steps API contract also requires Bearer authentication and JWT-subject account scoping for `POST /api/steps/batch` and all Statistics Steps routes, but those Steps endpoints are not implemented yet. Registration, login, refresh and health check are public. Sleep/Water APIs and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation; do not use those unisolated paths for real private health data. Refresh JWTs are stateless and have no server-side revocation or rotation in this Basic MVP. Local sign-out clears the mobile credential but cannot invalidate a previously issued refresh JWT. CSRF is disabled for the stateless, non-cookie API; revisit it if cookies are introduced.
+Spring Security uses stateless Bearer access JWT authentication for `/api/auth/me` and `/api/water/**`. Registration, login, refresh and health check are public. Other existing metric APIs remain public and have no per-user data isolation; do not use them for real private health data. Water logs are scoped to their authenticated account. Refresh JWTs are stateless and have no server-side revocation or rotation in this Basic MVP. Local sign-out clears the mobile credential but cannot invalidate a previously issued refresh JWT. CSRF is disabled for the stateless, non-cookie API; revisit it if cookies are introduced.
