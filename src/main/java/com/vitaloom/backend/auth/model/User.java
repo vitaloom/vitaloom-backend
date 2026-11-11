@@ -1,29 +1,23 @@
 package com.vitaloom.backend.auth.model;
 
-import java.time.Instant;
-import org.springframework.data.annotation.Id;
+import com.vitaloom.backend.shared.persistence.AuditedDocument;
+import org.springframework.data.mongodb.core.mapping.Field;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 @Document("users")
-public class User {
-    @Id private String id;
-    private String email;
-    @Indexed(unique = true) private String emailNormalized;
-    private String passwordHash;
-    private Instant createdAt;
+@Getter
+@NoArgsConstructor
+public class User extends AuditedDocument {
+    @Field("email") private String email;
+    @Field("email_normalized") @Indexed(name = "emailNormalized", unique = true) private String emailNormalized;
+    @Field("password_hash") private String passwordHash;
 
-    public User() {}
-    public User(String email, String emailNormalized, String passwordHash, Instant createdAt) {
+    public User(String email, String emailNormalized, String passwordHash) {
         this.email = email;
         this.emailNormalized = emailNormalized;
         this.passwordHash = passwordHash;
-        this.createdAt = createdAt;
     }
-    public String getId() { return id; }
-    public void setId(String id) { this.id = id; }
-    public String getEmail() { return email; }
-    public String getEmailNormalized() { return emailNormalized; }
-    public String getPasswordHash() { return passwordHash; }
-    public Instant getCreatedAt() { return createdAt; }
 }

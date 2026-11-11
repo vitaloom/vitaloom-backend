@@ -1,4 +1,4 @@
-package com.vitaloom.backend.steps.service;
+package com.vitaloom.backend.steps.exception;
 
 public class InvalidStepsRequestException extends RuntimeException {
     private final String code;

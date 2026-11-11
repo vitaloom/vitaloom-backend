@@ -4,9 +4,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
-import com.vitaloom.backend.heartrate.dto.HeartRateBatchRequest;
+import com.vitaloom.backend.heartrate.dto.request.HeartRateBatchRequest;
+import com.vitaloom.backend.heartrate.contract.dto.HeartRateSample;
 import com.vitaloom.backend.heartrate.model.HeartRateMeasurement;
 import com.vitaloom.backend.heartrate.repository.HeartRateRepository;
+import com.vitaloom.backend.heartrate.service.impl.HeartRateServiceImpl;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -20,7 +22,8 @@ import org.springframework.dao.DuplicateKeyException;
 class HeartRateServiceTest {
     private static final Instant NOW = Instant.parse("2026-11-06T03:00:00Z");
     private final HeartRateRepository repository = mock(HeartRateRepository.class);
-    private final HeartRateService service = new HeartRateService(repository, Clock.fixed(NOW, ZoneOffset.UTC));
+    private final HeartRateServiceImpl service =
+            new HeartRateServiceImpl(repository, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @Test
     void batchAcceptsValidItemsAndRejectsFutureAndInvalidBpmIndependently() {

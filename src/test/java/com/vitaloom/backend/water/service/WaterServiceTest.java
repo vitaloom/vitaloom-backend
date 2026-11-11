@@ -11,6 +11,7 @@ import java.lang.reflect.Proxy;
 
 import com.vitaloom.backend.water.model.WaterLog;
 import com.vitaloom.backend.water.repository.WaterLogRepository;
+import com.vitaloom.backend.water.service.impl.WaterServiceImpl;
 import com.vitaloom.backend.water.exception.WaterValidationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,7 +36,7 @@ class WaterServiceTest {
     WaterService service;
     Clock clock = Clock.fixed(Instant.parse("2026-11-06T10:00:00Z"), ZoneOffset.UTC);
 
-    @BeforeEach void setUp() { stored.clear(); service = new WaterService(logs, clock); }
+    @BeforeEach void setUp() { stored.clear(); service = new WaterServiceImpl(logs, clock); }
 
     @Test void dailySummaryAggregatesTheRequestedLocalDayAndKeepsNewestFirst() {
         WaterLog latest = new WaterLog("u1", 250, Instant.parse("2026-11-06T01:00:00Z"));
@@ -104,7 +105,7 @@ class WaterServiceTest {
     }
 
     @Test void omittedTimestampMatchesMongoMillisecondPrecision() {
-        service = new WaterService(logs, Clock.fixed(Instant.parse("2026-11-06T10:00:00.000500Z"), ZoneOffset.UTC));
+        service = new WaterServiceImpl(logs, Clock.fixed(Instant.parse("2026-11-06T10:00:00.000500Z"), ZoneOffset.UTC));
 
         var created = service.create("u1", 250, null);
 

@@ -2,7 +2,7 @@
 
 These conventions apply to new code and code being refactored in VitaLoom Backend. They are a baseline for this repository, not a mandate to mechanically rewrite the current demo implementation. Inspect relevant callers, stored data, tests and API behavior before changing an existing pattern. Do not expand a task into unrelated cleanup.
 
-Package ownership, package placement and dependency direction are defined in [Package Structure](package-structure.md). This document defines coding and implementation behavior within those boundaries. Follow the target layout for new code and code migrated into this repository; do not use it as a reason for unrelated broad refactoring.
+Package ownership, package placement and dependency direction are defined in [Package Structure](package-structure.md). This document defines coding and implementation behavior within those boundaries. Follow the current feature-first layout for new code; do not use it as a reason for unrelated broad refactoring.
 
 ## 1. Naming
 
@@ -31,8 +31,8 @@ Avoid vague names such as `Helper`, `Manager` or `Processor` unless the name is 
 ### Services
 
 - Services own application use cases, business validation, orchestration and decisions that must remain consistent across entry points.
+- Business services use an interface in `service` and an implementation in `service.impl`; this is the approved interface-first convention. Stateless helpers that do not represent a business capability are exempt.
 - Keep each service cohesive. Do not create one service class per endpoint by default, and do not extract a wrapper that only forwards identical arguments and results without owning a responsibility.
-- Concrete Spring services are the default. Introduce an interface when there is a real boundary, such as a capability consumed across features, multiple implementations, or a dependency that benefits from substitution. Do not require an interface plus `Impl` class for every service.
 - Keep logic private to its owning service unless it has a distinct responsibility or meaningful reuse.
 
 ### Repositories
@@ -44,16 +44,18 @@ Avoid vague names such as `Helper`, `Manager` or `Processor` unless the name is 
 ### DTOs, models and mapping
 
 - Keep HTTP DTOs separate from persistence documents so API evolution does not accidentally change stored data.
-- Java records are suitable for immutable request/response DTOs and may be used for MongoDB documents when the chosen Spring Data mapping and required persistence behavior support them.
-- Do not require all persistence documents to extend a common base class, or require Lombok annotations on every model.
+- Java records are suitable for immutable request/response DTOs.
+- MongoDB documents extend `shared.persistence.BaseDocument` for the shared String `@Id` and accessors. Documents with lifecycle audit fields extend `AuditedDocument` instead; only `User` is audited currently.
 - Use classes when mutability, framework behavior or lifecycle requirements make them a better fit; choose the representation intentionally.
 - Introduce a mapper only when transformation logic is sufficiently complex, repeated or independently meaningful. Simple construction does not require a dedicated mapper class.
+- Keep repeated or substantial pure conversions in a handwritten mapper inside the owning feature. Leave validation, domain decisions, calculations, error messages and repository behavior in services; keep a single trivial construction at its call site when extracting it only adds a hop.
 
 ## 3. Dependency injection
 
 - Prefer constructor injection for required Spring dependencies.
 - Store required dependencies in `private final` fields.
 - Plain constructors are acceptable. Lombok constructor annotations may be used when they improve consistency and remain clear.
+- Use Lombok narrowly for mechanical accessors and constructors: prefer `@Getter`, `@Setter` only where mutation is part of the existing API, `@NoArgsConstructor` for framework-required Mongo constructors, and `@RequiredArgsConstructor` for simple constructor-only injection. Keep qualifier-sensitive and logic-bearing constructors explicit; do not use `@Data` or generate audit setters.
 - Do not use field injection or nullable fallbacks for required dependencies.
 - Avoid introducing Spring beans for pure functions that have no dependency or lifecycle requirement.
 
@@ -73,7 +75,9 @@ Avoid vague names such as `Helper`, `Manager` or `Processor` unless the name is 
 - Raw accepted events/records are the source of truth. Daily totals and dashboard values are derived by the backend, not trusted from client- or producer-computed aggregates.
 - Keep MongoDB-specific query and update mechanics inside repositories.
 - Do not rename persisted fields, change ID representations, alter document shapes or rebuild indexes as incidental cleanup. Such changes require an explicit data-compatibility decision and an appropriate migration, targeted reset or reseed plan.
-- Use explicit `@Field` mappings when a stored field name must differ from the Java property name or when the storage contract intentionally requires an explicit mapping. Do not impose a repository-wide snake_case migration by convention alone.
+- Persist non-ID fields with explicit `@Field` mappings to the approved snake_case BSON names while keeping Java properties and API DTOs camelCase. Raw Mongo queries, projections and index definitions use the BSON names; Spring Data derived query methods use Java property names.
+- `BaseDocument` owns the String `_id`. `AuditedDocument` adds `Instant createdAt` and `updatedAt` using `@CreatedDate` and `@LastModifiedDate`. Mongo auditing uses the shared injected `Clock`; services do not assign these audit fields. Append-only Heart Rate, Steps and Water records use `BaseDocument` only and keep their domain event timestamps distinct.
+- The current BSON mappings assume a fresh or explicitly migrated development database. Existing camelCase documents are not transparently read by the snake_case mappings, and indexes with the same names but old field keys can conflict on startup. The backend does not reset collections automatically; use a fresh development database or migrate documents and indexes explicitly before using the new mappings.
 
 ## 6. Time and daily aggregation
 
@@ -83,9 +87,12 @@ Avoid vague names such as `Helper`, `Manager` or `Processor` unless the name is 
 - Keep timezone/day-boundary policy in one well-defined place as the backend evolves. Avoid scattering independent timezone literals across services.
 - Statistics owns aggregate calculations, while each metric's aggregation semantics remain metric-specific. For example, a Steps total sums valid increments, while a Heart Rate latest observation is selected by event time; do not generalize all metrics into one aggregation rule. See [ADR-001](./decisions/ADR-001-statistics-owns-aggregate-read-models.md).
 
+The shared injected `Clock` supplies time-dependent services and Mongo auditing. Mongo auditing populates lifecycle fields on `AuditedDocument`; services do not assign those audit fields. The [API Contract Index](../api/api-contract.md) owns timestamp and timezone behavior.
+
 ## 7. API compatibility
 
 - The [API Contract Index](../api/api-contract.md) is the entry point and source for shared API conventions. Detailed endpoint paths, request/response shapes, statuses, error codes, timestamp semantics and idempotency rules live in the relevant area or metric contract under `docs/api/`.
+- Request-level errors use RFC 9457 `ProblemDetail` with `application/problem+json` and a top-level VitaLoom `code`; preserve established statuses and codes. Successful response bodies and batch-item `results[].error` values are separate contracts and remain unchanged unless explicitly revised.
 - Make API changes deliberately and update the contract when behavior changes.
 - Consider the separate Mobile and Data Producer repositories as API consumers. A backend-only implementation change can still be a cross-repository breaking change.
 - Do not add authentication, user-level isolation, historical queries, asynchronous infrastructure or other deferred capabilities without an approved scope.

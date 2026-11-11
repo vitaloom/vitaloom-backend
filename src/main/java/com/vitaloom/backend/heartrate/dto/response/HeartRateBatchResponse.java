@@ -1,4 +1,4 @@
-package com.vitaloom.backend.heartrate.dto;
+package com.vitaloom.backend.heartrate.dto.response;
 
 import java.util.List;
 

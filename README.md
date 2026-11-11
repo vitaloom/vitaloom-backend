@@ -4,6 +4,7 @@ Backend repository for VitaLoom. The application uses Java 21, Spring Boot 4.1.1
 
 ## Repository guidance
 
+- [Documentation index](./docs/README.md) — task-oriented map to the API, architecture, feature and agent documents.
 - [`AGENTS.md`](./AGENTS.md) — entry point and non-negotiable instructions for contributors and coding agents.
 - [Working Agreement](./docs/agent/working-agreement.md) — how to investigate, implement, retry and verify work.
 - [Definition of Done](./docs/agent/definition-of-done.md) — completion criteria and verification expectations.

@@ -1,4 +1,4 @@
-package com.vitaloom.backend.heartrate.service;
+package com.vitaloom.backend.heartrate.exception;
 
 public class InvalidHeartRateRequestException extends RuntimeException {
     private final String code;

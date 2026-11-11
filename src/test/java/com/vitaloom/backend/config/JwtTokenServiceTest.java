@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import com.vitaloom.backend.auth.service.JwtTokenService;
+import com.vitaloom.backend.auth.service.impl.JwtTokenServiceImpl;
 import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.beans.factory.InitializingBean;
 
@@ -21,7 +22,7 @@ class JwtTokenServiceTest {
         JwtEncoder refreshEncoder = config.refreshJwtEncoder(REFRESH_SECRET);
         JwtDecoder accessDecoder = config.accessJwtDecoder(ACCESS_SECRET, ISSUER);
         JwtDecoder refreshDecoder = config.refreshJwtDecoder(REFRESH_SECRET, ISSUER);
-        return new JwtTokenService(accessEncoder, refreshEncoder, accessDecoder, refreshDecoder, ISSUER);
+        return new JwtTokenServiceImpl(accessEncoder, refreshEncoder, accessDecoder, refreshDecoder, ISSUER);
     }
 
     @Test
@@ -49,7 +50,7 @@ class JwtTokenServiceTest {
         assertThrows(JwtException.class, () -> tokens.decodeAccess("not-a-jwt"));
 
         AuthTokenConfig config = new AuthTokenConfig();
-        JwtTokenService otherIssuer = new JwtTokenService(
+        JwtTokenService otherIssuer = new JwtTokenServiceImpl(
                 config.accessJwtEncoder(ACCESS_SECRET), config.refreshJwtEncoder(REFRESH_SECRET),
                 config.accessJwtDecoder(ACCESS_SECRET, "https://other.example"),
                 config.refreshJwtDecoder(REFRESH_SECRET, "https://other.example"),

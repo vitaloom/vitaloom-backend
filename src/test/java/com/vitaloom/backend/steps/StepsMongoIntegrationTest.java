@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -91,10 +92,15 @@ class StepsMongoIntegrationTest {
                 + String.join(",", java.util.Collections.nCopies(501,
                 "{\"eventId\":\"id\",\"occurredAt\":\"2026-11-10T00:00:00Z\",\"stepsDelta\":1}")) + "]}";
         mvc.perform(post("/api/steps/batch").contentType(MediaType.APPLICATION_JSON).content(empty))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isUnauthorized())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"))
+                .andExpect(jsonPath("$.detail").value("Authentication is required."));
         mvc.perform(post("/api/steps/batch").header("Authorization", "Bearer " + token(account("invalid")))
                         .contentType(MediaType.APPLICATION_JSON).content(empty))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_BATCH"));
         mvc.perform(post("/api/steps/batch").header("Authorization", "Bearer " + token(account("oversized")))
                         .contentType(MediaType.APPLICATION_JSON).content(oversized))
                 .andExpect(status().isBadRequest());
@@ -102,6 +108,40 @@ class StepsMongoIntegrationTest {
         mvc.perform(get("/api/statistics/steps/weekly")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/statistics/steps/custom").queryParam("startDate", "2026-11-08")
                 .queryParam("endDate", "2026-11-09")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void frameworkAndSecurityFailuresUseProblemDetails() throws Exception {
+        String token = token(account("problem-details"));
+        mvc.perform(post("/api/steps/batch").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.detail").value("Request body is missing or malformed."));
+
+        mvc.perform(get("/api/no-such-route"))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+        mvc.perform(get("/api/steps/batch").header("Authorization", "Bearer " + token))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
+        mvc.perform(post("/api/steps/batch").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.TEXT_PLAIN).content("{}"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_MEDIA_TYPE"));
+        mvc.perform(get("/api/statistics/steps/custom").header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(get("/outside-api").header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.detail").value("Access is denied."));
     }
 
     @Test

@@ -1,27 +1,30 @@
 package com.vitaloom.backend.steps.model;
 
 import java.time.Instant;
-import org.springframework.data.annotation.Id;
+import com.vitaloom.backend.shared.persistence.BaseDocument;
+import org.springframework.data.mongodb.core.mapping.Field;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
 import org.springframework.data.mongodb.core.mapping.Document;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 @Document("step_measurements")
+@Getter
+@NoArgsConstructor
 @CompoundIndexes({
         @CompoundIndex(name = "uk_steps_account_device_event",
-                def = "{'accountId': 1, 'deviceId': 1, 'eventId': 1}", unique = true),
-        @CompoundIndex(name = "ix_steps_account_occurred_at", def = "{'accountId': 1, 'occurredAt': 1}")
+                def = "{'account_id': 1, 'device_id': 1, 'event_id': 1}", unique = true),
+        @CompoundIndex(name = "ix_steps_account_occurred_at", def = "{'account_id': 1, 'occurred_at': 1}")
 })
-public class StepMeasurement {
-    @Id private String id;
-    private String accountId;
-    private String deviceId;
-    private String eventId;
-    private int stepsDelta;
-    private Instant occurredAt;
-    private Instant receivedAt;
+public class StepMeasurement extends BaseDocument {
+    @Field("account_id") private String accountId;
+    @Field("device_id") private String deviceId;
+    @Field("event_id") private String eventId;
+    @Field("steps_delta") private int stepsDelta;
+    @Field("occurred_at") private Instant occurredAt;
+    @Field("received_at") private Instant receivedAt;
 
-    public StepMeasurement() {}
     public StepMeasurement(String accountId, String deviceId, String eventId, int stepsDelta,
                            Instant occurredAt, Instant receivedAt) {
         this.accountId = accountId;
@@ -31,10 +34,4 @@ public class StepMeasurement {
         this.occurredAt = occurredAt;
         this.receivedAt = receivedAt;
     }
-    public String getAccountId() { return accountId; }
-    public String getDeviceId() { return deviceId; }
-    public String getEventId() { return eventId; }
-    public int getStepsDelta() { return stepsDelta; }
-    public Instant getOccurredAt() { return occurredAt; }
-    public Instant getReceivedAt() { return receivedAt; }
 }

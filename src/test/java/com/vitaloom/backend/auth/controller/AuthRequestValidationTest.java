@@ -4,9 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.vitaloom.backend.auth.exception.AuthExceptionHandler;
+import com.vitaloom.backend.auth.controller.exceptionhandler.AuthExceptionHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -30,9 +31,9 @@ class AuthRequestValidationTest {
     void malformedJsonUsesValidationErrorEnvelope() throws Exception {
         mvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON).content("{\"email\":"))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().json("""
-                        {"error":{"code":"VALIDATION_ERROR","message":"The request payload is invalid."}}
-                        """));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.detail").value("The request payload is invalid."));
     }
 
     @Test
@@ -40,9 +41,9 @@ class AuthRequestValidationTest {
         mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"user@example.com\"}"))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().json("""
-                        {"error":{"code":"VALIDATION_ERROR","message":"The request payload is invalid."}}
-                        """));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.detail").value("The request payload is invalid."));
     }
 
     @Test
@@ -50,9 +51,9 @@ class AuthRequestValidationTest {
         mvc.perform(post("/api/auth/refresh").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"refreshToken\":\"   \"}"))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().json("""
-                        {"error":{"code":"VALIDATION_ERROR","message":"The request payload is invalid."}}
-                        """));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.detail").value("The request payload is invalid."));
     }
 
     @Test

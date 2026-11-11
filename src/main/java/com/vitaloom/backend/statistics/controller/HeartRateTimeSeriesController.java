@@ -5,24 +5,18 @@ import com.vitaloom.backend.statistics.exception.InvalidStatisticsRequestExcepti
 import com.vitaloom.backend.statistics.service.StatisticsService;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
-import java.util.Map;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/statistics/heart-rate")
+@RequiredArgsConstructor
 public class HeartRateTimeSeriesController {
     private final StatisticsService service;
-
-    public HeartRateTimeSeriesController(StatisticsService service) {
-        this.service = service;
-    }
 
     @GetMapping("/daily")
     public HeartRateTimeSeriesResponse dailyHeartRateTimeSeries(
@@ -48,13 +42,6 @@ public class HeartRateTimeSeriesController {
                 authentication.getName(),
                 parseOptionalDate(startDate, "INVALID_DATE_RANGE"),
                 parseOptionalDate(endDate, "INVALID_DATE_RANGE"));
-    }
-
-    @ExceptionHandler(InvalidStatisticsRequestException.class)
-    public ResponseEntity<Map<String, Object>> invalidStatisticsRequest(
-            InvalidStatisticsRequestException exception) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(Map.of("error", Map.of("code", exception.getCode(), "message", exception.getMessage())));
     }
 
     private static LocalDate parseOptionalDate(String value, String errorCode) {

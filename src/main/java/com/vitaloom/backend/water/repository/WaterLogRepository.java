@@ -7,7 +7,7 @@ import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.data.mongodb.repository.Query;
 
 public interface WaterLogRepository extends MongoRepository<WaterLog, String> {
-    @Query(value = "{'userId': ?0, 'loggedAt': {'$gte': ?1, '$lt': ?2}}", sort = "{'loggedAt': -1}")
+    @Query(value = "{'user_id': ?0, 'logged_at': {'$gte': ?1, '$lt': ?2}}", sort = "{'logged_at': -1}")
     List<WaterLog> findByUserIdAndLoggedAtGreaterThanEqualAndLoggedAtLessThanOrderByLoggedAtDesc(
             String userId, Instant startInclusive, Instant endExclusive);
 }

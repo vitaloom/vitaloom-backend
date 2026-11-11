@@ -52,24 +52,26 @@ Example:
 ```json
 {
   "_id": "ObjectId(...)",
-  "accountId": "authenticated-account-id",
-  "deviceId": "steps-device-001",
-  "eventId": "steps-run-001-000001",
-  "stepsDelta": 3,
-  "occurredAt": "2026-11-10T01:00:01.000Z",
-  "receivedAt": "2026-11-10T01:00:02.000Z"
+  "account_id": "authenticated-account-id",
+  "device_id": "steps-device-001",
+  "event_id": "steps-run-001-000001",
+  "steps_delta": 3,
+  "occurred_at": "2026-11-10T01:00:01.000Z",
+  "received_at": "2026-11-10T01:00:02.000Z"
 }
 ```
 
-| Field | Responsibility |
+The BSON field names use snake_case; Java properties and API fields remain camelCase.
+
+| BSON field (Java property) | Responsibility |
 |---|---|
 | `_id` | MongoDB-generated internal document identity |
-| `accountId` | String account identifier matching the authenticated User ID / JWT subject |
-| `deviceId` | Stable source identity copied from the batch envelope |
-| `eventId` | Stable identity of one increment event, reused on retry |
-| `stepsDelta` | Positive integer increment from 1 through 5 |
-| `occurredAt` | Source event time; increment completion/recording instant |
-| `receivedAt` | Backend batch receipt time; not supplied by Producer |
+| `account_id` (`accountId`) | String account identifier matching the authenticated User ID / JWT subject |
+| `device_id` (`deviceId`) | Stable source identity copied from the batch envelope |
+| `event_id` (`eventId`) | Stable identity of one increment event, reused on retry |
+| `steps_delta` (`stepsDelta`) | Positive integer increment from 1 through 5 |
+| `occurred_at` (`occurredAt`) | Source event time; increment completion/recording instant |
+| `received_at` (`receivedAt`) | Backend batch receipt time; not supplied by Producer |
 
 `runId` remains batch diagnostic metadata. It is not copied into the measurement document and is not part of event identity. A separate Device collection, device-registration workflow or device-ownership verification is not introduced for the MVP.
 
@@ -89,7 +91,7 @@ MongoDB uniqueness is the final concurrency guard. An application-only pre-check
 
 ```javascript
 db.step_measurements.createIndex(
-  { accountId: 1, deviceId: 1, eventId: 1 },
+  { account_id: 1, device_id: 1, event_id: 1 },
   { unique: true, name: "uk_steps_account_device_event" }
 )
 ```
@@ -105,7 +107,7 @@ For an existing identity:
 
 ```javascript
 db.step_measurements.createIndex(
-  { accountId: 1, occurredAt: 1 },
+  { account_id: 1, occurred_at: 1 },
   { name: "ix_steps_account_occurred_at" }
 )
 ```
@@ -140,9 +142,9 @@ Cross-device duplicate detection/reconciliation is **out of MVP scope**:
 
 ## 6. Statistics query boundary and aggregation ownership
 
-The Steps feature owns raw increment ingestion, validation, event identity, persistence and raw-data query capabilities. Statistics owns all derived Steps totals and time-bucket calculations.
+The Steps feature owns raw increment ingestion, validation, event identity, persistence and raw-data query capabilities. It exposes reads to Statistics through `steps.contract.StepsReadQuery`, with `StepSample` in `steps.contract.dto`; the ingestion controller continues to use `StepsService`. Statistics owns all derived Steps totals and time-bucket calculations.
 
-The Steps service exposes account-scoped raw events within a supplied half-open instant range `[startInclusive, endExclusive)`. Keep MongoDB query construction and persistence models inside Steps. Statistics must not inject `StepsRepository` or access the `step_measurements` collection directly.
+The Steps read contract exposes account-scoped raw events within a supplied half-open instant range `[startInclusive, endExclusive)`. Keep MongoDB query construction and persistence models inside Steps. Statistics must not inject `StepsRepository` or access the `step_measurements` collection directly.
 
 Statistics calculates on read for the MVP. Do not create precomputed daily/weekly aggregate collections, aggregate repositories/models, background jobs, scheduled refresh, cache or a cross-metric generic aggregation framework.
 

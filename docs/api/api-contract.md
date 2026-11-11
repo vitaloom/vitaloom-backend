@@ -21,7 +21,7 @@ This file is the navigation and shared-conventions entry point. Detailed endpoin
 ## 2. Shared conventions
 
 - API paths use the `/api` prefix. The backend local-development Compose stack exposes MongoDB and Mongo Express; Spring Boot runs directly on the host. The former demo's Nginx gateway is not required by this contract.
-- JSON request and response bodies use `Content-Type: application/json`.
+- Successful JSON request and response bodies use `Content-Type: application/json`. Request-level error responses use `application/problem+json` as described in [Generic error response](#generic-error-response).
 - `occurredAt` records when a measurement or user action happened. The backend adds `receivedAt` when it receives an ingestion batch; the same receipt instant is assigned to newly accepted measurements in that batch.
 - Persist event instants as UTC. Java code uses `Instant`; MongoDB BSON Date stores millisecond precision.
 - Keep raw events/records as the source of truth. Spring Boot is responsible for validation, persistence and aggregation; clients and the producer must not calculate and submit authoritative daily totals.
@@ -58,18 +58,28 @@ Successful response — `200 OK`:
 
 ### Generic error response
 
-Use a consistent error shape for request-level errors:
+Request-level errors use RFC 9457 Problem Details serialized as `application/problem+json`. Spring's standard fields are accompanied by a top-level `code` extension:
 
 ```json
 {
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "The request payload is invalid."
-  }
+  "type": "about:blank",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "The request payload is invalid.",
+  "instance": "/api/auth/register",
+  "code": "VALIDATION_ERROR"
 }
 ```
 
-Heart Rate and Steps item-level ID conflicts are represented in the partial-acceptance result as `REJECTED / EVENT_ID_CONFLICT`, so valid items in the same batch can still be accepted. Other metric-specific conflict behavior remains defined in the corresponding contract.
+`type`, `title`, `status`, `detail` and `instance` follow the Problem Details model; `code` is a VitaLoom extension. Authentication and Water malformed input use `400 VALIDATION_ERROR`. Malformed Heart Rate and Steps batch requests use `400 INVALID_REQUEST`. Missing or invalid credentials use `401 UNAUTHORIZED`; authenticated requests denied by policy use `403 FORBIDDEN`. Other existing business statuses and codes remain defined by the relevant endpoint contract.
+
+This request-level format does not change successful JSON bodies or per-item batch results. Heart Rate and Steps item-level ID conflicts remain `REJECTED / EVENT_ID_CONFLICT` in `results[].error`, with the existing nested `code` and `message`; valid items in that batch can still be accepted. Other metric item errors remain as documented.
+
+#### Consumer migration compatibility
+
+- Mobile's shared HTTP client at `src/lib/api/http-client.ts:26` currently reads nested `error.code` and `error.message`, then falls back to a generic message if that envelope is absent. Its refresh retry remains keyed on HTTP status, so the Problem Details migration must preserve response statuses.
+- Data Producer `auth.go:111` and `auth.go:238` currently reads nested `error.code`; registration relies on `409 EMAIL_ALREADY_REGISTERED` to fall back to login. Preserve that status and code while migrating the producer to top-level Problem Details `code` and `detail`.
+- Producer metric transport primarily uses HTTP status and Heart Rate/Steps `results[]` item outcomes. Preserve those statuses and the existing item-level `results[].error.code` / `message` shape.
 
 ## 5. Cross-cutting deferred capabilities
 
@@ -78,6 +88,6 @@ Per-user access and data isolation for Sleep and the cross-metric daily dashboar
 ## 6. Cross-cutting acceptance checks
 
 - [ ] Health check returns `200 OK` from Spring Boot at `GET /api/health`.
-- [ ] API failures use the documented error envelope and do not disguise retrieval failures as successful empty data.
+- [ ] Request-level API failures use the documented Problem Details format and do not disguise retrieval failures as successful empty data.
 - [ ] Raw event timestamps remain separate from server receipt timestamps.
 - [ ] The Mobile and Data Producer consumers are checked when a contract changes.

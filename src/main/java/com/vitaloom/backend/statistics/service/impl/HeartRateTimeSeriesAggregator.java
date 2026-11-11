@@ -1,9 +1,10 @@
-package com.vitaloom.backend.statistics.service;
+package com.vitaloom.backend.statistics.service.impl;
 
-import com.vitaloom.backend.heartrate.service.HeartRateSample;
+import com.vitaloom.backend.heartrate.contract.dto.HeartRateSample;
 import com.vitaloom.backend.statistics.dto.response.HeartRateTimeSeriesResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -11,12 +12,14 @@ final class HeartRateTimeSeriesAggregator {
     private final Instant startAt;
     private final Instant endAt;
     private final int intervalMinutes;
+    private final ZoneId timeZone;
     private final List<Accumulator> accumulators;
 
-    HeartRateTimeSeriesAggregator(Instant startAt, Instant endAt, int intervalMinutes) {
+    HeartRateTimeSeriesAggregator(Instant startAt, Instant endAt, int intervalMinutes, ZoneId timeZone) {
         this.startAt = startAt;
         this.endAt = endAt;
         this.intervalMinutes = intervalMinutes;
+        this.timeZone = timeZone;
         long durationMinutes = Duration.between(startAt, endAt).toMinutes();
         if (intervalMinutes <= 0 || durationMinutes <= 0 || durationMinutes % intervalMinutes != 0) {
             throw new IllegalArgumentException("The range must contain a whole number of buckets.");
@@ -43,7 +46,7 @@ final class HeartRateTimeSeriesAggregator {
             Instant bucketStart = startAt.plus(Duration.ofMinutes((long) i * intervalMinutes));
             buckets.add(accumulators.get(i).toBucket(bucketStart));
         }
-        return new HeartRateTimeSeriesResponse(startAt, endAt, StatisticsService.TIMEZONE.getId(),
+        return new HeartRateTimeSeriesResponse(startAt, endAt, timeZone.getId(),
                 intervalMinutes, List.copyOf(buckets));
     }
 

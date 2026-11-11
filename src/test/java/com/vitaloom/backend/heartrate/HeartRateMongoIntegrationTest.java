@@ -137,9 +137,9 @@ class HeartRateMongoIntegrationTest {
         mvc.perform(get("/api/statistics/heart-rate/daily").queryParam("date", "2026-11-6")
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("INVALID_REPORT_DATE"));
+                .andExpect(jsonPath("$.code").value("INVALID_REPORT_DATE"));
         mvc.perform(get("/api/statistics/heart-rate/custom").header("Authorization", "Bearer " + token))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("INVALID_DATE_RANGE"));
+                .andExpect(jsonPath("$.code").value("INVALID_DATE_RANGE"));
     }
 }
