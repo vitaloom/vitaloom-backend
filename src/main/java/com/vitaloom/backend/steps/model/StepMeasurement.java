@@ -6,8 +6,12 @@ import org.springframework.data.mongodb.core.mapping.Field;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
 import org.springframework.data.mongodb.core.mapping.Document;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 @Document("step_measurements")
+@Getter
+@NoArgsConstructor
 @CompoundIndexes({
         @CompoundIndex(name = "uk_steps_account_device_event",
                 def = "{'account_id': 1, 'device_id': 1, 'event_id': 1}", unique = true),
@@ -21,7 +25,6 @@ public class StepMeasurement extends BaseDocument {
     @Field("occurred_at") private Instant occurredAt;
     @Field("received_at") private Instant receivedAt;
 
-    public StepMeasurement() {}
     public StepMeasurement(String accountId, String deviceId, String eventId, int stepsDelta,
                            Instant occurredAt, Instant receivedAt) {
         this.accountId = accountId;
@@ -31,10 +34,4 @@ public class StepMeasurement extends BaseDocument {
         this.occurredAt = occurredAt;
         this.receivedAt = receivedAt;
     }
-    public String getAccountId() { return accountId; }
-    public String getDeviceId() { return deviceId; }
-    public String getEventId() { return eventId; }
-    public int getStepsDelta() { return stepsDelta; }
-    public Instant getOccurredAt() { return occurredAt; }
-    public Instant getReceivedAt() { return receivedAt; }
 }

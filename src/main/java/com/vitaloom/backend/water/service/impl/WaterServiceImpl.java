@@ -19,21 +19,16 @@ import com.vitaloom.backend.water.exception.WaterValidationException;
 import com.vitaloom.backend.water.model.WaterLog;
 import com.vitaloom.backend.water.repository.WaterLogRepository;
 import com.vitaloom.backend.water.service.WaterService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class WaterServiceImpl implements WaterService {
     private static final int DEFAULT_GOAL_ML = 2000;
 
     private final WaterLogRepository logs;
     private final Clock clock;
-
-    @Autowired
-    public WaterServiceImpl(WaterLogRepository logs, Clock clock) {
-        this.logs = logs;
-        this.clock = clock;
-    }
 
     public DailyWaterSummaryResponse dailySummary(String userId, String dateText, String timeZone) {
         LocalDate date = parseDate(dateText);

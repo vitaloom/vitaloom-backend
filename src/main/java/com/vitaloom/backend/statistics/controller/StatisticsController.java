@@ -8,15 +8,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/statistics")
+@RequiredArgsConstructor
 public class StatisticsController {
     private final StatisticsService service;
-
-    public StatisticsController(StatisticsService service) {
-        this.service = service;
-    }
 
     @GetMapping("/heart-rate/summary")
     public HeartRateSummaryResponse heartRateSummary(

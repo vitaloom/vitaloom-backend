@@ -9,12 +9,13 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/steps")
+@RequiredArgsConstructor
 public class StepsController {
     private final StepsService service;
-    public StepsController(StepsService service) { this.service = service; }
 
     @PostMapping("/batch")
     public ResponseEntity<StepsBatchResponse> ingest(Authentication authentication,

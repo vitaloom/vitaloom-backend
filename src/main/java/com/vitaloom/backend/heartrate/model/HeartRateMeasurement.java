@@ -6,8 +6,12 @@ import org.springframework.data.mongodb.core.mapping.Field;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
 import org.springframework.data.mongodb.core.mapping.Document;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 @Document("heart_rate_measurements")
+@Getter
+@NoArgsConstructor
 @CompoundIndexes({
         @CompoundIndex(name = "uk_hr_account_device_event", def = "{'account_id': 1, 'device_id': 1, 'event_id': 1}", unique = true),
         @CompoundIndex(name = "ix_hr_account_occurred_at", def = "{'account_id': 1, 'occurred_at': 1}")
@@ -20,7 +24,6 @@ public class HeartRateMeasurement extends BaseDocument {
     @Field("occurred_at") private Instant occurredAt;
     @Field("received_at") private Instant receivedAt;
 
-    public HeartRateMeasurement() {}
     public HeartRateMeasurement(String accountId, String deviceId, String eventId, int heartRateBpm,
                                 Instant occurredAt, Instant receivedAt) {
         this.accountId = accountId;
@@ -30,10 +33,4 @@ public class HeartRateMeasurement extends BaseDocument {
         this.occurredAt = occurredAt;
         this.receivedAt = receivedAt;
     }
-    public String getAccountId() { return accountId; }
-    public String getDeviceId() { return deviceId; }
-    public String getEventId() { return eventId; }
-    public int getHeartRateBpm() { return heartRateBpm; }
-    public Instant getOccurredAt() { return occurredAt; }
-    public Instant getReceivedAt() { return receivedAt; }
 }

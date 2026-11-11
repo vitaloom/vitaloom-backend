@@ -9,12 +9,13 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/heart-rate")
+@RequiredArgsConstructor
 public class HeartRateController {
     private final HeartRateService service;
-    public HeartRateController(HeartRateService service) { this.service = service; }
 
     @PostMapping("/batch")
     public ResponseEntity<HeartRateBatchResponse> ingest(Authentication authentication,

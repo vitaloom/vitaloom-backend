@@ -15,16 +15,13 @@ import java.util.ArrayList;
 import java.util.List;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class StepsServiceImpl implements StepsService {
     private final StepsRepository repository;
     private final Clock clock;
-
-    public StepsServiceImpl(StepsRepository repository, Clock clock) {
-        this.repository = repository;
-        this.clock = clock;
-    }
 
     public StepsBatchResponse ingest(String accountId, StepsBatchRequest request) {
         if (request == null || !validText(request.deviceId(), 128) || !validText(request.runId(), 128)

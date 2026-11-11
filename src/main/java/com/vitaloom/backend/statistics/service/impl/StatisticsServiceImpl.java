@@ -19,10 +19,11 @@ import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class StatisticsServiceImpl implements StatisticsService {
     private static final int DAILY_INTERVAL_MINUTES = 15;
     private static final int HOURLY_INTERVAL_MINUTES = 60;
@@ -31,15 +32,6 @@ public class StatisticsServiceImpl implements StatisticsService {
     private final StepsService stepsService;
     private final Clock clock;
     private final ZoneId timeZone;
-
-    @Autowired
-    public StatisticsServiceImpl(HeartRateService heartRateService, StepsService stepsService, Clock clock,
-                                 ZoneId timeZone) {
-        this.heartRateService = heartRateService;
-        this.stepsService = stepsService;
-        this.clock = clock;
-        this.timeZone = timeZone;
-    }
 
     public HeartRateSummaryResponse heartRateSummary(String accountId, String date) {
         Instant asOf = clock.instant();

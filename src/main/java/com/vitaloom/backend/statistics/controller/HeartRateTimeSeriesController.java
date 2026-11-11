@@ -14,15 +14,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/statistics/heart-rate")
+@RequiredArgsConstructor
 public class HeartRateTimeSeriesController {
     private final StatisticsService service;
-
-    public HeartRateTimeSeriesController(StatisticsService service) {
-        this.service = service;
-    }
 
     @GetMapping("/daily")
     public HeartRateTimeSeriesResponse dailyHeartRateTimeSeries(
