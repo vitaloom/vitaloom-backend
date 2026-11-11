@@ -15,6 +15,7 @@ The former demo implementation remains available in [`vitaloom-demo/demo`](https
 Read the documents relevant to the task:
 
 - [`README.md`](./README.md) — prerequisites, local environment, infrastructure and run/test commands.
+- [`docs/README.md`](./docs/README.md) — task-oriented index to API, architecture, feature and agent documentation.
 - [`docs/api/api-contract.md`](./docs/api/api-contract.md) — API-contract index and shared conventions.
 - [`docs/api/`](./docs/api/) — detailed authentication, dashboard and metric-specific API contracts; read the file relevant to your task.
 - [`docs/architecture/package-structure.md`](./docs/architecture/package-structure.md) — feature ownership, package layout and dependency direction.

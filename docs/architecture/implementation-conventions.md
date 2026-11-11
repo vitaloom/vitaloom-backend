@@ -2,7 +2,7 @@
 
 These conventions apply to new code and code being refactored in VitaLoom Backend. They are a baseline for this repository, not a mandate to mechanically rewrite the current demo implementation. Inspect relevant callers, stored data, tests and API behavior before changing an existing pattern. Do not expand a task into unrelated cleanup.
 
-Package ownership, package placement and dependency direction are defined in [Package Structure](package-structure.md). This document defines coding and implementation behavior within those boundaries. Follow the target layout for new code and code migrated into this repository; do not use it as a reason for unrelated broad refactoring.
+Package ownership, package placement and dependency direction are defined in [Package Structure](package-structure.md). This document defines coding and implementation behavior within those boundaries. Follow the current feature-first layout for new code; do not use it as a reason for unrelated broad refactoring.
 
 ## 1. Naming
 
@@ -31,8 +31,8 @@ Avoid vague names such as `Helper`, `Manager` or `Processor` unless the name is 
 ### Services
 
 - Services own application use cases, business validation, orchestration and decisions that must remain consistent across entry points.
+- Business services use an interface in `service` and an implementation in `service.impl`; this is the approved interface-first convention. Stateless helpers that do not represent a business capability are exempt.
 - Keep each service cohesive. Do not create one service class per endpoint by default, and do not extract a wrapper that only forwards identical arguments and results without owning a responsibility.
-- Concrete Spring services are the default. Introduce an interface when there is a real boundary, such as a capability consumed across features, multiple implementations, or a dependency that benefits from substitution. Do not require an interface plus `Impl` class for every service.
 - Keep logic private to its owning service unless it has a distinct responsibility or meaningful reuse.
 
 ### Repositories
@@ -86,6 +86,8 @@ Avoid vague names such as `Helper`, `Manager` or `Processor` unless the name is 
 - Use an injected `Clock` for business logic that depends on the current time, so boundary behavior can be tested deterministically.
 - Keep timezone/day-boundary policy in one well-defined place as the backend evolves. Avoid scattering independent timezone literals across services.
 - Statistics owns aggregate calculations, while each metric's aggregation semantics remain metric-specific. For example, a Steps total sums valid increments, while a Heart Rate latest observation is selected by event time; do not generalize all metrics into one aggregation rule. See [ADR-001](./decisions/ADR-001-statistics-owns-aggregate-read-models.md).
+
+The shared injected `Clock` supplies time-dependent services and Mongo auditing. Mongo auditing populates lifecycle fields on `AuditedDocument`; services do not assign those audit fields. The [API Contract Index](../api/api-contract.md) owns timestamp and timezone behavior.
 
 ## 7. API compatibility
 
