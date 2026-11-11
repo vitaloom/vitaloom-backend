@@ -39,7 +39,8 @@ public class WaterController {
     public ResponseEntity<WaterLogResponse> create(
             @RequestBody CreateWaterLogRequest request, Authentication authentication) {
         if (request == null) throw new WaterValidationException();
-        WaterLogResponse created = water.create(authentication.getName(), request.validatedAmountMl(), request.loggedAt());
+        WaterLogResponse created = water.create(
+                authentication.getName(), request.validatedAmountMl(), request.validatedLoggedAt());
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 }
