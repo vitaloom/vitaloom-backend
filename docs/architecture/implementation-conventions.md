@@ -48,12 +48,14 @@ Avoid vague names such as `Helper`, `Manager` or `Processor` unless the name is 
 - MongoDB documents extend `shared.persistence.BaseDocument` for the shared String `@Id` and accessors. Documents with lifecycle audit fields extend `AuditedDocument` instead; only `User` is audited currently.
 - Use classes when mutability, framework behavior or lifecycle requirements make them a better fit; choose the representation intentionally.
 - Introduce a mapper only when transformation logic is sufficiently complex, repeated or independently meaningful. Simple construction does not require a dedicated mapper class.
+- Keep repeated or substantial pure conversions in a handwritten mapper inside the owning feature. Leave validation, domain decisions, calculations, error messages and repository behavior in services; keep a single trivial construction at its call site when extracting it only adds a hop.
 
 ## 3. Dependency injection
 
 - Prefer constructor injection for required Spring dependencies.
 - Store required dependencies in `private final` fields.
 - Plain constructors are acceptable. Lombok constructor annotations may be used when they improve consistency and remain clear.
+- Use Lombok narrowly for mechanical accessors and constructors: prefer `@Getter`, `@Setter` only where mutation is part of the existing API, `@NoArgsConstructor` for framework-required Mongo constructors, and `@RequiredArgsConstructor` for simple constructor-only injection. Keep qualifier-sensitive and logic-bearing constructors explicit; do not use `@Data` or generate audit setters.
 - Do not use field injection or nullable fallbacks for required dependencies.
 - Avoid introducing Spring beans for pure functions that have no dependency or lifecycle requirement.
 

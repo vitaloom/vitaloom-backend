@@ -3,6 +3,7 @@ package com.vitaloom.backend.heartrate.service.impl;
 import com.vitaloom.backend.heartrate.dto.HeartRateBatchRequest;
 import com.vitaloom.backend.heartrate.dto.HeartRateBatchResponse;
 import com.vitaloom.backend.heartrate.model.HeartRateMeasurement;
+import com.vitaloom.backend.heartrate.mapper.HeartRateMapper;
 import com.vitaloom.backend.heartrate.repository.HeartRateRepository;
 import com.vitaloom.backend.heartrate.service.HeartRateSample;
 import com.vitaloom.backend.heartrate.service.HeartRateService;
@@ -17,16 +18,14 @@ import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class HeartRateServiceImpl implements HeartRateService {
     private final HeartRateRepository repository;
     private final Clock clock;
-
-    @Autowired
-    public HeartRateServiceImpl(HeartRateRepository repository, Clock clock) { this.repository = repository; this.clock = clock; }
 
     public HeartRateBatchResponse ingest(String accountId, HeartRateBatchRequest request) {
         if (request == null || !validText(request.deviceId(), 128) || !validText(request.runId(), 128)
@@ -75,12 +74,12 @@ public class HeartRateServiceImpl implements HeartRateService {
 
     public Optional<HeartRateSample> findLatestSample(String accountId) {
         return repository.latest(accountId)
-                .map(measurement -> new HeartRateSample(measurement.getHeartRateBpm(), measurement.getOccurredAt()));
+                .map(HeartRateMapper::toSample);
     }
 
     public List<HeartRateSample> findSamplesBetween(String accountId, Instant startInclusive, Instant endExclusive) {
         return repository.findBetween(accountId, startInclusive, endExclusive).stream()
-                .map(measurement -> new HeartRateSample(measurement.getHeartRateBpm(), measurement.getOccurredAt()))
+                .map(HeartRateMapper::toSample)
                 .toList();
     }
 
@@ -88,8 +87,7 @@ public class HeartRateServiceImpl implements HeartRateService {
                                      Consumer<HeartRateSample> consumer) {
         try (Stream<HeartRateMeasurement> measurements = repository.streamBetween(
                 accountId, startInclusive, endExclusive)) {
-            measurements.map(measurement -> new HeartRateSample(
-                    measurement.getHeartRateBpm(), measurement.getOccurredAt()))
+            measurements.map(HeartRateMapper::toSample)
                     .forEach(consumer);
         }
     }

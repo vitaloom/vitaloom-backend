@@ -2,6 +2,7 @@ package com.vitaloom.backend.auth.service;
 
 import com.vitaloom.backend.auth.dto.response.AuthResponse;
 import com.vitaloom.backend.auth.dto.response.UserResponse;
+import com.vitaloom.backend.auth.mapper.AuthMapper;
 
 public interface AuthService {
     RegistrationResult register(String email, String password);
@@ -11,8 +12,7 @@ public interface AuthService {
 
     record RegistrationResult(UserResponse user, JwtTokenService.TokenPair tokens, boolean loginRequired) {
         public AuthResponse authResponse() {
-            return tokens == null ? null : new AuthResponse(user, tokens.accessToken(), tokens.refreshToken(),
-                    tokens.expiresInSeconds());
+            return tokens == null ? null : AuthMapper.toAuthResponse(user, tokens);
         }
     }
 
