@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
-import com.vitaloom.backend.heartrate.dto.HeartRateBatchRequest;
+import com.vitaloom.backend.heartrate.dto.request.HeartRateBatchRequest;
 import com.vitaloom.backend.heartrate.contract.dto.HeartRateSample;
 import com.vitaloom.backend.heartrate.model.HeartRateMeasurement;
 import com.vitaloom.backend.heartrate.repository.HeartRateRepository;

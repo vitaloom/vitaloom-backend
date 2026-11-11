@@ -1,5 +1,7 @@
 package com.vitaloom.backend.auth.service;
 
+import com.vitaloom.backend.auth.exception.TokenIssuanceException;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.lang.reflect.Proxy;

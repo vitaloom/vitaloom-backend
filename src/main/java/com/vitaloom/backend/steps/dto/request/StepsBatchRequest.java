@@ -1,4 +1,4 @@
-package com.vitaloom.backend.steps.dto;
+package com.vitaloom.backend.steps.dto.request;
 
 import java.util.List;
 

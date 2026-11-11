@@ -1,7 +1,8 @@
-package com.vitaloom.backend.water.exception;
+package com.vitaloom.backend.water.controller.exceptionhandler;
 
 import java.util.Map;
 import com.vitaloom.backend.water.controller.WaterController;
+import com.vitaloom.backend.water.exception.WaterValidationException;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;

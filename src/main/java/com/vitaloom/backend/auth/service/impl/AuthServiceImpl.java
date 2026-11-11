@@ -15,7 +15,7 @@ import com.vitaloom.backend.auth.model.User;
 import com.vitaloom.backend.auth.repository.UserRepository;
 import com.vitaloom.backend.auth.service.AuthService;
 import com.vitaloom.backend.auth.service.JwtTokenService;
-import com.vitaloom.backend.auth.service.TokenIssuanceException;
+import com.vitaloom.backend.auth.exception.TokenIssuanceException;
 import com.vitaloom.backend.auth.service.AuthService.RefreshResult;
 import com.vitaloom.backend.auth.service.AuthService.RegistrationResult;
 import org.springframework.dao.DuplicateKeyException;

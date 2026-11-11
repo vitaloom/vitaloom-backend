@@ -1,6 +1,6 @@
-package com.vitaloom.backend.heartrate.exception;
+package com.vitaloom.backend.heartrate.controller.exceptionhandler;
 
-import com.vitaloom.backend.heartrate.service.InvalidHeartRateRequestException;
+import com.vitaloom.backend.heartrate.exception.InvalidHeartRateRequestException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;

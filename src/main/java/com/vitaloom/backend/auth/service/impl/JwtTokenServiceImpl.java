@@ -14,7 +14,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.JwtException;
 import com.vitaloom.backend.auth.service.JwtTokenService;
-import com.vitaloom.backend.auth.service.TokenIssuanceException;
+import com.vitaloom.backend.auth.exception.TokenIssuanceException;
 import org.springframework.stereotype.Service;
 
 @Service

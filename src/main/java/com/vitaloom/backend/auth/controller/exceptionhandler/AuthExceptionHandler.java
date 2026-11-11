@@ -1,7 +1,11 @@
-package com.vitaloom.backend.auth.exception;
+package com.vitaloom.backend.auth.controller.exceptionhandler;
 
+import com.vitaloom.backend.auth.exception.EmailAlreadyRegisteredException;
+import com.vitaloom.backend.auth.exception.InvalidCredentialsException;
+import com.vitaloom.backend.auth.exception.InvalidRefreshTokenException;
+import com.vitaloom.backend.auth.exception.TokenIssuanceException;
+import com.vitaloom.backend.auth.exception.UserNotFoundException;
 import java.util.Map;
-import com.vitaloom.backend.auth.service.TokenIssuanceException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;

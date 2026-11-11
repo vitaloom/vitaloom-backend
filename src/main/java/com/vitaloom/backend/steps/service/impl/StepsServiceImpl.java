@@ -2,11 +2,11 @@ package com.vitaloom.backend.steps.service.impl;
 
 import com.vitaloom.backend.steps.contract.StepsReadQuery;
 import com.vitaloom.backend.steps.contract.dto.StepSample;
-import com.vitaloom.backend.steps.dto.StepsBatchRequest;
-import com.vitaloom.backend.steps.dto.StepsBatchResponse;
+import com.vitaloom.backend.steps.dto.request.StepsBatchRequest;
+import com.vitaloom.backend.steps.dto.response.StepsBatchResponse;
 import com.vitaloom.backend.steps.model.StepMeasurement;
 import com.vitaloom.backend.steps.repository.StepsRepository;
-import com.vitaloom.backend.steps.service.InvalidStepsRequestException;
+import com.vitaloom.backend.steps.exception.InvalidStepsRequestException;
 import com.vitaloom.backend.steps.service.StepsService;
 import java.time.Clock;
 import java.time.Instant;

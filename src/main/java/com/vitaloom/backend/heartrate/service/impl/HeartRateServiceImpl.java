@@ -2,13 +2,13 @@ package com.vitaloom.backend.heartrate.service.impl;
 
 import com.vitaloom.backend.heartrate.contract.HeartRateReadQuery;
 import com.vitaloom.backend.heartrate.contract.dto.HeartRateSample;
-import com.vitaloom.backend.heartrate.dto.HeartRateBatchRequest;
-import com.vitaloom.backend.heartrate.dto.HeartRateBatchResponse;
+import com.vitaloom.backend.heartrate.dto.request.HeartRateBatchRequest;
+import com.vitaloom.backend.heartrate.dto.response.HeartRateBatchResponse;
 import com.vitaloom.backend.heartrate.mapper.HeartRateMapper;
 import com.vitaloom.backend.heartrate.model.HeartRateMeasurement;
 import com.vitaloom.backend.heartrate.repository.HeartRateRepository;
 import com.vitaloom.backend.heartrate.service.HeartRateService;
-import com.vitaloom.backend.heartrate.service.InvalidHeartRateRequestException;
+import com.vitaloom.backend.heartrate.exception.InvalidHeartRateRequestException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;

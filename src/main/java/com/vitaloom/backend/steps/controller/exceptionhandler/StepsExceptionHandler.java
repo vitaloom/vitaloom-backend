@@ -1,6 +1,6 @@
-package com.vitaloom.backend.steps.exception;
+package com.vitaloom.backend.steps.controller.exceptionhandler;
 
-import com.vitaloom.backend.steps.service.InvalidStepsRequestException;
+import com.vitaloom.backend.steps.exception.InvalidStepsRequestException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;

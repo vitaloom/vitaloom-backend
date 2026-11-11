@@ -1,7 +1,7 @@
 package com.vitaloom.backend.heartrate.controller;
 
-import com.vitaloom.backend.heartrate.dto.HeartRateBatchRequest;
-import com.vitaloom.backend.heartrate.dto.HeartRateBatchResponse;
+import com.vitaloom.backend.heartrate.dto.request.HeartRateBatchRequest;
+import com.vitaloom.backend.heartrate.dto.response.HeartRateBatchResponse;
 import com.vitaloom.backend.heartrate.service.HeartRateService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;

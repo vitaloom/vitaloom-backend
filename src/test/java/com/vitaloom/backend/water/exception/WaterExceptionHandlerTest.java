@@ -1,5 +1,7 @@
 package com.vitaloom.backend.water.exception;
 
+import com.vitaloom.backend.water.controller.exceptionhandler.WaterExceptionHandler;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;

@@ -1,7 +1,7 @@
 package com.vitaloom.backend.steps.controller;
 
-import com.vitaloom.backend.steps.dto.StepsBatchRequest;
-import com.vitaloom.backend.steps.dto.StepsBatchResponse;
+import com.vitaloom.backend.steps.dto.request.StepsBatchRequest;
+import com.vitaloom.backend.steps.dto.response.StepsBatchResponse;
 import com.vitaloom.backend.steps.service.StepsService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
