@@ -16,18 +16,18 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class WaterExceptionHandler {
     @ExceptionHandler(WaterValidationException.class)
-    public ResponseEntity<?> invalidRequest() {
-        return validationError();
+    public ResponseEntity<?> invalidRequest(WaterValidationException exception) {
+        return validationError(exception.getMessage());
     }
 
     @ExceptionHandler({HttpMessageNotReadableException.class, MissingServletRequestParameterException.class,
             MethodArgumentTypeMismatchException.class})
     public ResponseEntity<?> malformedRequest() {
-        return validationError();
+        return validationError("The water request is invalid.");
     }
 
-    private ResponseEntity<?> validationError() {
+    private ResponseEntity<?> validationError(String message) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", Map.of(
-                "code", "VALIDATION_ERROR", "message", "The water request is invalid.")));
+                "code", "VALIDATION_ERROR", "message", message)));
     }
 }
