@@ -1,6 +1,6 @@
 # Water Intake API Contract
 
-All paths below have the `/api` prefix and require `Authorization: Bearer <access-token>`. Data is scoped to the authenticated account. Successful responses are plain JSON objects; errors use `{ "error": { "code": "...", "message": "..." } }`. Dates are ISO local calendar dates (`YYYY-MM-DD`). `timeZone` is a required IANA zone ID, such as `Asia/Ho_Chi_Minh`, URL encoded in query strings. The backend computes day intervals in that zone and stores log instants in MongoDB as UTC dates. The timezone used for a historical query is the supplied query timezone; the MVP has no account timezone profile.
+All paths below have the `/api` prefix and require `Authorization: Bearer <access-token>`. Data is scoped to the authenticated account. Successful responses are plain JSON objects; request-level failures use RFC 9457 Problem Details as defined by the [API Contract Index](../../api/api-contract.md#generic-error-response). Dates are ISO local calendar dates (`YYYY-MM-DD`). `timeZone` is a required IANA zone ID, such as `Asia/Ho_Chi_Minh`, URL encoded in query strings. The backend computes day intervals in that zone and stores log instants in MongoDB as UTC dates. The timezone used for a historical query is the supplied query timezone; the MVP has no account timezone profile.
 
 ## GET `/api/water/daily-summary?date=2026-11-06&timeZone=Asia%2FHo_Chi_Minh`
 
@@ -66,4 +66,4 @@ The response normalizes the instant to UTC. `source` remains UI metadata and is 
 
 ## Errors
 
-`401` with code `UNAUTHORIZED` indicates missing, expired, or invalid authentication; the existing mobile auth client performs one refresh and retry when appropriate. `400` with code `VALIDATION_ERROR` indicates malformed date, non-Monday `weekStart`, missing/unknown timezone, invalid amount, timestamp without offset, or future timestamp. An explicitly future `loggedAt` returns `loggedAt cannot be in the future.` Errors use the backend's existing `{error:{code,message}}` envelope.
+`401 UNAUTHORIZED` indicates missing, expired, or invalid authentication; the existing mobile auth client performs one refresh and retry when appropriate. `403 FORBIDDEN` indicates an authenticated request denied by policy. `400 VALIDATION_ERROR` indicates malformed date, non-Monday `weekStart`, missing/unknown timezone, invalid amount, timestamp without offset, or future timestamp. An explicitly future `loggedAt` has detail `loggedAt cannot be in the future.`

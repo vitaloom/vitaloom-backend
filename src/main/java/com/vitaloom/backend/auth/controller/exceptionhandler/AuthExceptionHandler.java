@@ -1,45 +1,62 @@
 package com.vitaloom.backend.auth.controller.exceptionhandler;
 
+import com.vitaloom.backend.auth.controller.AuthController;
 import com.vitaloom.backend.auth.exception.EmailAlreadyRegisteredException;
 import com.vitaloom.backend.auth.exception.InvalidCredentialsException;
 import com.vitaloom.backend.auth.exception.InvalidRefreshTokenException;
 import com.vitaloom.backend.auth.exception.TokenIssuanceException;
 import com.vitaloom.backend.auth.exception.UserNotFoundException;
-import java.util.Map;
+import com.vitaloom.backend.shared.web.ProblemDetailExceptionHandler;
+import com.vitaloom.backend.shared.web.ProblemDetails;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.converter.HttpMessageNotReadableException;
-import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@RestControllerAdvice
-public class AuthExceptionHandler {
+@RestControllerAdvice(assignableTypes = AuthController.class)
+@Order(Ordered.HIGHEST_PRECEDENCE)
+public class AuthExceptionHandler extends ProblemDetailExceptionHandler {
+    @Override
+    protected String defaultClientErrorCode() {
+        return "VALIDATION_ERROR";
+    }
+
+    @Override
+    protected String frameworkDetail(Exception exception, HttpStatusCode status) {
+        if (status.value() == 400) return "The request payload is invalid.";
+        return super.frameworkDetail(exception, status);
+    }
+
     @ExceptionHandler(EmailAlreadyRegisteredException.class)
-    ResponseEntity<?> duplicateEmail() { return error(HttpStatus.CONFLICT, "EMAIL_ALREADY_REGISTERED", "An account with this email already exists."); }
+    public ResponseEntity<ProblemDetail> duplicateEmail(EmailAlreadyRegisteredException exception) {
+        return ProblemDetails.response(HttpStatus.CONFLICT, "EMAIL_ALREADY_REGISTERED",
+                "An account with this email already exists.");
+    }
 
     @ExceptionHandler(InvalidCredentialsException.class)
-    ResponseEntity<?> invalidCredentials() { return error(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Email hoặc mật khẩu không đúng."); }
+    public ResponseEntity<ProblemDetail> invalidCredentials(InvalidCredentialsException exception) {
+        return ProblemDetails.response(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS",
+                "Email hoặc mật khẩu không đúng.");
+    }
 
     @ExceptionHandler(InvalidRefreshTokenException.class)
-    ResponseEntity<?> invalidRefresh() { return error(HttpStatus.UNAUTHORIZED, "INVALID_REFRESH_TOKEN", "The refresh token is invalid or expired."); }
+    public ResponseEntity<ProblemDetail> invalidRefresh(InvalidRefreshTokenException exception) {
+        return ProblemDetails.response(HttpStatus.UNAUTHORIZED, "INVALID_REFRESH_TOKEN",
+                "The refresh token is invalid or expired.");
+    }
 
     @ExceptionHandler(UserNotFoundException.class)
-    ResponseEntity<?> missingUser() { return error(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required."); }
-
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    ResponseEntity<?> invalidRequest() { return error(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "The request payload is invalid."); }
-
-    @ExceptionHandler(HttpMessageNotReadableException.class)
-    ResponseEntity<?> unreadableRequest() { return error(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "The request payload is invalid."); }
+    public ResponseEntity<ProblemDetail> missingUser(UserNotFoundException exception) {
+        return ProblemDetails.response(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required.");
+    }
 
     @ExceptionHandler(TokenIssuanceException.class)
-    ResponseEntity<?> tokenFailure() { return error(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Authentication could not be completed."); }
-
-    @ExceptionHandler(Exception.class)
-    ResponseEntity<?> unexpectedFailure() { return error(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "The request could not be completed."); }
-
-    private static ResponseEntity<Map<String, Object>> error(HttpStatus status, String code, String message) {
-        return ResponseEntity.status(status).body(Map.of("error", Map.of("code", code, "message", message)));
+    public ResponseEntity<ProblemDetail> tokenFailure(TokenIssuanceException exception) {
+        return ProblemDetails.response(HttpStatus.INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR", "Authentication could not be completed.");
     }
 }

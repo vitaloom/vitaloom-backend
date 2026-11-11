@@ -59,7 +59,7 @@ Additional rules:
 - Backend creates `receivedAt`; clients cannot set or override it.
 - Persist accepted events in the metric-specific `step_measurements` collection. Do not use a generic shared event collection.
 
-A malformed JSON body or invalid batch envelope (missing/invalid `deviceId` or `runId`, or an empty/oversized `events` array) returns `400 Bad Request` for the whole request. Invalid event content is handled item by item.
+A malformed JSON body or invalid batch envelope (missing/invalid `deviceId` or `runId`, or an empty/oversized `events` array) returns `400 Bad Request` with `INVALID_REQUEST` in the request-level Problem Details response defined by the [API Contract Index](../api-contract.md#generic-error-response). Invalid event content is handled item by item; `results[].error.code` and `message` retain their existing nested shape.
 
 ### Partial-acceptance response
 

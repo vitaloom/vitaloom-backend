@@ -14,11 +14,12 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.AuthenticationEntryPoint;
+import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
+import com.vitaloom.backend.shared.web.ProblemDetails;
 import tools.jackson.databind.ObjectMapper;
-import java.util.Map;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -46,13 +47,15 @@ public class SecurityConfig {
                         .requestMatchers("/api/**").permitAll()
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.decoder(accessJwtDecoder))
-                        .authenticationEntryPoint(authenticationEntryPoint));
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler));
 
         return http.build();
     }
 
     private final JwtDecoder accessJwtDecoder;
     private final AuthenticationEntryPoint authenticationEntryPoint;
+    private final AccessDeniedHandler accessDeniedHandler;
 
     public SecurityConfig(
             @Value("${vitaloom.cors.allowed-origins:http://localhost:8081}") String allowedOrigins,
@@ -62,10 +65,12 @@ public class SecurityConfig {
                 .map(String::trim).filter(origin -> !origin.isEmpty()).toList();
         this.accessJwtDecoder = accessJwtDecoder;
         this.authenticationEntryPoint = (request, response, exception) -> {
-            response.setStatus(401);
-            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            objectMapper.writeValue(response.getOutputStream(), Map.of("error", Map.of(
-                    "code", "UNAUTHORIZED", "message", "Authentication is required.")));
+            ProblemDetails.write(response, objectMapper, HttpStatus.UNAUTHORIZED,
+                    "UNAUTHORIZED", "Authentication is required.", request.getRequestURI());
+        };
+        this.accessDeniedHandler = (request, response, exception) -> {
+            ProblemDetails.write(response, objectMapper, HttpStatus.FORBIDDEN,
+                    "FORBIDDEN", "Access is denied.", request.getRequestURI());
         };
     }
 

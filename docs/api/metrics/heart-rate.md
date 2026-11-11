@@ -82,7 +82,7 @@ Example — user has no accepted Heart Rate measurements (past date requested):
 }
 ```
 
-**Errors:** `400 INVALID_REPORT_DATE` for malformed/invalid/future `date`, `401 UNAUTHORIZED` for missing/invalid access credentials, and a standard `5xx` error for retrieval failure. Use the shared error envelope in the [API Contract Index](../api-contract.md#4-duplicate-and-error-handling). A failed read must not return `200` with null BPM as though there were simply no measurements.
+**Errors:** `400 INVALID_REPORT_DATE` for malformed/invalid/future `date`, `401 UNAUTHORIZED` for missing/invalid access credentials, and a standard `5xx` error for retrieval failure. Request-level failures use the Problem Details format in the [API Contract Index](../api-contract.md#generic-error-response). A failed read must not return `200` with null BPM as though there were simply no measurements.
 
 **Implementation decisions:** equal-`occurredAt` latest records use ascending lexical `deviceId`, then `eventId`. Heart Rate ingestion rejects an event whose `occurredAt` is strictly later than the receipt instant captured for its batch with item-level `FUTURE_OCCURRED_AT`; there is no clock-skew grace period. Historical completeness and late/corrected-data policy remain open; do not emit `HISTORY_VERIFIED` without a positive verification mechanism.
 
@@ -113,7 +113,7 @@ All routes return the same shape. `endAt` is exclusive; bucket `startAt` values 
 }
 ```
 
-Invalid or impossible dates, future Daily dates, invalid/future weeks, missing or invalid Custom parameters, reversed ranges, ranges over 30 days and historical transition ranges return `400` with `INVALID_REPORT_DATE`, `INVALID_WEEK_START_DATE` or `INVALID_DATE_RANGE` as appropriate, using the shared error envelope in the [API Contract Index](../api-contract.md#duplicate-and-error-handling). Missing or invalid Bearer credentials return `401 UNAUTHORIZED`.
+Invalid or impossible dates, future Daily dates, invalid/future weeks, missing or invalid Custom parameters, reversed ranges, ranges over 30 days and historical transition ranges return `400` with `INVALID_REPORT_DATE`, `INVALID_WEEK_START_DATE` or `INVALID_DATE_RANGE` as appropriate, using the Problem Details format in the [API Contract Index](../api-contract.md#generic-error-response). Missing or invalid Bearer credentials return `401 UNAUTHORIZED`.
 
 ## Batch ingestion
 
@@ -213,6 +213,7 @@ Response rules:
 - Each result has one status: `ACCEPTED`, `DUPLICATE` or `REJECTED`.
 - A repeated identity with the same normalized `occurredAt` and `heartRateBpm` is `DUPLICATE`. Reusing the same account/device/event ID with different measurement content is `REJECTED` with code `EVENT_ID_CONFLICT`.
 - Validation errors are item-level results. Malformed JSON or an invalid batch envelope (missing `deviceId`, missing `runId`, or an empty/oversized `events` array) returns `400 Bad Request` for the whole request.
+- A malformed request-level batch uses `400 INVALID_REQUEST` in the Problem Details response. Per-item `results[].error.code` and `message` remain in their existing nested shape.
 - A transient infrastructure/database failure returns a server error. The batch may have partially persisted before the failure; retry the same measurement IDs. The unique index makes already persisted items safe to resend.
 - The endpoint processes synchronously and returns item outcomes; it does not use `202 Accepted`.
 
