@@ -2,15 +2,16 @@ package com.vitaloom.backend.water.model;
 
 import java.time.Instant;
 import com.vitaloom.backend.shared.persistence.BaseDocument;
+import org.springframework.data.mongodb.core.mapping.Field;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 @Document("water_logs")
-@CompoundIndex(name = "user_logged_at_idx", def = "{'userId': 1, 'loggedAt': -1}")
+@CompoundIndex(name = "user_logged_at_idx", def = "{'user_id': 1, 'logged_at': -1}")
 public class WaterLog extends BaseDocument {
-    private String userId;
-    private int amountMl;
-    private Instant loggedAt;
+    @Field("user_id") private String userId;
+    @Field("amount_ml") private int amountMl;
+    @Field("logged_at") private Instant loggedAt;
 
     public WaterLog() {}
     public WaterLog(String userId, int amountMl, Instant loggedAt) {

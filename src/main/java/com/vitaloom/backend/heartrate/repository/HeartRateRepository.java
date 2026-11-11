@@ -19,24 +19,24 @@ public class HeartRateRepository {
     public HeartRateRepository(MongoTemplate mongo) {
         this.mongo = mongo;
         IndexOperations indexes = mongo.indexOps(HeartRateMeasurement.class);
-        indexes.ensureIndex(new org.springframework.data.mongodb.core.index.Index().on("accountId", Sort.Direction.ASC)
-                .on("deviceId", Sort.Direction.ASC).on("eventId", Sort.Direction.ASC).unique()
+        indexes.ensureIndex(new org.springframework.data.mongodb.core.index.Index().on("account_id", Sort.Direction.ASC)
+                .on("device_id", Sort.Direction.ASC).on("event_id", Sort.Direction.ASC).unique()
                 .named("uk_hr_account_device_event"));
-        indexes.ensureIndex(new org.springframework.data.mongodb.core.index.Index().on("accountId", Sort.Direction.ASC)
-                .on("occurredAt", Sort.Direction.ASC).named("ix_hr_account_occurred_at"));
+        indexes.ensureIndex(new org.springframework.data.mongodb.core.index.Index().on("account_id", Sort.Direction.ASC)
+                .on("occurred_at", Sort.Direction.ASC).named("ix_hr_account_occurred_at"));
     }
 
     public void insert(HeartRateMeasurement measurement) { mongo.insert(measurement); }
 
     public Optional<HeartRateMeasurement> findIdentity(String accountId, String deviceId, String eventId) {
-        Query query = Query.query(Criteria.where("accountId").is(accountId).and("deviceId").is(deviceId)
-                .and("eventId").is(eventId));
+        Query query = Query.query(Criteria.where("account_id").is(accountId).and("device_id").is(deviceId)
+                .and("event_id").is(eventId));
         return Optional.ofNullable(mongo.findOne(query, HeartRateMeasurement.class));
     }
 
     public Optional<HeartRateMeasurement> latest(String accountId) {
-        Query query = Query.query(Criteria.where("accountId").is(accountId))
-                .with(Sort.by(Sort.Order.desc("occurredAt"), Sort.Order.asc("deviceId"), Sort.Order.asc("eventId")))
+        Query query = Query.query(Criteria.where("account_id").is(accountId))
+                .with(Sort.by(Sort.Order.desc("occurred_at"), Sort.Order.asc("device_id"), Sort.Order.asc("event_id")))
                 .limit(1);
         return Optional.ofNullable(mongo.findOne(query, HeartRateMeasurement.class));
     }
@@ -47,11 +47,11 @@ public class HeartRateRepository {
 
     public Stream<HeartRateMeasurement> streamBetween(String accountId, Instant start, Instant end) {
         Query query = rangeQuery(accountId, start, end);
-        query.fields().include("heartRateBpm").include("occurredAt");
+        query.fields().include("heart_rate_bpm").include("occurred_at");
         return mongo.stream(query, HeartRateMeasurement.class);
     }
 
     private static Query rangeQuery(String accountId, Instant start, Instant end) {
-        return Query.query(Criteria.where("accountId").is(accountId).and("occurredAt").gte(start).lt(end));
+        return Query.query(Criteria.where("account_id").is(accountId).and("occurred_at").gte(start).lt(end));
     }
 }
