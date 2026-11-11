@@ -1,13 +1,12 @@
 package com.vitaloom.backend.auth.model;
 
 import java.time.Instant;
-import org.springframework.data.annotation.Id;
+import com.vitaloom.backend.shared.persistence.BaseDocument;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 @Document("users")
-public class User {
-    @Id private String id;
+public class User extends BaseDocument {
     private String email;
     @Indexed(unique = true) private String emailNormalized;
     private String passwordHash;
@@ -20,8 +19,6 @@ public class User {
         this.passwordHash = passwordHash;
         this.createdAt = createdAt;
     }
-    public String getId() { return id; }
-    public void setId(String id) { this.id = id; }
     public String getEmail() { return email; }
     public String getEmailNormalized() { return emailNormalized; }
     public String getPasswordHash() { return passwordHash; }
