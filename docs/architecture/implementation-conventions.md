@@ -44,8 +44,8 @@ Avoid vague names such as `Helper`, `Manager` or `Processor` unless the name is 
 ### DTOs, models and mapping
 
 - Keep HTTP DTOs separate from persistence documents so API evolution does not accidentally change stored data.
-- Java records are suitable for immutable request/response DTOs and may be used for MongoDB documents when the chosen Spring Data mapping and required persistence behavior support them.
-- Do not require all persistence documents to extend a common base class, or require Lombok annotations on every model.
+- Java records are suitable for immutable request/response DTOs.
+- MongoDB documents extend `shared.persistence.BaseDocument` for the shared String `@Id` and accessors. Documents with lifecycle audit fields extend `AuditedDocument` instead; only `User` is audited currently.
 - Use classes when mutability, framework behavior or lifecycle requirements make them a better fit; choose the representation intentionally.
 - Introduce a mapper only when transformation logic is sufficiently complex, repeated or independently meaningful. Simple construction does not require a dedicated mapper class.
 
@@ -73,7 +73,9 @@ Avoid vague names such as `Helper`, `Manager` or `Processor` unless the name is 
 - Raw accepted events/records are the source of truth. Daily totals and dashboard values are derived by the backend, not trusted from client- or producer-computed aggregates.
 - Keep MongoDB-specific query and update mechanics inside repositories.
 - Do not rename persisted fields, change ID representations, alter document shapes or rebuild indexes as incidental cleanup. Such changes require an explicit data-compatibility decision and an appropriate migration, targeted reset or reseed plan.
-- Use explicit `@Field` mappings when a stored field name must differ from the Java property name or when the storage contract intentionally requires an explicit mapping. Do not impose a repository-wide snake_case migration by convention alone.
+- Persist non-ID fields with explicit `@Field` mappings to the approved snake_case BSON names while keeping Java properties and API DTOs camelCase. Raw Mongo queries, projections and index definitions use the BSON names; Spring Data derived query methods use Java property names.
+- `BaseDocument` owns the String `_id`. `AuditedDocument` adds `Instant createdAt` and `updatedAt` using `@CreatedDate` and `@LastModifiedDate`. Mongo auditing uses the shared injected `Clock`; services do not assign these audit fields. Append-only Heart Rate, Steps and Water records use `BaseDocument` only and keep their domain event timestamps distinct.
+- The current BSON mappings assume a fresh or explicitly migrated development database. Existing camelCase documents are not transparently read by the snake_case mappings, and indexes with the same names but old field keys can conflict on startup. The backend does not reset collections automatically; use a fresh development database or migrate documents and indexes explicitly before using the new mappings.
 
 ## 6. Time and daily aggregation
 

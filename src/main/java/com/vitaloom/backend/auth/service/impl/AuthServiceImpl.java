@@ -40,7 +40,7 @@ public class AuthServiceImpl implements AuthService {
         if (users.findByEmailNormalized(normalized).isPresent()) throw new EmailAlreadyRegisteredException();
         User saved;
         try {
-            saved = users.save(new User(normalized, normalized, passwordEncoder.encode(password), clock.instant()));
+            saved = users.save(new User(normalized, normalized, passwordEncoder.encode(password)));
         } catch (DuplicateKeyException ex) {
             throw new EmailAlreadyRegisteredException();
         }

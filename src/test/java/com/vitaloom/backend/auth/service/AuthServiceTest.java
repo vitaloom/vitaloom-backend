@@ -70,14 +70,30 @@ class AuthServiceTest {
     }
 
     @Test
-    void registrationUsesInjectedClockForAccountCreationTime() {
+    void registrationUsesInjectedClockForTokenIssuanceWithoutSettingAuditTimestamps() {
         Instant now = Instant.parse("2026-11-11T03:00:00Z");
+        Instant[] issuedAt = new Instant[1];
+        JwtTokenService recordingTokens = new JwtTokenService() {
+            @Override public TokenPair issue(String userId, Instant time) {
+                issuedAt[0] = time;
+                return new TokenPair("access", "refresh", ACCESS_SECONDS);
+            }
+            @Override public String issueAccess(String userId, Instant time) {
+                issuedAt[0] = time;
+                return "access";
+            }
+            @Override public String validateRefresh(String token) { throw new UnsupportedOperationException(); }
+            @Override public org.springframework.security.oauth2.jwt.Jwt decodeAccess(String token) {
+                throw new UnsupportedOperationException();
+            }
+        };
         AuthService fixedClockService = new AuthServiceImpl(
-                users, encoder, tokens, Clock.fixed(now, ZoneOffset.UTC));
+                users, encoder, recordingTokens, Clock.fixed(now, ZoneOffset.UTC));
 
         var result = fixedClockService.register("clock@example.com", "password123");
 
-        assertEquals(now, usersByEmail.get("clock@example.com").getCreatedAt());
+        assertNull(usersByEmail.get("clock@example.com").getCreatedAt());
+        assertEquals(now, issuedAt[0]);
         assertNotNull(result.tokens());
     }
 
