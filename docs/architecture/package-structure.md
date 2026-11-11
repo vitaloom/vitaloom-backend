@@ -19,7 +19,29 @@ com.vitaloom.backend
 
 `service` holds capability interfaces and `service.impl` holds their current implementations. `mapper` currently appears in Auth and Heart Rate; add one elsewhere only for meaningful transformations. `shared.persistence.BaseDocument` supplies the String Mongo ID; `AuditedDocument` adds auditing fields and is currently used by `auth.model.User`. Do not create empty packages or move code solely to make the tree look uniform.
 
-For new or refactored code, HTTP request and response types belong in `dto.request` and `dto.response`; feature failures belong in `exception`, and feature HTTP translation belongs in `controller.exceptionhandler`. Keep persistence documents in `model` and transformations in `mapper`. The approved provider contracts use `<provider>.contract` for the interface and `.contract.dto` for exchanged values; these are planned packages, not part of the current tree.
+## Example feature layout
+
+This is an illustrative layout for a feature that needs each shown responsibility; it is not a second description of the current runtime. Create only packages needed by real responsibilities.
+
+```text
+<feature>
+├── controller
+│   └── exceptionhandler       feature-specific HTTP advice, when needed
+├── dto
+│   ├── request                HTTP request shapes
+│   └── response               HTTP response shapes
+├── service                    business capability interfaces
+│   └── impl                   business service implementations
+├── model                      feature-owned persistence/domain types
+├── repository                 feature-owned persistence access
+├── mapper                     meaningful feature-local transformations
+├── exception                  feature-owned application failures
+└── contract                   optional provider boundary (planned)
+    ├── <ProviderQuery>        provider capability interface
+    └── dto                    provider input/result types
+```
+
+The approved provider contracts use `<provider>.contract` for the interface and `.contract.dto` for exchanged values; these packages are planned, not present in the current runtime. Keep HTTP DTOs in `dto.request` / `dto.response`, persistence documents in `model`, feature failures in `exception`, and feature HTTP translation in `controller.exceptionhandler`.
 
 ## Feature ownership and status
 
