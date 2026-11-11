@@ -7,6 +7,7 @@ import static org.mockito.Mockito.*;
 
 import com.vitaloom.backend.heartrate.service.HeartRateSample;
 import com.vitaloom.backend.heartrate.service.HeartRateService;
+import com.vitaloom.backend.statistics.service.impl.StatisticsServiceImpl;
 import com.vitaloom.backend.steps.service.StepsService;
 import com.vitaloom.backend.statistics.dto.response.HeartRateSummaryResponse;
 import com.vitaloom.backend.statistics.dto.response.HeartRateTimeSeriesResponse;
@@ -24,7 +25,7 @@ class StatisticsServiceTest {
     private final HeartRateService heartRateService = mock(HeartRateService.class);
     private final StepsService stepsService = mock(StepsService.class);
     private final StatisticsService service =
-            new StatisticsService(heartRateService, stepsService, Clock.fixed(NOW, ZoneOffset.UTC));
+            new StatisticsServiceImpl(heartRateService, stepsService, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @Test
     void summaryCombinesLatestFromFullHistoryWithSelectedDayAverage() {

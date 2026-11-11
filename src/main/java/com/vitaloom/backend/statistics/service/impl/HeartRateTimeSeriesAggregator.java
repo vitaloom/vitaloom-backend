@@ -1,7 +1,8 @@
-package com.vitaloom.backend.statistics.service;
+package com.vitaloom.backend.statistics.service.impl;
 
 import com.vitaloom.backend.heartrate.service.HeartRateSample;
 import com.vitaloom.backend.statistics.dto.response.HeartRateTimeSeriesResponse;
+import com.vitaloom.backend.statistics.service.StatisticsService;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;

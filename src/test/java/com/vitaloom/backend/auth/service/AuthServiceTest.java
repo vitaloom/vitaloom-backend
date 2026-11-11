@@ -14,6 +14,8 @@ import com.vitaloom.backend.auth.exception.EmailAlreadyRegisteredException;
 import com.vitaloom.backend.auth.exception.InvalidCredentialsException;
 import com.vitaloom.backend.auth.model.User;
 import com.vitaloom.backend.auth.repository.UserRepository;
+import com.vitaloom.backend.auth.service.impl.AuthServiceImpl;
+import com.vitaloom.backend.auth.service.impl.JwtTokenServiceImpl;
 import com.vitaloom.backend.config.AuthTokenConfig;
 import jakarta.validation.Validation;
 import org.junit.jupiter.api.Test;
@@ -41,7 +43,7 @@ class AuthServiceTest {
             });
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(4);
     private final JwtTokenService tokens = createTokens();
-    private final AuthService service = new AuthService(users, encoder, tokens);
+    private final AuthService service = new AuthServiceImpl(users, encoder, tokens);
 
     private static JwtTokenService createTokens() {
         AuthTokenConfig config = new AuthTokenConfig();
@@ -49,7 +51,7 @@ class AuthServiceTest {
         JwtEncoder refreshEncoder = config.refreshJwtEncoder(REFRESH_SECRET);
         JwtDecoder accessDecoder = config.accessJwtDecoder(ACCESS_SECRET, "https://api.vitaloom.test");
         JwtDecoder refreshDecoder = config.refreshJwtDecoder(REFRESH_SECRET, "https://api.vitaloom.test");
-        return new JwtTokenService(accessEncoder, refreshEncoder, accessDecoder, refreshDecoder, "https://api.vitaloom.test");
+        return new JwtTokenServiceImpl(accessEncoder, refreshEncoder, accessDecoder, refreshDecoder, "https://api.vitaloom.test");
     }
 
     @Test
@@ -92,7 +94,7 @@ class AuthServiceTest {
 
     @Test
     void registrationReportsLoginRequiredIfTokensFailAfterAccountCreation() {
-        JwtTokenService failingTokens = new JwtTokenService(
+        JwtTokenService failingTokens = new JwtTokenServiceImpl(
                 new AuthTokenConfig().accessJwtEncoder(ACCESS_SECRET),
                 new AuthTokenConfig().refreshJwtEncoder(REFRESH_SECRET),
                 new AuthTokenConfig().accessJwtDecoder(ACCESS_SECRET, "https://api.vitaloom.test"),
@@ -102,7 +104,7 @@ class AuthServiceTest {
                 throw new TokenIssuanceException(new IllegalStateException("signing unavailable"));
             }
         };
-        var fallback = new AuthService(users, encoder, failingTokens)
+        var fallback = new AuthServiceImpl(users, encoder, failingTokens)
                 .register("recover@example.com", "password123");
         assertTrue(fallback.loginRequired());
         assertNotNull(usersByEmail.get("recover@example.com"));
