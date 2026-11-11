@@ -7,8 +7,8 @@ VitaLoom Backend is one Spring Boot application and Maven module rooted at `com.
 ```text
 com.vitaloom.backend
 ├── auth              controller, dto, exception, mapper, model, repository, service/impl
-├── heartrate         controller, dto, exception, mapper, model, repository, service/impl
-├── steps             controller, dto, exception, model, repository, service/impl
+├── heartrate         contract/dto, controller, dto, exception, mapper, model, repository, service/impl
+├── steps             contract/dto, controller, dto, exception, model, repository, service/impl
 ├── water             controller, dto, exception, model, repository, service/impl
 ├── statistics        controller/exceptionhandler, dto/response, exception, service/impl
 ├── healthcheck       controller, dto/response
@@ -36,41 +36,42 @@ This is an illustrative layout for a feature that needs each shown responsibilit
 ├── repository                 feature-owned persistence access
 ├── mapper                     meaningful feature-local transformations
 ├── exception                  feature-owned application failures
-└── contract                   optional provider boundary (planned)
+└── contract                   optional provider boundary (when needed)
     ├── <ProviderQuery>        provider capability interface
     └── dto                    provider input/result types
 ```
 
-The approved provider contracts use `<provider>.contract` for the interface and `.contract.dto` for exchanged values; these packages are planned, not present in the current runtime. Keep HTTP DTOs in `dto.request` / `dto.response`, persistence documents in `model`, feature failures in `exception`, and feature HTTP translation in `controller.exceptionhandler`.
+Provider read contracts use `<provider>.contract` for the interface and `.contract.dto` for exchanged values. Keep HTTP DTOs in `dto.request` / `dto.response`, persistence documents in `model`, feature failures in `exception`, and feature HTTP translation in `controller.exceptionhandler`.
 
 ## Feature ownership and status
 
 | Feature | Status | Owns | Current Statistics dependency |
 | --- | --- | --- | --- |
 | `auth` | Implemented | Registration, login/refresh, account model and authentication behavior | None |
-| `heartrate` | Implemented | Raw Heart Rate ingestion, validation, persistence and raw-data queries | Live: Statistics calls `HeartRateService` |
-| `steps` | Implemented | Raw step ingestion, validation, persistence and raw-data queries | Live: Statistics calls `StepsService` |
+| `heartrate` | Implemented | Raw Heart Rate ingestion, validation, persistence and raw-data queries | Live: Statistics uses `HeartRateReadQuery` |
+| `steps` | Implemented | Raw step ingestion, validation, persistence and raw-data queries | Live: Statistics uses `StepsReadQuery` |
 | `water` | Implemented | Water log input, validation, persistence and Water summaries | None; not yet composed by Statistics |
 | `sleep` | Planned | Future raw sleep input and persistence | Planned only |
-| `statistics` | Partially implemented | Aggregate calculations and read responses | Currently uses Heart Rate and Steps service interfaces |
+| `statistics` | Partially implemented | Aggregate calculations and read responses | Uses Heart Rate and Steps provider read contracts |
 | `healthcheck` | Implemented | Application availability endpoint | None |
 
 The cross-metric daily dashboard and Statistics composition for Sleep and Water are planned. Water Tracking itself is implemented and documented under [Water](../features/water/README.md) and its [API contract](../features/water/api-contract.md). A documented endpoint or future package does not imply runtime implementation; check [API contract index](../api/api-contract.md) and source before relying on it.
 
-Statistics currently reaches Heart Rate and Steps through their in-process service interfaces; it does not inject their repositories or query their collections directly. The approved Phase 2 migration introduces `heartrate.contract.HeartRateReadQuery` and `steps.contract.StepsReadQuery`, with exchanged types in each provider's `contract.dto`. Until the consumers are migrated, the current service-interface calls remain in place; after migration, Statistics must consume these provider contracts instead of metric service interfaces. Do not treat the provider contracts as implemented before that migration. Statistics owns derived values; metric features own raw records. See [ADR-001](decisions/ADR-001-statistics-owns-aggregate-read-models.md).
+Statistics reaches Heart Rate and Steps through `HeartRateReadQuery` and `StepsReadQuery`, with exchanged sample types in each provider's `contract.dto`. Their implementations remain in the feature-local service implementation classes, which also implement the ingestion interfaces used by controllers. Statistics does not inject metric repositories or query collections directly. Statistics owns derived values; metric features own raw records. See [ADR-001](decisions/ADR-001-statistics-owns-aggregate-read-models.md).
 
 ## Dependency direction
 
 | Component | May depend on | Must not depend on |
 | --- | --- | --- |
 | Controller | Its feature's service and API DTOs | Repositories or persistence models directly |
-| Service | Its feature's repository, model, DTOs and shared technical types; Statistics may use the current Heart Rate and Steps service interfaces | Another feature's repositories, Mongo documents or raw queries |
+| Service | Its feature's repository, model, DTOs and shared technical types | Another feature's repositories, Mongo documents or raw queries |
+| Statistics | Heart Rate and Steps provider read contracts and its own calculations/response types | Metric ingestion service interfaces, repositories, Mongo documents or raw queries |
 | Repository | Its feature's persistence models and Mongo support | Controllers or services |
 | Mapper | Feature-local values it transforms | Controllers, repositories or business decisions |
 | Model | Feature-owned values and shared persistence base types | HTTP DTOs, controllers, services or repositories |
 | `shared` | Cross-cutting types with no feature knowledge | Feature packages |
 | `config` | Spring configuration and wiring | Feature business logic |
 
-Keep dependencies one-way and avoid feature cycles. Raw metric records remain the source of truth; Statistics calculates on read in the current MVP. Do not add aggregate persistence or refresh workers without an approved requirement. Implement the approved provider contracts as part of the Phase 2 consumer migration; until then, retain the current direct service-interface calls.
+Keep dependencies one-way and avoid feature cycles. Raw metric records remain the source of truth; Statistics calculates on read in the current MVP. Do not add aggregate persistence or refresh workers without an approved requirement.
 
 No ArchUnit architecture test currently enforces these package rules. Treat this document as policy, and do not claim automated enforcement unless a build check is added and verified.

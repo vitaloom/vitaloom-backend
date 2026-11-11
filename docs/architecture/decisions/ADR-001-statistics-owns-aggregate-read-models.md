@@ -21,7 +21,7 @@ Each metric feature (`heartrate`, `steps`, `sleep`, `water`) owns:
 - Its raw input/ingestion behavior and metric-specific validation.
 - Its raw persistence model, MongoDB collection, indexes and write guarantees.
 - Raw-record identity, duplicate/conflict handling and other raw-data invariants.
-- Service-level raw-data query capabilities required by Statistics.
+- Provider-owned raw-data read contracts required by Statistics.
 
 Metric features remain independent of Statistics. They do not calculate or persist derived aggregate read models.
 
@@ -36,7 +36,7 @@ The `statistics` feature owns:
 
 Examples of Statistics-owned calculations include Heart Rate daily average/latest observation, Steps totals, Sleep duration and Water intake totals. These examples establish ownership; they do not independently add API requirements or settle every metric's business formula.
 
-Statistics obtains source records only through the owning metric feature's service-level raw-data query capabilities. It must not inject another feature's repository, access its persistence model directly or issue raw MongoDB queries against another feature's collection.
+Statistics obtains source records only through the owning metric feature's provider read contract. It must not depend on the feature's ingestion service interface, inject another feature's repository, access its persistence model directly or issue raw MongoDB queries against another feature's collection.
 
 ### 3. Current MVP phase: calculate on read
 

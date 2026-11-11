@@ -1,9 +1,9 @@
 package com.vitaloom.backend.statistics.service.impl;
 
-import com.vitaloom.backend.heartrate.service.HeartRateSample;
-import com.vitaloom.backend.heartrate.service.HeartRateService;
-import com.vitaloom.backend.steps.service.StepSample;
-import com.vitaloom.backend.steps.service.StepsService;
+import com.vitaloom.backend.heartrate.contract.HeartRateReadQuery;
+import com.vitaloom.backend.heartrate.contract.dto.HeartRateSample;
+import com.vitaloom.backend.steps.contract.StepsReadQuery;
+import com.vitaloom.backend.steps.contract.dto.StepSample;
 import com.vitaloom.backend.statistics.dto.response.StepsTimeSeriesResponse;
 import com.vitaloom.backend.statistics.dto.response.HeartRateSummaryResponse;
 import com.vitaloom.backend.statistics.dto.response.HeartRateTimeSeriesResponse;
@@ -28,8 +28,8 @@ public class StatisticsServiceImpl implements StatisticsService {
     private static final int DAILY_INTERVAL_MINUTES = 15;
     private static final int HOURLY_INTERVAL_MINUTES = 60;
 
-    private final HeartRateService heartRateService;
-    private final StepsService stepsService;
+    private final HeartRateReadQuery heartRateService;
+    private final StepsReadQuery stepsService;
     private final Clock clock;
     private final ZoneId timeZone;
 

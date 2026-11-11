@@ -142,9 +142,9 @@ Cross-device duplicate detection/reconciliation is **out of MVP scope**:
 
 ## 6. Statistics query boundary and aggregation ownership
 
-The Steps feature owns raw increment ingestion, validation, event identity, persistence and raw-data query capabilities. Statistics owns all derived Steps totals and time-bucket calculations.
+The Steps feature owns raw increment ingestion, validation, event identity, persistence and raw-data query capabilities. It exposes reads to Statistics through `steps.contract.StepsReadQuery`, with `StepSample` in `steps.contract.dto`; the ingestion controller continues to use `StepsService`. Statistics owns all derived Steps totals and time-bucket calculations.
 
-The Steps service exposes account-scoped raw events within a supplied half-open instant range `[startInclusive, endExclusive)`. Keep MongoDB query construction and persistence models inside Steps. Statistics must not inject `StepsRepository` or access the `step_measurements` collection directly.
+The Steps read contract exposes account-scoped raw events within a supplied half-open instant range `[startInclusive, endExclusive)`. Keep MongoDB query construction and persistence models inside Steps. Statistics must not inject `StepsRepository` or access the `step_measurements` collection directly.
 
 Statistics calculates on read for the MVP. Do not create precomputed daily/weekly aggregate collections, aggregate repositories/models, background jobs, scheduled refresh, cache or a cross-metric generic aggregation framework.
 

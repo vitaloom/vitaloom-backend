@@ -1,4 +1,4 @@
-package com.vitaloom.backend.steps.service;
+package com.vitaloom.backend.steps.contract.dto;
 
 import java.time.Instant;
 

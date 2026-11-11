@@ -115,9 +115,9 @@ Do not add indexes on `receivedAt`, `deviceId` alone, or additional sort combina
 
 ## 5. Raw query boundary and Statistics ownership
 
-The Heart Rate feature owns raw measurement persistence and exposes raw-data query capabilities through its service. Statistics owns the calculations and derived response values.
+The Heart Rate feature owns raw measurement persistence and exposes raw-data query capabilities through `heartrate.contract.HeartRateReadQuery`, with `HeartRateSample` in `heartrate.contract.dto`. `HeartRateService` remains the ingestion capability used by the feature controller. Statistics owns the calculations and derived response values.
 
-The Heart Rate service exposes only the source data needed by Statistics:
+The Heart Rate read contract exposes only the source data needed by Statistics:
 
 - The latest accepted Heart Rate observation for an authenticated account, ordered by maximum `occurredAt`; ties use ascending lexical `deviceId`, then ascending lexical `eventId`.
 - Accepted Heart Rate observations within a supplied half-open instant range `[start, end)`.
@@ -134,7 +134,7 @@ The Statistics feature uses those query capabilities to compose the Heart Rate s
 
 The API endpoint and response DTO belong to Statistics, even though the source observations are owned and queried by Heart Rate. The current summary endpoint is `GET /api/statistics/heart-rate/summary?date=YYYY-MM-DD`; its external behavior is defined in the [Heart Rate API Contract](../api/metrics/heart-rate.md#batch-ingestion).
 
-Statistics must not access the Heart Rate repository, Mongo document or collection directly. It obtains raw observations only through the Heart Rate service's query capabilities. Future aggregate persistence, if justified, is owned by Statistics under [ADR-001](./decisions/ADR-001-statistics-owns-aggregate-read-models.md).
+Statistics must not access the Heart Rate repository, Mongo document or collection directly. It obtains raw observations only through `HeartRateReadQuery`. Future aggregate persistence, if justified, is owned by Statistics under [ADR-001](./decisions/ADR-001-statistics-owns-aggregate-read-models.md).
 
 ## 6. Dependencies and explicit non-goals
 

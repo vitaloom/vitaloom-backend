@@ -5,10 +5,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
-import com.vitaloom.backend.heartrate.service.HeartRateSample;
-import com.vitaloom.backend.heartrate.service.HeartRateService;
+import com.vitaloom.backend.heartrate.contract.HeartRateReadQuery;
+import com.vitaloom.backend.heartrate.contract.dto.HeartRateSample;
+import com.vitaloom.backend.steps.contract.StepsReadQuery;
 import com.vitaloom.backend.statistics.service.impl.StatisticsServiceImpl;
-import com.vitaloom.backend.steps.service.StepsService;
 import com.vitaloom.backend.statistics.dto.response.HeartRateSummaryResponse;
 import com.vitaloom.backend.statistics.dto.response.HeartRateTimeSeriesResponse;
 import com.vitaloom.backend.statistics.exception.InvalidStatisticsRequestException;
@@ -23,8 +23,8 @@ import org.junit.jupiter.api.Test;
 
 class StatisticsServiceTest {
     private static final Instant NOW = Instant.parse("2026-11-06T03:00:00Z");
-    private final HeartRateService heartRateService = mock(HeartRateService.class);
-    private final StepsService stepsService = mock(StepsService.class);
+    private final HeartRateReadQuery heartRateService = mock(HeartRateReadQuery.class);
+    private final StepsReadQuery stepsService = mock(StepsReadQuery.class);
     private final StatisticsService service =
             new StatisticsServiceImpl(heartRateService, stepsService, Clock.fixed(NOW, ZoneOffset.UTC),
                     ZoneId.of("Asia/Ho_Chi_Minh"));
