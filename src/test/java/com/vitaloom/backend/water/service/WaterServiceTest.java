@@ -105,7 +105,7 @@ class WaterServiceTest {
     }
 
     @Test void omittedTimestampMatchesMongoMillisecondPrecision() {
-        service = new WaterService(logs, Clock.fixed(Instant.parse("2026-11-06T10:00:00.000500Z"), ZoneOffset.UTC));
+        service = new WaterServiceImpl(logs, Clock.fixed(Instant.parse("2026-11-06T10:00:00.000500Z"), ZoneOffset.UTC));
 
         var created = service.create("u1", 250, null);
 

@@ -26,7 +26,6 @@ public class HeartRateServiceImpl implements HeartRateService {
     private final Clock clock;
 
     @Autowired
-    public HeartRateServiceImpl(HeartRateRepository repository) { this(repository, Clock.systemUTC()); }
     public HeartRateServiceImpl(HeartRateRepository repository, Clock clock) { this.repository = repository; this.clock = clock; }
 
     public HeartRateBatchResponse ingest(String accountId, HeartRateBatchRequest request) {

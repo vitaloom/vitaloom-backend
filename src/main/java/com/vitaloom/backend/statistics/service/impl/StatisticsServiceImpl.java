@@ -24,24 +24,26 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class StatisticsServiceImpl implements StatisticsService {
-    public static final ZoneId TIMEZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     private static final int DAILY_INTERVAL_MINUTES = 15;
     private static final int HOURLY_INTERVAL_MINUTES = 60;
 
     private final HeartRateService heartRateService;
     private final StepsService stepsService;
     private final Clock clock;
+    private final ZoneId timeZone;
 
     @Autowired
-    public StatisticsServiceImpl(HeartRateService heartRateService, StepsService stepsService, Clock clock) {
+    public StatisticsServiceImpl(HeartRateService heartRateService, StepsService stepsService, Clock clock,
+                                 ZoneId timeZone) {
         this.heartRateService = heartRateService;
         this.stepsService = stepsService;
         this.clock = clock;
+        this.timeZone = timeZone;
     }
 
     public HeartRateSummaryResponse heartRateSummary(String accountId, String date) {
         Instant asOf = clock.instant();
-        LocalDate today = LocalDate.now(clock.withZone(TIMEZONE));
+        LocalDate today = LocalDate.now(clock.withZone(timeZone));
         LocalDate selected = parseDate(date, today);
 
         var latest = heartRateService.findLatestSample(accountId)
@@ -49,8 +51,8 @@ public class StatisticsServiceImpl implements StatisticsService {
                         sample.heartRateBpm(), sample.occurredAt()))
                 .orElse(null);
 
-        Instant startInclusive = selected.atStartOfDay(TIMEZONE).toInstant();
-        Instant endExclusive = selected.plusDays(1).atStartOfDay(TIMEZONE).toInstant();
+        Instant startInclusive = selected.atStartOfDay(timeZone).toInstant();
+        Instant endExclusive = selected.plusDays(1).atStartOfDay(timeZone).toInstant();
         List<HeartRateSample> samples = heartRateService.findSamplesBetween(
                 accountId, startInclusive, endExclusive);
 
@@ -61,7 +63,7 @@ public class StatisticsServiceImpl implements StatisticsService {
 
         return new HeartRateSummaryResponse(
                 selected,
-                TIMEZONE.getId(),
+                timeZone.getId(),
                 asOf,
                 latest,
                 new HeartRateSummaryResponse.DailyAverage(average, dataStatus));
@@ -69,25 +71,25 @@ public class StatisticsServiceImpl implements StatisticsService {
 
     public HeartRateTimeSeriesResponse dailyHeartRateTimeSeries(String accountId, LocalDate date) {
         Instant asOf = clock.instant();
-        LocalDate today = asOf.atZone(TIMEZONE).toLocalDate();
+        LocalDate today = asOf.atZone(timeZone).toLocalDate();
         LocalDate selected = date == null ? today : date;
         if (selected.isAfter(today)) throw invalidDate();
 
-        Instant start = selected.atStartOfDay(TIMEZONE).toInstant();
-        Instant end = selected.plusDays(1).atStartOfDay(TIMEZONE).toInstant();
+        Instant start = selected.atStartOfDay(timeZone).toInstant();
+        Instant end = selected.plusDays(1).atStartOfDay(timeZone).toInstant();
         if (!Duration.between(start, end).equals(Duration.ofDays(1))) {
             throw new InvalidStatisticsRequestException("INVALID_REPORT_DATE",
-                    "date must be a local calendar day with exactly 24 hours in Asia/Ho_Chi_Minh.");
+                    "date must be a local calendar day with exactly 24 hours in " + timeZone.getId() + ".");
         }
         HeartRateTimeSeriesAggregator aggregator = new HeartRateTimeSeriesAggregator(
-                start, end, DAILY_INTERVAL_MINUTES);
+                start, end, DAILY_INTERVAL_MINUTES, timeZone);
         heartRateService.forEachSampleBetween(accountId, start, end, aggregator::accept);
         return aggregator.toResponse();
     }
 
     public HeartRateTimeSeriesResponse weeklyHeartRateTimeSeries(String accountId, LocalDate weekStartDate) {
         Instant asOf = clock.instant();
-        LocalDate today = asOf.atZone(TIMEZONE).toLocalDate();
+        LocalDate today = asOf.atZone(timeZone).toLocalDate();
         LocalDate currentMonday = today.with(DayOfWeek.MONDAY);
         LocalDate selected = weekStartDate == null ? currentMonday : weekStartDate;
         if (!selected.getDayOfWeek().equals(DayOfWeek.MONDAY) || selected.isAfter(currentMonday)) {
@@ -95,14 +97,14 @@ public class StatisticsServiceImpl implements StatisticsService {
                     "weekStartDate must be a Monday no later than the current local week.");
         }
 
-        Instant start = selected.atStartOfDay(TIMEZONE).toInstant();
-        Instant end = selected.plusWeeks(1).atStartOfDay(TIMEZONE).toInstant();
+        Instant start = selected.atStartOfDay(timeZone).toInstant();
+        Instant end = selected.plusWeeks(1).atStartOfDay(timeZone).toInstant();
         if (!Duration.between(start, end).equals(Duration.ofDays(7))) {
             throw new InvalidStatisticsRequestException("INVALID_WEEK_START_DATE",
-                    "weekStartDate must resolve to a 168-hour local week in Asia/Ho_Chi_Minh.");
+                    "weekStartDate must resolve to a 168-hour local week in " + timeZone.getId() + ".");
         }
         HeartRateTimeSeriesAggregator aggregator = new HeartRateTimeSeriesAggregator(
-                start, end, HOURLY_INTERVAL_MINUTES);
+                start, end, HOURLY_INTERVAL_MINUTES, timeZone);
         heartRateService.forEachSampleBetween(accountId, start, end, sample -> {
             if (!sample.occurredAt().isAfter(asOf)) aggregator.accept(sample);
         });
@@ -111,63 +113,63 @@ public class StatisticsServiceImpl implements StatisticsService {
 
     public HeartRateTimeSeriesResponse customHeartRateTimeSeries(
             String accountId, LocalDate startDate, LocalDate endDate) {
-        LocalDate today = clock.instant().atZone(TIMEZONE).toLocalDate();
+        LocalDate today = clock.instant().atZone(timeZone).toLocalDate();
         if (startDate == null || endDate == null || startDate.isAfter(endDate) || endDate.isAfter(today)) {
             throw invalidDateRange();
         }
         long inclusiveDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
         if (inclusiveDays < 1 || inclusiveDays > 30) throw invalidDateRange();
 
-        Instant start = startDate.atStartOfDay(TIMEZONE).toInstant();
-        Instant end = endDate.plusDays(1).atStartOfDay(TIMEZONE).toInstant();
+        Instant start = startDate.atStartOfDay(timeZone).toInstant();
+        Instant end = endDate.plusDays(1).atStartOfDay(timeZone).toInstant();
         if (!Duration.between(start, end).equals(Duration.ofDays(inclusiveDays))) {
             throw new InvalidStatisticsRequestException("INVALID_DATE_RANGE",
                     "startDate through endDate must cover exactly 24 hours per local calendar day.");
         }
         HeartRateTimeSeriesAggregator aggregator = new HeartRateTimeSeriesAggregator(
-                start, end, HOURLY_INTERVAL_MINUTES);
+                start, end, HOURLY_INTERVAL_MINUTES, timeZone);
         heartRateService.forEachSampleBetween(accountId, start, end, aggregator::accept);
         return aggregator.toResponse();
     }
 
     public StepsTimeSeriesResponse dailyStepsTimeSeries(String accountId, String date) {
         Instant asOf = clock.instant();
-        LocalDate today = asOf.atZone(TIMEZONE).toLocalDate();
+        LocalDate today = asOf.atZone(timeZone).toLocalDate();
         LocalDate selected = parseStepsDate(date, today);
         if (selected.isAfter(today)) throw invalidStepsDate();
-        Instant start = selected.atStartOfDay(TIMEZONE).toInstant();
-        Instant end = selected.plusDays(1).atStartOfDay(TIMEZONE).toInstant();
+        Instant start = selected.atStartOfDay(timeZone).toInstant();
+        Instant end = selected.plusDays(1).atStartOfDay(timeZone).toInstant();
         requireWholeDay(start, end);
         return aggregateSteps(accountId, start, end, 60, 24, asOf);
     }
 
     public StepsTimeSeriesResponse weeklyStepsTimeSeries(String accountId, String weekStartDate) {
         Instant asOf = clock.instant();
-        LocalDate today = asOf.atZone(TIMEZONE).toLocalDate();
+        LocalDate today = asOf.atZone(timeZone).toLocalDate();
         LocalDate currentMonday = today.with(DayOfWeek.MONDAY);
         LocalDate selected = parseStepsDate(weekStartDate, currentMonday);
         if (!selected.getDayOfWeek().equals(DayOfWeek.MONDAY) || selected.isAfter(currentMonday)) {
             throw new InvalidStatisticsRequestException("INVALID_WEEK_START_DATE",
                     "weekStartDate must be a Monday no later than the current local week.");
         }
-        Instant start = selected.atStartOfDay(TIMEZONE).toInstant();
-        Instant end = selected.plusWeeks(1).atStartOfDay(TIMEZONE).toInstant();
+        Instant start = selected.atStartOfDay(timeZone).toInstant();
+        Instant end = selected.plusWeeks(1).atStartOfDay(timeZone).toInstant();
         if (!Duration.between(start, end).equals(Duration.ofDays(7))) {
             throw new InvalidStatisticsRequestException("INVALID_WEEK_START_DATE",
-                    "weekStartDate must resolve to a 168-hour local week in Asia/Ho_Chi_Minh.");
+                    "weekStartDate must resolve to a 168-hour local week in " + timeZone.getId() + ".");
         }
         return aggregateSteps(accountId, start, end, 1440, 7, asOf);
     }
 
     public StepsTimeSeriesResponse customStepsTimeSeries(String accountId, String startDate, String endDate) {
-        LocalDate today = clock.instant().atZone(TIMEZONE).toLocalDate();
+        LocalDate today = clock.instant().atZone(timeZone).toLocalDate();
         LocalDate startSelected = parseStepsDate(startDate, null);
         LocalDate endSelected = parseStepsDate(endDate, null);
         if (startSelected.isAfter(endSelected) || endSelected.isAfter(today)) throw invalidStepsRange();
         long days = ChronoUnit.DAYS.between(startSelected, endSelected) + 1;
         if (days < 1 || days > 30) throw invalidStepsRange();
-        Instant start = startSelected.atStartOfDay(TIMEZONE).toInstant();
-        Instant end = endSelected.plusDays(1).atStartOfDay(TIMEZONE).toInstant();
+        Instant start = startSelected.atStartOfDay(timeZone).toInstant();
+        Instant end = endSelected.plusDays(1).atStartOfDay(timeZone).toInstant();
         if (!Duration.between(start, end).equals(Duration.ofDays(days))) {
             throw new InvalidStatisticsRequestException("INVALID_DATE_RANGE",
                     "startDate through endDate must cover exactly 24 hours per local calendar day.");
@@ -198,7 +200,7 @@ public class StatisticsServiceImpl implements StatisticsService {
             buckets.add(new StepsTimeSeriesResponse.Bucket(bucketStart, bucketEnd,
                     counts[i] == 0 ? null : sums[i], counts[i]));
         }
-        return new StepsTimeSeriesResponse(start, end, TIMEZONE.getId(), bucketSizeMinutes,
+        return new StepsTimeSeriesResponse(start, end, timeZone.getId(), bucketSizeMinutes,
                 hasEvents ? total : null, buckets);
     }
 
@@ -216,10 +218,10 @@ public class StatisticsServiceImpl implements StatisticsService {
         }
     }
 
-    private static void requireWholeDay(Instant start, Instant end) {
+    private void requireWholeDay(Instant start, Instant end) {
         if (!Duration.between(start, end).equals(Duration.ofDays(1))) {
             throw new InvalidStatisticsRequestException("INVALID_REPORT_DATE",
-                    "date must be a local calendar day with exactly 24 hours in Asia/Ho_Chi_Minh.");
+                    "date must be a local calendar day with exactly 24 hours in " + timeZone.getId() + ".");
         }
     }
 

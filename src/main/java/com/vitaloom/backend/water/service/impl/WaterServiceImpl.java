@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -23,13 +24,12 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class WaterServiceImpl implements WaterService {
+    private static final int DEFAULT_GOAL_ML = 2000;
 
     private final WaterLogRepository logs;
     private final Clock clock;
 
     @Autowired
-    public WaterServiceImpl(WaterLogRepository logs) { this(logs, Clock.systemUTC()); }
-
     public WaterServiceImpl(WaterLogRepository logs, Clock clock) {
         this.logs = logs;
         this.clock = clock;
@@ -70,16 +70,23 @@ public class WaterServiceImpl implements WaterService {
     }
 
     public WaterLogResponse create(String userId, Integer amountMl, String loggedAtText) {
-        if (amountMl == null || amountMl < 1 || amountMl > 2000 || loggedAtText == null) {
+        if (amountMl == null || amountMl < 1 || amountMl > 2000) {
             throw new WaterValidationException();
         }
-        final Instant loggedAt;
-        try {
-            loggedAt = OffsetDateTime.parse(loggedAtText).toInstant();
-        } catch (DateTimeException exception) {
-            throw new WaterValidationException();
+        Instant serverNow = clock.instant();
+        Instant loggedAt;
+        if (loggedAtText == null) {
+            loggedAt = serverNow.truncatedTo(ChronoUnit.MILLIS);
+        } else {
+            try {
+                loggedAt = OffsetDateTime.parse(loggedAtText).toInstant();
+            } catch (DateTimeException exception) {
+                throw new WaterValidationException();
+            }
+            if (loggedAt.isAfter(serverNow)) {
+                throw new WaterValidationException("loggedAt cannot be in the future.");
+            }
         }
-        if (loggedAt.isAfter(clock.instant())) throw new WaterValidationException();
         return WaterLogResponse.from(logs.save(new WaterLog(userId, amountMl, loggedAt)));
     }
 

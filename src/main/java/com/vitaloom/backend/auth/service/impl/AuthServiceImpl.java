@@ -1,6 +1,6 @@
 package com.vitaloom.backend.auth.service.impl;
 
-import java.time.Instant;
+import java.time.Clock;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -26,11 +26,13 @@ public class AuthServiceImpl implements AuthService {
     private final UserRepository users;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenService tokens;
+    private final Clock clock;
 
-    public AuthServiceImpl(UserRepository users, PasswordEncoder passwordEncoder, JwtTokenService tokens) {
+    public AuthServiceImpl(UserRepository users, PasswordEncoder passwordEncoder, JwtTokenService tokens, Clock clock) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.tokens = tokens;
+        this.clock = clock;
     }
 
     public RegistrationResult register(String email, String password) {
@@ -38,13 +40,13 @@ public class AuthServiceImpl implements AuthService {
         if (users.findByEmailNormalized(normalized).isPresent()) throw new EmailAlreadyRegisteredException();
         User saved;
         try {
-            saved = users.save(new User(normalized, normalized, passwordEncoder.encode(password), Instant.now()));
+            saved = users.save(new User(normalized, normalized, passwordEncoder.encode(password), clock.instant()));
         } catch (DuplicateKeyException ex) {
             throw new EmailAlreadyRegisteredException();
         }
         UserResponse user = toResponse(saved);
         try {
-            return new RegistrationResult(user, tokens.issue(saved.getId(), Instant.now()), false);
+            return new RegistrationResult(user, tokens.issue(saved.getId(), clock.instant()), false);
         } catch (TokenIssuanceException ex) {
             return new RegistrationResult(user, null, true);
         }
@@ -56,7 +58,7 @@ public class AuthServiceImpl implements AuthService {
             throw new InvalidCredentialsException();
         }
         User user = candidate.get();
-        return response(toResponse(user), tokens.issue(user.getId(), Instant.now()));
+        return response(toResponse(user), tokens.issue(user.getId(), clock.instant()));
     }
 
     public RefreshResult refresh(String refreshToken) {
@@ -67,7 +69,7 @@ public class AuthServiceImpl implements AuthService {
             throw new InvalidRefreshTokenException();
         }
         User user = users.findById(subject).orElseThrow(InvalidRefreshTokenException::new);
-        return new RefreshResult(tokens.issueAccess(user.getId(), Instant.now()));
+        return new RefreshResult(tokens.issueAccess(user.getId(), clock.instant()));
     }
 
     public UserResponse currentUser(String userId) {

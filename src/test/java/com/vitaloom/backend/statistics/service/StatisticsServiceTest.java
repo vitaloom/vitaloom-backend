@@ -14,6 +14,7 @@ import com.vitaloom.backend.statistics.dto.response.HeartRateTimeSeriesResponse;
 import com.vitaloom.backend.statistics.exception.InvalidStatisticsRequestException;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
@@ -25,7 +26,8 @@ class StatisticsServiceTest {
     private final HeartRateService heartRateService = mock(HeartRateService.class);
     private final StepsService stepsService = mock(StepsService.class);
     private final StatisticsService service =
-            new StatisticsServiceImpl(heartRateService, stepsService, Clock.fixed(NOW, ZoneOffset.UTC));
+            new StatisticsServiceImpl(heartRateService, stepsService, Clock.fixed(NOW, ZoneOffset.UTC),
+                    ZoneId.of("Asia/Ho_Chi_Minh"));
 
     @Test
     void summaryCombinesLatestFromFullHistoryWithSelectedDayAverage() {

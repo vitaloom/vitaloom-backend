@@ -3,7 +3,9 @@ package com.vitaloom.backend.auth.service;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.lang.reflect.Proxy;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -43,7 +45,7 @@ class AuthServiceTest {
             });
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(4);
     private final JwtTokenService tokens = createTokens();
-    private final AuthService service = new AuthServiceImpl(users, encoder, tokens);
+    private final AuthService service = new AuthServiceImpl(users, encoder, tokens, Clock.systemUTC());
 
     private static JwtTokenService createTokens() {
         AuthTokenConfig config = new AuthTokenConfig();
@@ -65,6 +67,18 @@ class AuthServiceTest {
         assertEquals("user+tag@example.com", saved.getEmailNormalized());
         assertNotEquals("  secret  ", saved.getPasswordHash());
         assertTrue(encoder.matches("  secret  ", saved.getPasswordHash()));
+    }
+
+    @Test
+    void registrationUsesInjectedClockForAccountCreationTime() {
+        Instant now = Instant.parse("2026-11-11T03:00:00Z");
+        AuthService fixedClockService = new AuthServiceImpl(
+                users, encoder, tokens, Clock.fixed(now, ZoneOffset.UTC));
+
+        var result = fixedClockService.register("clock@example.com", "password123");
+
+        assertEquals(now, usersByEmail.get("clock@example.com").getCreatedAt());
+        assertNotNull(result.tokens());
     }
 
     @Test
@@ -104,7 +118,7 @@ class AuthServiceTest {
                 throw new TokenIssuanceException(new IllegalStateException("signing unavailable"));
             }
         };
-        var fallback = new AuthServiceImpl(users, encoder, failingTokens)
+        var fallback = new AuthServiceImpl(users, encoder, failingTokens, Clock.systemUTC())
                 .register("recover@example.com", "password123");
         assertTrue(fallback.loginRequired());
         assertNotNull(usersByEmail.get("recover@example.com"));
