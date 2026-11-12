@@ -4,7 +4,9 @@ import com.vitaloom.backend.heartrate.contract.HeartRateReadQuery;
 import com.vitaloom.backend.heartrate.contract.dto.HeartRateSample;
 import com.vitaloom.backend.steps.contract.StepsReadQuery;
 import com.vitaloom.backend.steps.contract.dto.StepSample;
+import com.vitaloom.backend.steps.goal.contract.StepGoalReadQuery;
 import com.vitaloom.backend.statistics.dto.response.StepsTimeSeriesResponse;
+import com.vitaloom.backend.statistics.dto.response.DailyStepsResponse;
 import com.vitaloom.backend.statistics.dto.response.HeartRateSummaryResponse;
 import com.vitaloom.backend.statistics.dto.response.HeartRateTimeSeriesResponse;
 import com.vitaloom.backend.statistics.exception.InvalidStatisticsRequestException;
@@ -30,6 +32,7 @@ public class StatisticsServiceImpl implements StatisticsService {
 
     private final HeartRateReadQuery heartRateService;
     private final StepsReadQuery stepsService;
+    private final StepGoalReadQuery stepGoalReadQuery;
     private final Clock clock;
     private final ZoneId timeZone;
 
@@ -124,7 +127,7 @@ public class StatisticsServiceImpl implements StatisticsService {
         return aggregator.toResponse();
     }
 
-    public StepsTimeSeriesResponse dailyStepsTimeSeries(String accountId, String date) {
+    public DailyStepsResponse dailyStepsTimeSeries(String accountId, String date) {
         Instant asOf = clock.instant();
         LocalDate today = asOf.atZone(timeZone).toLocalDate();
         LocalDate selected = parseStepsDate(date, today);
@@ -132,7 +135,16 @@ public class StatisticsServiceImpl implements StatisticsService {
         Instant start = selected.atStartOfDay(timeZone).toInstant();
         Instant end = selected.plusDays(1).atStartOfDay(timeZone).toInstant();
         requireWholeDay(start, end);
-        return aggregateSteps(accountId, start, end, 60, 24, asOf);
+        StepsTimeSeriesResponse steps = aggregateSteps(accountId, start, end, 60, 24, asOf);
+        var goal = stepGoalReadQuery.findEffectiveGoal(accountId, selected)
+                .map(effective -> new DailyStepsResponse.Goal(
+                        effective.targetSteps(), effective.effectiveDate()))
+                .orElse(null);
+        Double progress = steps.totalSteps() == null || goal == null
+                ? null
+                : steps.totalSteps().doubleValue() * 100.0 / goal.targetSteps();
+        return new DailyStepsResponse(steps.startAt(), steps.endAt(), steps.timezone(), steps.bucketSizeMinutes(),
+                steps.totalSteps(), steps.buckets(), goal, progress);
     }
 
     public StepsTimeSeriesResponse weeklyStepsTimeSeries(String accountId, String weekStartDate) {

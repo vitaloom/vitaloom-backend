@@ -10,6 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.vitaloom.backend.auth.service.JwtTokenService;
 import com.vitaloom.backend.steps.model.StepMeasurement;
+import com.vitaloom.backend.steps.goal.model.StepGoalSnapshot;
+import com.vitaloom.backend.steps.goal.repository.StepGoalRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -44,12 +46,15 @@ class StepsMongoIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired JwtTokenService tokens;
     @Autowired MongoTemplate mongo;
+    @Autowired StepGoalRepository goals;
     private final List<String> testAccounts = new ArrayList<>();
 
     @AfterEach
     void removeTestMeasurements() {
         testAccounts.forEach(accountId -> mongo.remove(
                 Query.query(Criteria.where("accountId").is(accountId)), StepMeasurement.class));
+        testAccounts.forEach(accountId -> mongo.remove(
+                Query.query(Criteria.where("account_id").is(accountId)), StepGoalSnapshot.class));
     }
 
     @Test
@@ -274,6 +279,131 @@ class StepsMongoIntegrationTest {
         mvc.perform(get("/api/statistics/steps/custom").queryParam("startDate", "2026-10-10")
                         .queryParam("endDate", "2026-11-09").header("Authorization", "Bearer " + token))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void dailyGoalSnapshotsReplaceAndRemoveFromTodayWithoutRewritingHistory() throws Exception {
+        String accountId = account("goal-history");
+        String token = token(accountId);
+        goals.upsertSnapshot(accountId, java.time.LocalDate.parse("2026-11-08"), 100L, false);
+        String batch = """
+                {"deviceId":"goal-device","runId":"goal-run","events":[
+                 {"eventId":"goal-one","occurredAt":"2026-11-10T00:00:00Z","stepsDelta":5},
+                 {"eventId":"goal-two","occurredAt":"2026-11-10T00:00:01Z","stepsDelta":5}]}
+                """;
+        mvc.perform(post("/api/steps/batch").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(batch))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.accepted").value(2));
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/steps/goal")
+                        .header("Authorization", "Bearer " + token).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"targetSteps\":5}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.targetSteps").value(5))
+                .andExpect(jsonPath("$.effectiveDate").value("2026-11-10"));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/steps/goal")
+                        .header("Authorization", "Bearer " + token).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"targetSteps\":4}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/statistics/steps/daily").queryParam("date", "2026-11-10")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalSteps").value(10))
+                .andExpect(jsonPath("$.goal.targetSteps").value(4))
+                .andExpect(jsonPath("$.goal.effectiveDate").value("2026-11-10"))
+                .andExpect(jsonPath("$.progressPercent").value(250.0));
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/api/steps/goal")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isNoContent()).andExpect(content().string(""));
+        mvc.perform(get("/api/statistics/steps/daily").queryParam("date", "2026-11-10")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.goal").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.progressPercent").value(org.hamcrest.Matchers.nullValue()));
+        mvc.perform(get("/api/statistics/steps/daily").queryParam("date", "2026-11-09")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.goal.targetSteps").value(100))
+                .andExpect(jsonPath("$.goal.effectiveDate").value("2026-11-08"))
+                .andExpect(jsonPath("$.totalSteps").doesNotExist())
+                .andExpect(jsonPath("$.progressPercent").value(org.hamcrest.Matchers.nullValue()));
+        mvc.perform(get("/api/statistics/steps/weekly").queryParam("weekStartDate", "2026-11-09")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.goal").doesNotExist())
+                .andExpect(jsonPath("$.progressPercent").doesNotExist());
+        assertEquals(2, mongo.count(Query.query(Criteria.where("account_id").is(accountId)), StepGoalSnapshot.class));
+    }
+
+    @Test
+    void goalRejectsInvalidJsonNumbersWithoutReplacingExistingGoalAndIsAccountScoped() throws Exception {
+        String accountId = account("goal-validation");
+        String token = token(accountId);
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/steps/goal")
+                        .header("Authorization", "Bearer " + token).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"targetSteps\":123}"))
+                .andExpect(status().isOk());
+
+        for (String value : List.of("1.5", "\"123\"", "null", "0", "-1", "9007199254740992")) {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/steps/goal")
+                            .header("Authorization", "Bearer " + token).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"targetSteps\":" + value + "}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_STEP_GOAL"));
+        }
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/steps/goal")
+                        .header("Authorization", "Bearer " + token).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"targetSteps\":9007199254740991}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.targetSteps").value(9007199254740991L));
+
+        mvc.perform(get("/api/statistics/steps/daily").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.goal.targetSteps").value(9007199254740991L))
+                .andExpect(jsonPath("$.totalSteps").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.progressPercent").value(org.hamcrest.Matchers.nullValue()));
+        String otherToken = token(account("goal-isolation"));
+        mvc.perform(get("/api/statistics/steps/daily").header("Authorization", "Bearer " + otherToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.goal").value(org.hamcrest.Matchers.nullValue()));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/steps/goal")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"targetSteps\":5}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/api/steps/goal"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void concurrentGoalUpsertsAreSafeAndKeepOneSnapshotPerLocalDate() throws Exception {
+        String accountId = account("goal-concurrent");
+        String token = token(accountId);
+        for (int round = 0; round < 2; round++) {
+            int firstTarget = round == 0 ? 10 : 30;
+            int concurrentRequests = 6;
+            var ready = new CountDownLatch(concurrentRequests);
+            var start = new CountDownLatch(1);
+            try (var executor = Executors.newFixedThreadPool(concurrentRequests)) {
+                List<java.util.concurrent.Future<Integer>> futures = new ArrayList<>();
+                for (int i = 0; i < concurrentRequests; i++) {
+                    String request = "{\"targetSteps\":" + (firstTarget + i) + "}";
+                    futures.add(executor.submit(() -> {
+                        ready.countDown();
+                        start.await();
+                        return mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(
+                                                "/api/steps/goal")
+                                        .header("Authorization", "Bearer " + token)
+                                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                                .andExpect(status().isOk()).andReturn().getResponse().getStatus();
+                    }));
+                }
+                assertTrue(ready.await(5, TimeUnit.SECONDS));
+                start.countDown();
+                for (var future : futures) assertEquals(200, future.get(10, TimeUnit.SECONDS));
+            }
+            assertEquals(1, mongo.count(Query.query(Criteria.where("account_id").is(accountId))
+                    .addCriteria(Criteria.where("effective_date").is("2026-11-10")), StepGoalSnapshot.class));
+            mvc.perform(get("/api/statistics/steps/daily").header("Authorization", "Bearer " + token))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.goal.targetSteps")
+                            .value(org.hamcrest.Matchers.allOf(org.hamcrest.Matchers.greaterThanOrEqualTo(firstTarget),
+                                    org.hamcrest.Matchers.lessThanOrEqualTo(firstTarget + 5))));
+        }
+        List<IndexInfo> goalIndexes = mongo.indexOps(StepGoalSnapshot.class).getIndexInfo();
+        assertTrue(goalIndexes.stream().anyMatch(index -> index.getName()
+                .equals("uk_step_goal_account_effective_date") && index.isUnique()));
     }
 
     private String account(String prefix) {
