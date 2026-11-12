@@ -3,6 +3,7 @@ package com.vitaloom.backend.steps.controller.exceptionhandler;
 import com.vitaloom.backend.shared.web.ProblemDetailExceptionHandler;
 import com.vitaloom.backend.shared.web.ProblemDetails;
 import com.vitaloom.backend.steps.controller.StepsController;
+import com.vitaloom.backend.steps.goal.controller.StepGoalController;
 import com.vitaloom.backend.steps.exception.InvalidStepsRequestException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -14,7 +15,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 
-@RestControllerAdvice(assignableTypes = StepsController.class)
+@RestControllerAdvice(assignableTypes = {StepsController.class, StepGoalController.class})
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class StepsExceptionHandler extends ProblemDetailExceptionHandler {
     @Override

@@ -3,6 +3,7 @@ package com.vitaloom.backend.statistics.controller;
 import com.vitaloom.backend.statistics.dto.response.HeartRateSummaryResponse;
 import com.vitaloom.backend.statistics.service.StatisticsService;
 import com.vitaloom.backend.statistics.dto.response.StepsTimeSeriesResponse;
+import com.vitaloom.backend.statistics.dto.response.DailyStepsResponse;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -24,7 +25,7 @@ public class StatisticsController {
     }
 
     @GetMapping("/steps/daily")
-    public StepsTimeSeriesResponse dailySteps(Authentication authentication,
+    public DailyStepsResponse dailySteps(Authentication authentication,
                                                @RequestParam(required = false) String date) {
         return service.dailyStepsTimeSeries(authentication.getName(), date);
     }

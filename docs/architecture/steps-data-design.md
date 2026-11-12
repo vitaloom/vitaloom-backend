@@ -25,6 +25,12 @@ This design is specific to Steps. Do not generalize it into a shared Heart Rate 
 
 This point-in-time model does not provide data-coverage information. An empty time bucket means no accepted event was recorded in that bucket; it does not prove zero steps or continuous Producer observation.
 
+## Daily Step Goal history
+
+AHM Daily Step Goal state is kept separately from raw `step_measurements` in `step_goal_snapshots`. Each account has at most one snapshot per effective local date, enforced by unique `{account_id: 1, effective_date: 1}` index `uk_step_goal_account_effective_date`. `effective_date` is an ISO `YYYY-MM-DD` string, so lexical ordering matches calendar ordering. A set snapshot contains a positive safe-integer `target_steps` and `removed: false`; a removal snapshot contains `removed: true` and a null target.
+
+PUT and DELETE atomically upsert the snapshot for the current date using the injected `Clock` and `Asia/Ho_Chi_Minh`. A concurrent first insert that loses the unique-index race retries as an atomic update of the same account/date snapshot. Replacements do not modify earlier dates. Statistics queries the latest snapshot on or before its selected date; a removal marker ends the effective goal from that date forward. No goal default, inferred limit, or goal field is written to raw step events.
+
 ## 2. Batch contract and raw document
 
 The canonical ingestion endpoint is `POST /api/steps/batch`. It requires a Bearer access JWT. Backend derives `accountId` from the authenticated principal; account identity is never accepted from the payload.

@@ -8,6 +8,9 @@ import static org.mockito.Mockito.*;
 import com.vitaloom.backend.heartrate.contract.HeartRateReadQuery;
 import com.vitaloom.backend.heartrate.contract.dto.HeartRateSample;
 import com.vitaloom.backend.steps.contract.StepsReadQuery;
+import com.vitaloom.backend.steps.goal.contract.StepGoalReadQuery;
+import com.vitaloom.backend.steps.goal.contract.dto.EffectiveStepGoal;
+import com.vitaloom.backend.statistics.dto.response.DailyStepsResponse;
 import com.vitaloom.backend.statistics.service.impl.StatisticsServiceImpl;
 import com.vitaloom.backend.statistics.dto.response.HeartRateSummaryResponse;
 import com.vitaloom.backend.statistics.dto.response.HeartRateTimeSeriesResponse;
@@ -25,8 +28,9 @@ class StatisticsServiceTest {
     private static final Instant NOW = Instant.parse("2026-11-06T03:00:00Z");
     private final HeartRateReadQuery heartRateService = mock(HeartRateReadQuery.class);
     private final StepsReadQuery stepsService = mock(StepsReadQuery.class);
+    private final StepGoalReadQuery stepGoalReadQuery = mock(StepGoalReadQuery.class);
     private final StatisticsService service =
-            new StatisticsServiceImpl(heartRateService, stepsService, Clock.fixed(NOW, ZoneOffset.UTC),
+            new StatisticsServiceImpl(heartRateService, stepsService, stepGoalReadQuery, Clock.fixed(NOW, ZoneOffset.UTC),
                     ZoneId.of("Asia/Ho_Chi_Minh"));
 
     @Test
@@ -174,5 +178,37 @@ class StatisticsServiceTest {
                 () -> service.weeklyHeartRateTimeSeries("account-a", java.time.LocalDate.parse("2026-11-09")))
                 .getCode());
         verifyNoInteractions(heartRateService);
+    }
+
+    @Test
+    void dailyStepsCalculatesProgressFromSelectedDateGoalAndAllowsOverOneHundredPercent() {
+        when(stepsService.findSamplesBetween(eq("account-a"), any(), any())).thenReturn(List.of(
+                new com.vitaloom.backend.steps.contract.dto.StepSample(5, Instant.parse("2026-11-06T01:00:00Z")),
+                new com.vitaloom.backend.steps.contract.dto.StepSample(5, Instant.parse("2026-11-06T02:00:00Z"))));
+        when(stepGoalReadQuery.findEffectiveGoal("account-a", java.time.LocalDate.parse("2026-11-06")))
+                .thenReturn(Optional.of(new EffectiveStepGoal(5, "2026-11-06")));
+
+        DailyStepsResponse response = service.dailyStepsTimeSeries("account-a", "2026-11-06");
+
+        assertEquals(10, response.totalSteps());
+        assertEquals(new DailyStepsResponse.Goal(5, "2026-11-06"), response.goal());
+        assertEquals(200.0, response.progressPercent());
+        verify(stepGoalReadQuery).findEffectiveGoal("account-a", java.time.LocalDate.parse("2026-11-06"));
+    }
+
+    @Test
+    void dailyStepsKeepsGoalAndProgressNullWhenEitherSideHasNoData() {
+        when(stepsService.findSamplesBetween(eq("account-a"), any(), any())).thenReturn(List.of());
+        DailyStepsResponse noSteps = service.dailyStepsTimeSeries("account-a", null);
+        assertNull(noSteps.totalSteps());
+        assertNull(noSteps.goal());
+        assertNull(noSteps.progressPercent());
+
+        when(stepsService.findSamplesBetween(eq("account-a"), any(), any())).thenReturn(List.of(
+                new com.vitaloom.backend.steps.contract.dto.StepSample(2, Instant.parse("2026-11-06T01:00:00Z"))));
+        DailyStepsResponse noGoal = service.dailyStepsTimeSeries("account-a", null);
+        assertEquals(2, noGoal.totalSteps());
+        assertNull(noGoal.goal());
+        assertNull(noGoal.progressPercent());
     }
 }

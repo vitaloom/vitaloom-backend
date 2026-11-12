@@ -180,6 +180,47 @@ Field semantics:
 
 No Mobile UI behavior is implied by this contract. The Mobile team can later choose which documented APIs to consume.
 
+## Daily Step Goal and Progress
+
+Daily Step Goal is optional and requires explicit user action. It is scoped to the authenticated JWT subject.
+
+### `PUT /api/steps/goal`
+
+Request:
+
+```json
+{"targetSteps": 8000}
+```
+
+`targetSteps` must be a JSON integer greater than zero and no greater than JavaScript's maximum safe integer (`9007199254740991`). Decimal numbers, strings, `null`, zero, negative values, and larger integers return `400 INVALID_STEP_GOAL`. No default goal or additional product limit is applied.
+
+The response is `200 OK`:
+
+```json
+{"targetSteps": 8000, "effectiveDate": "2026-11-12"}
+```
+
+`effectiveDate` is the current `Asia/Ho_Chi_Minh` date determined by the backend's injected clock. Repeating or replacing the goal on that date updates that date's snapshot; earlier snapshots are retained.
+
+### `DELETE /api/steps/goal`
+
+Removes the goal effective on the current `Asia/Ho_Chi_Minh` date and returns `204 No Content`. The removal is stored as a dated history marker so earlier goals remain effective for earlier report dates. Repeating the removal is safe.
+
+Both goal routes require a Bearer access JWT. Account ownership comes only from the JWT subject.
+
+### Daily Statistics additions
+
+`GET /api/statistics/steps/daily` preserves its existing time-series fields and adds:
+
+```json
+{
+  "goal": {"targetSteps": 8000, "effectiveDate": "2026-11-12"},
+  "progressPercent": 65.5
+}
+```
+
+`goal` is `null` when no goal is effective on the selected report date, including dates on or after a removal marker. `progressPercent` is `Daily Steps / effective targetSteps * 100`; it is `null` unless both a daily total and an effective goal exist. It is not clamped at 100%. The selected date uses the existing daily date parameter and `Asia/Ho_Chi_Minh` boundaries. Weekly and Custom response fields remain unchanged and do not include goal values.
+
 ## MVP acceptance checks
 
 - [ ] Steps batch ingestion requires Bearer authentication and derives account ownership from the JWT subject.

@@ -8,7 +8,7 @@ VitaLoom Backend is one Spring Boot application and Maven module rooted at `com.
 com.vitaloom.backend
 ├── auth              controller, dto, exception, mapper, model, repository, service/impl
 ├── heartrate         contract/dto, controller, dto, exception, mapper, model, repository, service/impl
-├── steps             contract/dto, controller, dto, exception, model, repository, service/impl
+├── steps             raw Steps Journal and AHM Daily Step Goal subfeature
 ├── water             controller, dto, exception, model, repository, service/impl
 ├── statistics        controller/exceptionhandler, dto/response, exception, service/impl
 ├── healthcheck       controller, dto/response
@@ -57,7 +57,7 @@ Provider read contracts use `<provider>.contract` for the interface and `.contra
 
 The cross-metric daily dashboard and Statistics composition for Sleep and Water are planned. Water Tracking itself is implemented and documented under [Water](../features/water/README.md) and its [API contract](../features/water/api-contract.md). A documented endpoint or future package does not imply runtime implementation; check [API contract index](../api/api-contract.md) and source before relying on it.
 
-Statistics reaches Heart Rate and Steps through `HeartRateReadQuery` and `StepsReadQuery`, with exchanged sample types in each provider's `contract.dto`. Their implementations remain in the feature-local service implementation classes, which also implement the ingestion interfaces used by controllers. Statistics does not inject metric repositories or query collections directly. Statistics owns derived values; metric features own raw records. See [ADR-001](decisions/ADR-001-statistics-owns-aggregate-read-models.md).
+Statistics reaches Heart Rate and raw Steps through `HeartRateReadQuery` and `StepsReadQuery`, with exchanged sample types in each provider's `contract.dto`. It reads AHM-owned Step Goal history through the separate `steps.goal.contract.StepGoalReadQuery`; Statistics does not inject goal or metric repositories or query collections directly. Statistics owns derived values; Steps Journal owns raw records and the Steps goal subfeature owns goal snapshots. See [ADR-001](decisions/ADR-001-statistics-owns-aggregate-read-models.md).
 
 ## Dependency direction
 
@@ -65,7 +65,7 @@ Statistics reaches Heart Rate and Steps through `HeartRateReadQuery` and `StepsR
 | --- | --- | --- |
 | Controller | Its feature's service and API DTOs | Repositories or persistence models directly |
 | Service | Its feature's repository, model, DTOs and shared technical types | Another feature's repositories, Mongo documents or raw queries |
-| Statistics | Heart Rate and Steps provider read contracts and its own calculations/response types | Metric ingestion service interfaces, repositories, Mongo documents or raw queries |
+| Statistics | Heart Rate and Steps provider read contracts, Step Goal read contract, and its own calculations/response types | Metric/goal write service interfaces, repositories, Mongo documents or raw queries |
 | Repository | Its feature's persistence models and Mongo support | Controllers or services |
 | Mapper | Feature-local values it transforms | Controllers, repositories or business decisions |
 | Model | Feature-owned values and shared persistence base types | HTTP DTOs, controllers, services or repositories |
