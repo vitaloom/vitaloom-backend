@@ -1,6 +1,10 @@
 # Sleep API Contract
 
-**Status:** Canonical MVP contract
+The [Sleep Journal F1 API](../../features/sleep-journal/contract-reconciliation.md) is implemented under `/api/sleep/v2/sessions`. It stores authenticated, individual sessions in MongoDB using ordinary standalone-compatible reads and writes.
+
+## Legacy daily contract
+
+**Status:** Documented design. No controller implements this endpoint in the current backend checkout.
 
 ### `PUT /api/sleep/daily`
 

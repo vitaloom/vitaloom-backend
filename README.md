@@ -48,7 +48,7 @@ Change the sample passwords before starting the stack. The checked-in example va
 
 For authentication, set `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` in the untracked `.env`. Use two different random values of at least 32 bytes each. `JWT_ISSUER` is optional. The application refuses to start without usable signing secrets. Keep these values out of source control and out of the mobile `EXPO_PUBLIC_` configuration.
 
-## 2. Start MongoDB infrastructure
+## 2. Start local infrastructure
 
 ```bash
 docker compose up -d
@@ -59,10 +59,11 @@ The Compose stack starts:
 
 - **MongoDB 8** as a single-node authenticated replica set named `vitaloom-rs`.
 - **Mongo Express** as a local administration UI at [http://localhost:8082](http://localhost:8082) (port 8082 avoids Expo/Metro's default 8081).
+- **Nginx** as an API gateway on host port `80` by default. Set `NGINX_PORT` in `.env` to change the gateway port.
 
 The MongoDB root user is for administration. The backend connects with a separate `APP_USER` account that receives only `readWrite` on `APP_DB`.
 
-MongoDB and Mongo Express ports are bound to `127.0.0.1` by default. Run Spring Boot on the host and connect to `localhost:27017`. The Compose stack intentionally does not start a backend container or Nginx gateway.
+MongoDB and Mongo Express ports are bound to `127.0.0.1` by default. Run Spring Boot on the host as described below. Nginx forwards requests to Spring Boot using `host.docker.internal` and the `SERVER_PORT` from `.env`.
 
 The replica set provides the MongoDB deployment mode required for multi-document transactions. The Spring transaction manager is disabled by default and can be enabled with `MONGO_TRANSACTIONS_ENABLED=true` when a use case actually requires it.
 
@@ -83,6 +84,8 @@ Windows:
 ```
 
 The application listens on port `8080` by default. Override it with `SERVER_PORT` in `.env`.
+
+After changing `SERVER_PORT`, restart Spring Boot and run `docker compose up -d --no-deps nginx` to apply the new upstream port. With the default gateway port, `GET http://localhost/api/health` checks connectivity through Nginx.
 
 The auth feature provides `POST /api/auth/register`, `/login`, `/refresh` and protected `GET /api/auth/me`. The protected Water Tracking MVP provides daily and weekly reads plus log creation; see the [Water contract](./docs/features/water/api-contract.md). Heart Rate and Steps batch ingestion and statistics routes are listed in the [API contract index](./docs/api/api-contract.md).
 
@@ -107,4 +110,4 @@ Windows:
 
 ## Security scope
 
-Spring Security uses stateless Bearer access JWT authentication for `/api/auth/me`, Heart Rate and Steps batch ingestion and Statistics, and `/api/water/**`. These metric routes scope data to the authenticated account. Registration, login, refresh and health check are public. Sleep routes and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation. Refresh JWTs are stateless and have no server-side revocation or rotation in this Basic MVP. Local sign-out clears the mobile credential but cannot invalidate a previously issued refresh JWT. CSRF is disabled for the stateless, non-cookie API; revisit it if cookies are introduced.
+Spring Security uses stateless Bearer access JWT authentication for `/api/auth/me`, Heart Rate and Steps batch ingestion and Statistics, `/api/water/**`, and Sleep Journal `/api/sleep/v2/**`. These metric routes scope records to the authenticated account. Registration, login, refresh and health check are public. The cross-metric daily dashboard remains outside that implementation. Refresh JWTs are stateless and have no server-side revocation or rotation in this Basic MVP. Local sign-out clears the mobile credential but cannot invalidate a previously issued refresh JWT. CSRF is disabled for the stateless, non-cookie API; revisit it if cookies are introduced.

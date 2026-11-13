@@ -14,7 +14,7 @@ The implementation baseline for this section is `note/authentication-v1/03-api-c
 
 If registration persisted the account but token issuance fails, return `201` `{ "user": {"id":"...","email":"..."}, "authStatus":"LOGIN_REQUIRED" }`. The client offers login rather than retrying registration. Request-level failures use the RFC 9457 format and status/code rules in the [API Contract Index](./api-contract.md#generic-error-response); authentication validation uses `400 VALIDATION_ERROR`. Login uses the same error code for unknown email and wrong password.
 
-Access JWTs expire after 15 minutes; refresh JWTs after 30 days. They use separate signing keys from environment configuration and distinct token-type claims. A refresh JWT is never accepted as a Bearer access credential. Refresh returns only a new access JWT and does not rotate the refresh JWT. `GET /api/health` stays public. Heart Rate and Steps batch ingestion and all of their Statistics routes require Bearer access JWTs and scope data by the JWT subject. Water Tracking routes also require a Bearer access JWT and scope data by the JWT subject. Sleep routes and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation.
+Access JWTs expire after 15 minutes; refresh JWTs after 30 days. They use separate signing keys from environment configuration and distinct token-type claims. A refresh JWT is never accepted as a Bearer access credential. Refresh returns only a new access JWT and does not rotate the refresh JWT. `GET /api/health` stays public. Heart Rate and Steps batch ingestion and all of their Statistics routes require Bearer access JWTs and scope data by the JWT subject. Water Tracking routes also require a Bearer access JWT and scope data by the JWT subject. Sleep Journal F1 requires a Bearer access JWT and scopes records by its subject.
 
 ## Current and contracted route-level security
 
@@ -28,6 +28,7 @@ Access JWTs expire after 15 minutes; refresh JWTs after 30 days. They use separa
 | `POST /api/steps/batch` | Bearer access JWT required; account comes from JWT subject | Implemented |
 | `/api/statistics/steps/**` | Bearer access JWT required; reads are scoped to JWT subject | Implemented |
 | `/api/water/**` | Bearer access JWT required; logs and summaries are scoped to JWT subject | Implemented |
-| Sleep routes and cross-metric dashboard | Account-scoped access required before real multi-user use | Not yet enforced |
+| `/api/sleep/v2/**` | Bearer access JWT required, scoped to JWT subject | Implemented |
+| Cross-metric dashboard | Account-scoped access required before real multi-user use | Not yet enforced |
 
 Do not infer that a documented endpoint is implemented or safe for real multi-user private health data merely because an authentication flow exists. Each metric contract must state its route-level access behavior.

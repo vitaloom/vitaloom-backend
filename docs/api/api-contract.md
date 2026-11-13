@@ -15,7 +15,7 @@ This file is the navigation and shared-conventions entry point. Detailed endpoin
 | Cross-metric dashboard | [Dashboard Statistics API](./dashboard-statistics.md) |
 | Heart Rate | [Heart Rate API](./metrics/heart-rate.md) |
 | Steps | [Steps API](./metrics/steps.md) |
-| Sleep | [Sleep API](./metrics/sleep.md) |
+| Sleep | [Sleep Journal F1](../features/sleep-journal/contract-reconciliation.md) and [legacy daily contract](./metrics/sleep.md) |
 | Water | [Water Tracking API](../features/water/api-contract.md) |
 
 ## 2. Shared conventions
@@ -30,7 +30,7 @@ This file is the navigation and shared-conventions entry point. Detailed endpoin
 - Clients/producers create stable IDs for their own retryable write records and must reuse the same ID when retrying that record.
 - Spring Boot enforces uniqueness, backed by MongoDB unique indexes. An API gateway, if present, does not create business IDs or decide whether a record is a duplicate.
 - A retry with an already accepted ID must not create a second record or double-count a metric.
-- Authentication and route-level access requirements are documented in [Authentication](./authentication.md). Heart Rate and Steps batch ingestion and Statistics routes require a Bearer access JWT and scope data to its subject. Water Tracking routes also require a Bearer access JWT and scope data to its subject. Sleep routes and the cross-metric daily dashboard do not yet enforce equivalent per-user access and isolation. Do not use unisolated paths for real multi-user private health data. Personal-data ingestion must derive account ownership from an authenticated principal; do not accept `accountId` from the request body.
+- Authentication and route-level access requirements are documented in [Authentication](./authentication.md). Heart Rate and Steps batch ingestion and Statistics routes require a Bearer access JWT and scope data to its subject. Water Tracking routes also require a Bearer access JWT and scope data to its subject. Sleep Journal F1 routes require a Bearer access JWT and scope records to its subject. The cross-metric daily dashboard does not enforce equivalent isolation. Do not use unisolated paths for real multi-user private health data. Personal-data ingestion must derive account ownership from an authenticated principal; do not accept `accountId` from the request body.
 - Metric-specific persistence schemas and indexes are documented under [Architecture](../architecture/). Heart Rate and Steps have separate raw-data designs: [Heart Rate Data Model & Persistence Design](../architecture/heart-rate-data-design.md) and [Steps Data Model & Persistence Design](../architecture/steps-data-design.md).
 
 ## 3. Health Check
@@ -83,7 +83,7 @@ This request-level format does not change successful JSON bodies or per-item bat
 
 ## 5. Cross-cutting deferred capabilities
 
-Per-user access and data isolation for Sleep and the cross-metric daily dashboard, device registration/management, history pagination, personalized daily cutoff times, overnight sleep-session attribution, HTTP-level idempotency keys, batch-result replay storage, asynchronous processing, advanced analytics, load-generation orchestration and production-grade rate limiting are outside this contract's current implementation scope. Revisit the relevant items before a real multi-user deployment or physical wearable integration.
+Per-user isolation for the cross-metric dashboard, device registration and management, personalized daily cutoff times, batch-result replay, asynchronous processing, advanced analytics, load-generation orchestration and production-grade rate limiting remain deferred. Revisit the relevant items before a real multi-user deployment or physical wearable integration.
 
 ## 6. Cross-cutting acceptance checks
 
