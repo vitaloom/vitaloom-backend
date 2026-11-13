@@ -51,7 +51,7 @@ Provider read contracts use `<provider>.contract` for the interface and `.contra
 | `heartrate` | Implemented | Raw Heart Rate ingestion, validation, persistence and raw-data queries | Live: Statistics uses `HeartRateReadQuery` |
 | `steps` | Implemented | Raw step ingestion, validation, persistence and raw-data queries | Live: Statistics uses `StepsReadQuery` |
 | `water` | Implemented | Water log input, validation, persistence and Water summaries | None; not yet composed by Statistics |
-| `sleep` | Planned | Future raw sleep input and persistence | Planned only |
+| `sleep` | Implemented for F1 | Sleep Journal sessions and validation | No Statistics dependency |
 | `statistics` | Partially implemented | Aggregate calculations and read responses | Uses Heart Rate and Steps provider read contracts |
 | `healthcheck` | Implemented | Application availability endpoint | None |
 
