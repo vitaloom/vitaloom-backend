@@ -1,35 +1,33 @@
 # Sleep Journal F1 API contract
 
-The backend provides authenticated, account-scoped Sleep Journal CRUD at `/api/sleep/v2/sessions`. Owner identity comes from the validated JWT subject. The API uses the existing shared RFC 9457 Problem Details response format.
+Sleep Journal uses the validated Bearer JWT subject as the owner and returns errors in the shared RFC 9457 Problem Details format. The base path is `/api/sleep/v2/sessions`.
 
-| Operation | Request | Response |
+| Operation | Request | Success |
 | --- | --- | --- |
-| POST /api/sleep/v2/sessions | SessionWrite | 201 SessionResponse |
-| GET /api/sleep/v2/sessions?from=&to= | Optional inclusive statistical day bounds | 200 {sessions: SessionResponse[]} |
-| GET /api/sleep/v2/sessions/{id} | Sleep session ID | 200 SessionResponse |
-| PUT /api/sleep/v2/sessions/{id} | SessionWrite | 200 SessionResponse |
-| DELETE /api/sleep/v2/sessions/{id} | Sleep session ID | 204 No Content |
+| POST | `SessionWrite` | 201 `SessionResponse` |
+| GET | Optional inclusive `from` and `to` statistical days | 200 `{ "sessions": [...] }` |
+| GET `/{id}` | Session ID | 200 `SessionResponse` |
+| PUT `/{id}` | `SessionWrite`, optional `If-Match` | 200 `SessionResponse` `|`
+| DELETE `/{id}` | Session ID, optional `If-Match` | 204 No Content |
 
-SessionWrite uses uppercase MAIN/NAP, RANGE/DURATION and optional COMFORTABLE/NORMAL/TIRED feeling. DURATION uses integer minutes and an endDay without time fields. RANGE uses an IANA timeZone and start/end civil values, with optional explicit UTC offset choice for repeated local times. The server resolves absolute instants and elapsed minutes and stores the wake day in the chosen zone. All durations must be whole minutes from 1 through 1440. Future records are rejected. Multiple entries per statistical day are supported. Range overlap is checked during the request and adjacent half-open ranges are accepted.
+Writes require `sleepType: "MAIN"` and `method: "RANGE"` or `"DURATION"`. The optional `feeling` accepts `COMFORTABLE`, `NORMAL`, `TIRED`, or `null`. `DURATION` takes `endDay` in `YYYY-MM-DD` format and integer `minutes`. `RANGE` takes an IANA `timeZone` and `start`/`end` objects with `day`, two-digit `hour` and `minute`, and an optional `offsetMinutes` for resolving repeated local times. The server validates the supplied offset against the zone and rejects missing or unresolved civil times. Durations are 1–1,440 whole minutes. For RANGE, the wake date in the reference timezone is the statistical day and elapsed time determines minutes. Editing a RANGE as RANGE preserves its reference timezone.
 
-MongoDB stores SleepSession documents in `sleep_sessions` with snake_case fields. The API DTO stays separate from that document. Ordinary MongoDB reads and writes support a standalone deployment. MongoDB availability and application credentials must be configured as for the existing backend.
+The server checks the mutation window using its clock in `Asia/Ho_Chi_Minh`. The statistical day must be between this week's Monday and today, inclusive. A day accepts one Main Sleep across both entry methods. RANGE sessions on different days must also have disjoint actual time intervals. Adjacent endpoints are allowed.
 
-## Error responses
+`SessionResponse` adds `editable`, computed using the account's greatest existing Main Sleep statistical day and the current mutation window. Filtering the list leaves this account-wide calculation intact. The response after a successful backfill or day change reflects eligibility after the write. Clients can use `editable` for UI affordances. The server rechecks eligibility on every write. Existing NAP rows can still be read and always return `editable: false`.
 
-- `VALIDATION_ERROR` (400) for malformed query parameters.
-- `SLEEP_VALIDATION` (422) for invalid session data.
-- `SLEEP_OVERLAP` (409) for an overlapping range.
-- `SLEEP_NOT_FOUND` (404) for an absent record or a record owned by another user.
-- `UNAUTHORIZED` (401) when credentials are missing or invalid.
+For PUT and DELETE, mobile sends the previously read `confirmedAt` as one quoted `If-Match` value. A changed version returns `SLEEP_STALE`. Older clients may omit the header. The server still guards each conditional write with the version it loaded for that request.
 
-## Deferred — Post-MVP
+| HTTP | Problem `code` | Meaning |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR`, `SLEEP_VALIDATION` | Invalid query, malformed request, or invalid `If-Match` |
+| 401 | `UNAUTHORIZED` | Missing or invalid authentication |
+| 404 | `SLEEP_NOT_FOUND` | Missing record or a record belonging to another account |
+| 409 | `SLEEP_DAY_ALREADY_RECORDED` | A Main Sleep already occupies the target day. Use that day's Journal query to open it. |
+| 409 | `SLEEP_WEEK_LOCKED` | The record or requested day is in a completed week |
+| 409 | `SLEEP_RECORD_NOT_LATEST` | A different Main Sleep is latest, or the legacy record is read-only |
+| 409 | `SLEEP_OVERLAP` | Actual RANGE times overlap another Main Sleep |
+| 409 | `SLEEP_STALE` | The loaded record changed before the requested write |
+| 422 | `SLEEP_VALIDATION` | Invalid type, method, date, duration, feeling, timezone, DST choice, or future time |
 
-- Transaction-based concurrency guarantees
-- Optimistic locking
-- Idempotency keys
-- Operation receipts
-- Unknown-outcome reconciliation
-- Cross-device conflict resolution
-- Offline synchronization
-
-The simplified MVP accepts last-write-wins updates and does not guarantee that concurrent range creations cannot overlap. The API does not automatically retry failed writes. A client reports success only after it receives a successful response. The approved F1 business rules remain unchanged. These temporary CRUD limitations apply only to this implementation stage.
+MongoDB stores the records in `sleep_sessions`. See the [implementation report](implementation-report.md) for the unique index, deployment audit, and verification results. The service uses ordinary MongoDB operations and supports a standalone database.

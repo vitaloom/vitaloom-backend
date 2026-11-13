@@ -22,7 +22,7 @@ public final class SleepSessionValidator {
     public static SleepSession validate(SessionWrite request, SleepSession existing, String id,
                                         String owner, Instant now) {
         if (request == null) throw invalid("request", "A session is required.");
-        String type = enumValue(request.sleepType(), "sleepType", "MAIN", "NAP");
+        String type = enumValue(request.sleepType(), "sleepType", "MAIN");
         String method = enumValue(request.method(), "method", "RANGE", "DURATION");
         String feeling = optionalEnum(request.feeling(), "feeling", "COMFORTABLE", "NORMAL", "TIRED");
         if (now == null || owner == null || owner.isBlank() || id == null || id.isBlank()) {
@@ -32,9 +32,7 @@ public final class SleepSessionValidator {
         if ("DURATION".equals(method)) {
             rejectRangeFields(request);
             LocalDate endDay = parseDay(request.endDay(), "endDay");
-            if (endDay.isAfter(now.atZone(DURATION_ZONE).toLocalDate())) {
-                throw invalid("endDay", "The end day cannot be in the future.");
-            }
+            validateStatisticalDay(endDay, now);
             int minutes = wholeMinutes(request.minutes());
             return new SleepSession(id, owner, type, method, minutes, endDay.toString(), feeling,
                     now, null, null, null, null, null);
@@ -71,8 +69,18 @@ public final class SleepSessionValidator {
         if (!wakeDay.equals(end.day())) {
             throw invalid("end.day", "The end day must match the wake time in its reference timezone.");
         }
+        validateStatisticalDay(LocalDate.parse(wakeDay), now);
         return new SleepSession(id, owner, type, method, (int) (elapsedSeconds / 60),
                 wakeDay, feeling, now, zoneText, start, end, startAt, endAt);
+    }
+
+    private static void validateStatisticalDay(LocalDate day, Instant now) {
+        LocalDate today = now.atZone(DURATION_ZONE).toLocalDate();
+        if (day.isAfter(today)) throw invalid("day", "The statistical day cannot be in the future.");
+        LocalDate monday = today.minusDays(today.getDayOfWeek().getValue() - 1L);
+        if (day.isBefore(monday)) {
+            throw new SleepFailure(409, "SLEEP_WEEK_LOCKED", "Sleep records can only be created in the current week.");
+        }
     }
 
     private static void rejectRangeFields(SessionWrite request) {
