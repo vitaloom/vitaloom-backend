@@ -1,6 +1,6 @@
 # Sleep API Contract
 
-The [Sleep Journal F1 API](../../features/sleep-journal/contract-reconciliation.md) is implemented under `/api/sleep/v2/sessions`. It stores authenticated, individual sessions in MongoDB using ordinary standalone-compatible reads and writes.
+The [Sleep Journal F1 API](../../features/sleep-journal/contract-reconciliation.md) is implemented under `/api/sleep/v2/sessions`. It stores one Main Sleep per account and statistical day, supports backfill through today in the current Vietnam calendar week, and permits editing or deleting only the latest Main Sleep in that week. The contract covers RANGE and DURATION inputs, mutation eligibility and errors.
 
 ## Legacy daily contract
 

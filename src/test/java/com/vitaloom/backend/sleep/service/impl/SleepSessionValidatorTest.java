@@ -13,6 +13,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 class SleepSessionValidatorTest {
     private static final Instant NOW = Instant.parse("2026-11-13T12:00:00Z");
+    private static final Instant DST_GAP_NOW = Instant.parse("2026-03-08T12:00:00Z");
+    private static final Instant DST_OVERLAP_NOW = Instant.parse("2026-11-01T12:00:00Z");
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     @Test
@@ -40,6 +42,28 @@ class SleepSessionValidatorTest {
     }
 
     @Test
+    void acceptsOnlyMainSleepAndRejectsPreviousWeekWithLockedError() {
+        SleepFailure nap = assertThrows(SleepFailure.class,
+                () -> validate(new SessionWrite("NAP", "DURATION", null, null, null, null,
+                        "2026-11-13", json("60")), null));
+        assertEquals("SLEEP_VALIDATION", nap.code());
+
+        SleepFailure previousWeek = assertThrows(SleepFailure.class,
+                () -> validate(duration(60, "2026-11-08", null), null));
+        assertEquals(409, previousWeek.status());
+        assertEquals("SLEEP_WEEK_LOCKED", previousWeek.code());
+    }
+
+    @Test
+    void allowsMondayAndTodayButRejectsFutureSaturday() {
+        assertEquals("2026-11-09", validate(duration(60, "2026-11-09", null), null).getDay());
+        assertEquals("2026-11-13", validate(duration(60, "2026-11-13", null), null).getDay());
+        SleepFailure future = assertThrows(SleepFailure.class,
+                () -> validate(duration(60, "2026-11-14", null), null));
+        assertEquals("SLEEP_VALIDATION", future.code());
+    }
+
+    @Test
     void allowsRangeEndpointsThatMeetExactlyAndUsesElapsedTime() {
         SessionWrite request = range("UTC", "2026-11-12", "23", "30", null,
                 "2026-11-13", "00", "30", null);
@@ -52,22 +76,22 @@ class SleepSessionValidatorTest {
     void rejectsNonexistentAndAmbiguousLocalTimesWithoutExplicitChoice() {
         SessionWrite gap = range("America/New_York", "2026-03-08", "02", "30", null,
                 "2026-03-08", "03", "30", null);
-        assertThrows(SleepFailure.class, () -> validate(gap, null));
+        assertThrows(SleepFailure.class, () -> validate(gap, null, DST_GAP_NOW));
 
         SessionWrite ambiguous = range("America/New_York", "2026-11-01", "01", "30", null,
                 "2026-11-01", "02", "30", null);
-        assertThrows(SleepFailure.class, () -> validate(ambiguous, null));
+        assertThrows(SleepFailure.class, () -> validate(ambiguous, null, DST_OVERLAP_NOW));
     }
 
     @Test
     void honorsExplicitDstOffsetAndRejectsInvalidOffset() {
         SessionWrite request = range("America/New_York", "2026-11-01", "01", "30", "-240",
                 "2026-11-01", "02", "30", "-300");
-        assertEquals(120, validate(request, null).getMinutes());
+        assertEquals(120, validate(request, null, DST_OVERLAP_NOW).getMinutes());
 
         SessionWrite invalidOffset = range("America/New_York", "2026-11-01", "01", "30", "0",
                 "2026-11-01", "02", "30", "-300");
-        assertThrows(SleepFailure.class, () -> validate(invalidOffset, null));
+        assertThrows(SleepFailure.class, () -> validate(invalidOffset, null, DST_OVERLAP_NOW));
     }
 
     @Test
@@ -90,6 +114,10 @@ class SleepSessionValidatorTest {
         return SleepSessionValidator.validate(request, existing, "session", "account", NOW);
     }
 
+    private static SleepSession validate(SessionWrite request, SleepSession existing, Instant now) {
+        return SleepSessionValidator.validate(request, existing, "session", "account", now);
+    }
+
     private static SessionWrite duration(int minutes, String endDay, String feeling) {
         return durationNode(Integer.toString(minutes), endDay, feeling);
     }
@@ -101,7 +129,7 @@ class SleepSessionValidatorTest {
     private static SessionWrite range(String zone, String startDay, String startHour, String startMinute,
                                       String startOffset, String endDay, String endHour, String endMinute,
                                       String endOffset) {
-        return new SessionWrite("NAP", "RANGE", null, zone,
+        return new SessionWrite("MAIN", "RANGE", null, zone,
                 civil(startDay, startHour, startMinute, startOffset),
                 civil(endDay, endHour, endMinute, endOffset), null, null);
     }

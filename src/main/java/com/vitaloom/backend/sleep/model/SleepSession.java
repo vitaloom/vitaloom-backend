@@ -42,6 +42,11 @@ public class SleepSession extends BaseDocument {
         this.endAt = endAt;
     }
 
+    public SleepSession withConfirmedAt(Instant value) {
+        return new SleepSession(getId(), owner, sleepType, method, minutes, day, feeling, value,
+                timeZone, start, end, startAt, endAt);
+    }
+
     public record CivilTime(
             @org.springframework.data.mongodb.core.mapping.Field("day") String day,
             @org.springframework.data.mongodb.core.mapping.Field("hour") String hour,

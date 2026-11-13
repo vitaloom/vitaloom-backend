@@ -16,13 +16,18 @@ public record SessionResponse(
         @JsonInclude(JsonInclude.Include.NON_NULL) CivilTime start,
         @JsonInclude(JsonInclude.Include.NON_NULL) CivilTime end,
         @JsonInclude(JsonInclude.Include.NON_NULL) Instant startAt,
-        @JsonInclude(JsonInclude.Include.NON_NULL) Instant endAt) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) Instant endAt,
+        boolean editable) {
 
     public static SessionResponse from(SleepSession session) {
+        return from(session, false);
+    }
+
+    public static SessionResponse from(SleepSession session, boolean editable) {
         return new SessionResponse(session.getId(), session.getConfirmedAt(),
                 session.getSleepType(), session.getMethod(), session.getFeeling(), session.getDay(),
                 session.getMinutes(), session.getTimeZone(), CivilTime.from(session.getStart()), CivilTime.from(session.getEnd()),
-                session.getStartAt(), session.getEndAt());
+                session.getStartAt(), session.getEndAt(), editable);
     }
 
     public record CivilTime(String day, String hour, String minute,
