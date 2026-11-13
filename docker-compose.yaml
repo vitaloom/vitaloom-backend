@@ -55,6 +55,9 @@ services:
       NGINX_ENVSUBST_FILTER: '^SERVER_PORT$$'
     volumes:
       - ./nginx/default.conf:/etc/nginx/templates/default.conf.template:ro
+#    depends_on:
+#      server:
+#        condition: service_healthy
     networks:
       - vitaloom-network
 
