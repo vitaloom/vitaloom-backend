@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.vitaloom.backend.auth.service.JwtTokenService;
+import com.vitaloom.backend.support.MongoTestcontainersConfiguration;
 import com.vitaloom.backend.steps.model.StepMeasurement;
 import com.vitaloom.backend.steps.goal.model.StepGoalSnapshot;
 import com.vitaloom.backend.steps.goal.repository.StepGoalRepository;
@@ -35,11 +36,14 @@ import org.springframework.data.mongodb.core.index.IndexInfo;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest
+@TestPropertySource(locations = "/mongo-integration-test.properties",
+        properties = "vitaloom.test.mongodb.database=steps_test")
 @AutoConfigureMockMvc
-@Import(StepsMongoIntegrationTest.FixedClockConfig.class)
+@Import({StepsMongoIntegrationTest.FixedClockConfig.class, MongoTestcontainersConfiguration.class})
 class StepsMongoIntegrationTest {
     private static final Instant NOW = Instant.parse("2026-11-10T01:00:00Z");
 
