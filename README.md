@@ -87,6 +87,10 @@ The application listens on port `8080` by default. Override it with `SERVER_PORT
 
 After changing `SERVER_PORT`, restart Spring Boot and run `docker compose up -d --no-deps nginx` to apply the new upstream port. With the default gateway port, `GET http://localhost/api/health` checks connectivity through Nginx.
 
+Nginx defines rate-limit zones in `nginx/rate-limit-zones.conf` and applies them in `nginx/rate-limit-routes.conf`. After changing either file, recreate the gateway with `docker compose up -d --no-deps --force-recreate nginx`.
+
+For an isolated backend benchmark with several simulated users on one IP, set `INGESTION_LIMIT_DRY_RUN=on` in the test Compose environment before recreating Nginx. The default is `off`, which enforces both ingestion limits.
+
 The auth feature provides `POST /api/auth/register`, `/login`, `/refresh` and protected `GET /api/auth/me`. The protected Water Tracking MVP provides daily and weekly reads plus log creation; see the [Water contract](./docs/features/water/api-contract.md). Heart Rate and Steps batch ingestion and statistics routes are listed in the [API contract index](./docs/api/api-contract.md).
 
 ## 4. Run tests
