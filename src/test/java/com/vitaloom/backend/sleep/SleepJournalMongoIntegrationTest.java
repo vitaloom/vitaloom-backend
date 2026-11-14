@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.vitaloom.backend.auth.service.JwtTokenService;
+import com.vitaloom.backend.support.MongoTestcontainersConfiguration;
 import com.vitaloom.backend.sleep.model.SleepSession;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -35,12 +36,15 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@TestPropertySource(locations = "/mongo-integration-test.properties",
+        properties = "vitaloom.test.mongodb.database=sleep_test")
 @AutoConfigureMockMvc
-@Import(SleepJournalMongoIntegrationTest.SleepClockConfig.class)
+@Import({SleepJournalMongoIntegrationTest.SleepClockConfig.class, MongoTestcontainersConfiguration.class})
 class SleepJournalMongoIntegrationTest {
     private static final String SESSIONS = "/api/sleep/v2/sessions";
     private static final Instant FRIDAY = Instant.parse("2026-11-13T12:00:00Z");

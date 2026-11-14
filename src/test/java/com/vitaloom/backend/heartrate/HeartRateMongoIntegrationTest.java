@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
 import com.vitaloom.backend.auth.service.JwtTokenService;
+import com.vitaloom.backend.support.MongoTestcontainersConfiguration;
 import com.vitaloom.backend.heartrate.model.HeartRateMeasurement;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -20,15 +21,20 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 @SpringBootTest
+@TestPropertySource(locations = "/mongo-integration-test.properties",
+        properties = "vitaloom.test.mongodb.database=heartrate_test")
 @AutoConfigureMockMvc
+@Import(MongoTestcontainersConfiguration.class)
 class HeartRateMongoIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired JwtTokenService tokens;

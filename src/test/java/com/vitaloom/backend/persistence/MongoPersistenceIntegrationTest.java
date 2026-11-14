@@ -6,11 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.vitaloom.backend.auth.model.User;
 import com.vitaloom.backend.auth.repository.UserRepository;
 import com.vitaloom.backend.heartrate.model.HeartRateMeasurement;
 import com.vitaloom.backend.steps.model.StepMeasurement;
+import com.vitaloom.backend.support.MongoTestcontainersConfiguration;
 import com.vitaloom.backend.water.model.WaterLog;
 import com.vitaloom.backend.water.repository.WaterLogRepository;
 import java.time.Clock;
@@ -36,13 +38,17 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.test.context.TestPropertySource;
 
 @SpringBootTest
-@Import(MongoPersistenceIntegrationTest.PersistenceTestConfig.class)
+@TestPropertySource(locations = "/mongo-integration-test.properties",
+        properties = "vitaloom.test.mongodb.database=persistence_test")
+@Import({MongoPersistenceIntegrationTest.PersistenceTestConfig.class, MongoTestcontainersConfiguration.class})
 class MongoPersistenceIntegrationTest {
     private static final Instant CREATED_AT = Instant.parse("2026-11-10T01:00:00Z");
     private static final Instant UPDATED_AT = Instant.parse("2026-11-10T02:00:00Z");
 
+    @Autowired MongoClient mongoClient;
     @Autowired MongoTemplate mongo;
     @Autowired UserRepository users;
     @Autowired WaterLogRepository waterLogs;
@@ -142,6 +148,23 @@ class MongoPersistenceIntegrationTest {
         assertIndex("water_logs", "user_logged_at_idx",
                 new Document("user_id", 1).append("logged_at", -1), null);
         assertIndex("users", "emailNormalized", new Document("email_normalized", 1), true);
+    }
+
+    @Test
+    void supportsTransactionsOnTheReplicaSet() {
+        Document hello = mongo.getDb().runCommand(new Document("hello", 1));
+        assertNotNull(hello.getString("setName"));
+        assertEquals(true, hello.getBoolean("isWritablePrimary"));
+
+        MongoCollection<Document> usersCollection = collection("users");
+        Document userDocument = new Document("_id", new ObjectId()).append("email_normalized", email);
+        try (var session = mongoClient.startSession()) {
+            session.startTransaction();
+            usersCollection.insertOne(session, userDocument);
+            assertNotNull(usersCollection.find(session, new Document("_id", userDocument.getObjectId("_id"))).first());
+            session.abortTransaction();
+        }
+        assertNull(usersCollection.find(new Document("_id", userDocument.getObjectId("_id"))).first());
     }
 
     private Document rawDocument(String collectionName, String id) {
