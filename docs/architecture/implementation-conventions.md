@@ -105,6 +105,8 @@ The shared injected `Clock` supplies time-dependent services and Mongo auditing.
 - Keep tests deterministic. Prefer an injected `Clock` over assumptions about the machine's current time.
 - Do not add tests merely to mirror package moves, generated constructors or trivial delegation.
 
+For MongoDB integration tests, follow [StepsMongoIntegrationTest](../../src/test/java/com/vitaloom/backend/steps/StepsMongoIntegrationTest.java). Import `MongoTestcontainersConfiguration`, load `mongo-integration-test.properties` via `@TestPropertySource`, and give each test class a unique `vitaloom.test.mongodb.database` value. The shared configuration owns the lifecycle of one MongoDB container per test JVM. These tests must run with Docker Compose stopped.
+
 ## 9. Comments and adoption
 
 - Names and structure should carry the intent. Comments should explain only non-obvious reasons, invariants, ordering constraints or trade-offs.
