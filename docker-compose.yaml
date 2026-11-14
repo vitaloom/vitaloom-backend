@@ -52,9 +52,12 @@ services:
       - "${NGINX_PORT:-80}:80"
     environment:
       SERVER_PORT: ${SERVER_PORT:-8080}
-      NGINX_ENVSUBST_FILTER: '^SERVER_PORT$$'
+      INGESTION_LIMIT_DRY_RUN: ${INGESTION_LIMIT_DRY_RUN:-off}
+      NGINX_ENVSUBST_FILTER: '^(SERVER_PORT|INGESTION_LIMIT_DRY_RUN)$$'
     volumes:
       - ./nginx/default.conf:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/rate-limit-zones.conf:/etc/nginx/vitaloom/rate-limit-zones.conf:ro
+      - ./nginx/rate-limit-routes.conf:/etc/nginx/templates/rate-limit-routes.inc.template:ro
 #    depends_on:
 #      server:
 #        condition: service_healthy
