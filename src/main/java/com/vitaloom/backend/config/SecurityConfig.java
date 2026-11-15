@@ -45,7 +45,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/me").authenticated()
                         .requestMatchers("/api/water/**").authenticated()
                         .requestMatchers("/api/sleep/recent", "/api/sleep/insights", "/api/sleep/insights/**").authenticated()
-                        .requestMatchers("/api/sleep/ai/consent", "/api/sleep/recent/story").authenticated()
+                        .requestMatchers("/api/sleep/ai/consent", "/api/sleep/ai/explanations", "/api/sleep/recent/story").authenticated()
                         .requestMatchers("/api/sleep/v2/**").authenticated()
                         .requestMatchers("/api/**").permitAll()
                         .anyRequest().denyAll())

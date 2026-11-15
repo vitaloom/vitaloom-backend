@@ -12,4 +12,9 @@ public class DeterministicSleepStoryProvider implements SleepStoryService.Provid
     public SleepStoryService.Story generate(SleepStoryService.Evidence evidence) {
         return SleepStoryService.preview(evidence);
     }
+
+    @Override
+    public SleepStoryService.Explanation explain(SleepStoryService.Evidence evidence) {
+        return SleepStoryService.explanationPreview(evidence);
+    }
 }

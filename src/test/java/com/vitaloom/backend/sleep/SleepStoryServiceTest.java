@@ -4,11 +4,13 @@ import com.vitaloom.backend.sleep.service.DeterministicSleepStoryProvider;
 import com.vitaloom.backend.sleep.service.SleepStoryService;
 import com.vitaloom.backend.sleep.service.SleepStoryService.Consent;
 import com.vitaloom.backend.sleep.service.SleepStoryService.ConsentStore;
+import com.vitaloom.backend.sleep.service.SleepStoryService.Explanation;
 import com.vitaloom.backend.sleep.service.SleepStoryService.Observation;
 import com.vitaloom.backend.sleep.service.SleepStoryService.Provider;
 import com.vitaloom.backend.sleep.service.SleepStoryService.Story;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.Insights;
+import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.Detail;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.Item;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.Period;
 import java.time.LocalDate;
@@ -82,6 +84,38 @@ class SleepStoryServiceTest {
     }
 
     @Test
+    void explanationIsConsentGatedAndUsesCurrentEvidence() {
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.detail("owner", "B01")).thenReturn(detail("current"));
+        when(provider.explain(any())).thenAnswer(invocation -> SleepStoryService.explanationPreview(invocation.getArgument(0)));
+        var response = service.explanation("owner", "B01", "current");
+        assertThat(response.status()).isEqualTo("EXPLANATION");
+        assertThat(response.evidenceFingerprint()).isEqualTo("current");
+        verify(provider).explain(any());
+    }
+
+    @Test
+    void explanationDoesNotCallProviderWhenConsentIsOffOrVersionIsStale() {
+        when(consent.read("owner")).thenReturn(new Consent(false, "off"));
+        assertThat(service.explanation("owner", "B01", "current").status()).isEqualTo("CONSENT_REQUIRED");
+        verifyNoInteractions(insights, provider);
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.detail("owner", "B01")).thenReturn(detail("current"));
+        assertThat(service.explanation("owner", "B01", "old").status()).isEqualTo("STALE");
+        verifyNoInteractions(provider);
+    }
+
+    @Test
+    void explanationRejectsFabricatedTextWithTheCorrectFingerprint() {
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.detail("owner", "B01")).thenReturn(detail("current"));
+        when(provider.explain(any())).thenReturn(new Explanation("Bạn ngủ tốt hơn 99%", "99 ngày", "Không có", "current"));
+        var result = service.explanation("owner", "B01", "current");
+        assertThat(result.status()).isEqualTo("FALLBACK");
+        assertThat(result.observation()).doesNotContain("99");
+    }
+
+    @Test
     void providerRequiresExplicitEnableAndNonProductionProfile() {
         var context = new ApplicationContextRunner().withUserConfiguration(DeterministicSleepStoryProvider.class);
         var enabled = context.withPropertyValues("vitaloom.sleep.story.enabled=true");
@@ -97,6 +131,13 @@ class SleepStoryServiceTest {
     private static Insights snapshot(Item... items) {
         return new Insights(new Period(LocalDate.of(2026, 11, 9), LocalDate.of(2026, 11, 15),
                 "Asia/Ho_Chi_Minh"), List.of(items));
+    }
+
+    private static Detail detail(String version) {
+        var item = item("B01", version);
+        return new Detail(item.code(), item.category(), item.status(), snapshot(item).period(), item.title(),
+                item.summary(), item.sample(), item.evidence(), item.sourceRefs(), item.limitations(),
+                item.policyVersion(), version);
     }
 
     private static Item item(String code, String fingerprint) {

@@ -67,6 +67,44 @@ public class SleepStoryService {
         return new Response("STORY", output.headline(), List.copyOf(output.observations()));
     }
 
+    public ExplanationResponse explanation(String owner, String code, String versionHint) {
+        Provider provider = providers.getIfAvailable();
+        if (provider == null) return ExplanationResponse.empty("DISABLED");
+        Consent before = consent.read(owner);
+        if (!before.enabled()) return ExplanationResponse.empty("CONSENT_REQUIRED");
+        Evidence original = explanationEvidence(owner, code);
+        if (original.candidates().isEmpty()) return ExplanationResponse.empty("INELIGIBLE");
+        Candidate selected = original.candidates().getFirst();
+        if (versionHint != null && !versionHint.isBlank() && !versionHint.equals(selected.fingerprint())) {
+            return ExplanationResponse.empty("STALE");
+        }
+        Explanation output;
+        try {
+            output = provider.explain(original);
+        } catch (RuntimeException failure) {
+            output = null;
+        }
+        Evidence current = explanationEvidence(owner, code);
+        if (!before.equals(consent.read(owner))) return ExplanationResponse.empty("CONSENT_REQUIRED");
+        if (current.candidates().isEmpty()) return ExplanationResponse.empty("INELIGIBLE");
+        if (!original.equals(current)) {
+            return ExplanationResponse.empty("STALE");
+        }
+        Explanation fallback = explanationPreview(current);
+        if (!fallback.equals(output) || wordCount(fallback.observation()) + wordCount(fallback.evidenceBasis())
+                + wordCount(fallback.limitations()) > 150) {
+            return ExplanationResponse.fallback(fallback);
+        }
+        return ExplanationResponse.generated(output);
+    }
+
+    private Evidence explanationEvidence(String owner, String code) {
+        var detail = insights.detail(owner, code);
+        if (!"READY".equals(detail.status())) return new Evidence(detail.period(), List.of());
+        return new Evidence(detail.period(), List.of(normalize(
+                detail.code(), detail.policyVersion(), detail.evidenceVersion(), detail.sample(), detail.evidence())));
+    }
+
     private Evidence evidence(String owner) {
         var published = insights.insights(owner);
         if (published.items().stream().anyMatch(item -> "UNVERIFIED_DATA".equals(item.status()))) {
@@ -80,21 +118,24 @@ public class SleepStoryService {
     }
 
     private static Candidate normalize(Item item) {
-        if ("A01".equals(item.code())) {
-            return new Candidate(item.code(), item.policyVersion(), item.evidenceVersion(),
-                    sample(item, "recordedMainDays"), 0, 0, 0, 0);
+        return normalize(item.code(), item.policyVersion(), item.evidenceVersion(), item.sample(), item.evidence());
+    }
+
+    private static Candidate normalize(String code, String policy, String fingerprint, Map<String, Object> sample,
+            Map<String, Object> evidence) {
+        if ("A01".equals(code)) {
+            return new Candidate(code, policy, fingerprint, number(sample, "recordedMainDays"), 0, 0, 0, 0);
         }
-        return new Candidate(item.code(), item.policyVersion(), item.evidenceVersion(),
-                sample(item, "ratedMain"), sample(item, "mainWithoutFeeling"),
-                count(item, "comfortable"), count(item, "normal"), count(item, "tired"));
+        return new Candidate(code, policy, fingerprint, number(sample, "ratedMain"), number(sample, "mainWithoutFeeling"),
+                count(evidence, "comfortable"), count(evidence, "normal"), count(evidence, "tired"));
     }
 
-    private static int sample(Item item, String key) {
-        return ((Number) item.sample().get(key)).intValue();
+    private static int number(Map<String, Object> values, String key) {
+        return ((Number) values.get(key)).intValue();
     }
 
-    private static int count(Item item, String category) {
-        var distribution = (Map<?, ?>) item.evidence().get(category);
+    private static int count(Map<String, Object> evidence, String category) {
+        var distribution = (Map<?, ?>) evidence.get(category);
         return ((Number) distribution.get("count")).intValue();
     }
 
@@ -134,6 +175,22 @@ public class SleepStoryService {
         return words <= 120 && codes.stream().anyMatch(code -> !"A01".equals(code));
     }
 
+    public static Explanation explanationPreview(Evidence evidence) {
+        Candidate candidate = evidence.candidates().get(0);
+        if ("A01".equals(candidate.code())) {
+            return new Explanation("Bạn đã ghi lại giấc ngủ chính trong %d ngày.".formatted(candidate.sample()),
+                    "Từ %s đến %s, mỗi ngày có bản ghi giấc ngủ chính được tính một lần trong tổng số 7 ngày."
+                            .formatted(evidence.period().start(), evidence.period().end()),
+                    "Số ngày có bản ghi không phản ánh thời lượng hay chất lượng giấc ngủ.", candidate.fingerprint());
+        }
+        return new Explanation(
+                "Đây là các cảm nhận bạn tự ghi lại sau giấc ngủ chính.",
+                "Trong kỳ %s đến %s, có %d lần tự báo cáo: %d thoải mái, %d bình thường và %d mệt mỏi."
+                        .formatted(evidence.period().start(), evidence.period().end(), candidate.sample(),
+                                candidate.comfortable(), candidate.normal(), candidate.tired()),
+                "Đây là mô tả từ dữ liệu tự ghi nhận, không phải kết luận sức khỏe.", candidate.fingerprint());
+    }
+
     private static int wordCount(String text) {
         return text.strip().split("\\s+").length;
     }
@@ -145,6 +202,7 @@ public class SleepStoryService {
 
     public interface Provider {
         Story generate(Evidence evidence);
+        default Explanation explain(Evidence evidence) { return null; }
     }
 
     public record Consent(boolean enabled, String revision) {}
@@ -166,6 +224,21 @@ public class SleepStoryService {
     }
     public record Story(String headline, List<Observation> observations) {}
     public record Observation(String insightCode, String text, String dataContext, String evidenceFingerprint) {}
+    public record Explanation(String observation, String evidenceBasis, String limitations, String evidenceFingerprint) {}
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record ExplanationResponse(String status, String observation, String evidenceBasis, String limitations,
+            String evidenceFingerprint) {
+        static ExplanationResponse empty(String status) { return new ExplanationResponse(status, null, null, null, null); }
+        static ExplanationResponse generated(Explanation value) {
+            return new ExplanationResponse("EXPLANATION", value.observation(), value.evidenceBasis(), value.limitations(),
+                    value.evidenceFingerprint());
+        }
+        static ExplanationResponse fallback(Explanation value) {
+            return new ExplanationResponse("FALLBACK", value.observation(), value.evidenceBasis(), value.limitations(),
+                    value.evidenceFingerprint());
+        }
+    }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Response(String status, String headline, List<Observation> observations) {

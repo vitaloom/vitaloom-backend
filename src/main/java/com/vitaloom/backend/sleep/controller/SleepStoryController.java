@@ -9,6 +9,7 @@ import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -42,6 +43,20 @@ public class SleepStoryController {
     public ResponseEntity<Response> recentStory(Authentication auth, HttpServletRequest request) {
         rejectParameters(request);
         return noStore(story.story(auth.getName()));
+    }
+
+    @PostMapping("/api/sleep/ai/explanations")
+    public ResponseEntity<SleepStoryService.ExplanationResponse> explanation(Authentication auth,
+            HttpServletRequest request, @RequestBody(required = false) JsonNode body) {
+        rejectParameters(request);
+        if (body == null || !body.isObject() || !body.path("insightCode").isTextual()
+                || !java.util.Set.of("A01", "B01").contains(body.path("insightCode").asText())
+                || body.size() != (body.has("evidenceVersion") ? 2 : 1)
+                || (body.has("evidenceVersion") && !body.path("evidenceVersion").isTextual())) {
+            throw new SleepFailure(400, "INVALID_REQUEST", "A supported insightCode and optional evidenceVersion are accepted.");
+        }
+        return noStore(story.explanation(auth.getName(), body.path("insightCode").asText(),
+                body.has("evidenceVersion") ? body.path("evidenceVersion").asText() : null));
     }
 
     private static void rejectParameters(HttpServletRequest request) {
