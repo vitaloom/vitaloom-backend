@@ -10,11 +10,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.jayway.jsonpath.JsonPath;
 import com.vitaloom.backend.auth.service.JwtTokenService;
 import com.vitaloom.backend.sleep.controller.SleepReportInsightController;
+import com.vitaloom.backend.sleep.goal.SleepGoalRepository;
+import com.vitaloom.backend.sleep.goal.SleepGoalService;
 import com.vitaloom.backend.sleep.model.SleepSession;
 import com.vitaloom.backend.sleep.model.SleepSession.CivilTime;
 import com.vitaloom.backend.support.MongoTestcontainersConfiguration;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -44,10 +47,12 @@ class SleepRecentReportMongoIntegrationTest {
     private static final String INSIGHTS = "/api/sleep/insights";
     private static final String CONSENT = "/api/sleep/ai/consent";
     private static final String STORY = "/api/sleep/recent/story";
+    private static final String GOAL = "/api/sleep/goal";
 
     @Autowired MockMvc mvc;
     @Autowired JwtTokenService tokens;
     @Autowired MongoTemplate mongo;
+    @Autowired SleepGoalRepository goalRepository;
     private final String owner = "sleep-recent-" + UUID.randomUUID();
     private final String other = "sleep-recent-" + UUID.randomUUID();
 
@@ -100,6 +105,78 @@ class SleepRecentReportMongoIntegrationTest {
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
         mvc.perform(auth(get(REPORT).queryParam("week", "2026-11-09"), owner))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+    }
+
+    @Test
+    void sleepGoalHistoryIsAuthenticatedVersionedAndEffectiveByDay() throws Exception {
+        mvc.perform(get(GOAL)).andExpect(status().isUnauthorized());
+        mvc.perform(auth(get(GOAL), owner)).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.minutes").value(nullValue()))
+                .andExpect(jsonPath("$.revision").value(0))
+                .andExpect(jsonPath("$.effectiveDay").value(nullValue()))
+                .andExpect(jsonPath("$.verified").value(true));
+        mvc.perform(auth(put(GOAL), owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"minutes\":480,\"revision\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.minutes").value(480))
+                .andExpect(jsonPath("$.revision").value(1)).andExpect(jsonPath("$.effectiveDay").value("2026-11-14"));
+        mvc.perform(auth(get(GOAL).queryParam("day", "2026-11-13"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.minutes").value(nullValue()));
+        mvc.perform(auth(get(GOAL).queryParam("day", "2026-11-14"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.minutes").value(480));
+        mvc.perform(auth(get(GOAL), other)).andExpect(status().isOk()).andExpect(jsonPath("$.minutes").value(nullValue()));
+        mvc.perform(auth(put(GOAL), owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"minutes\":480,\"revision\":0}"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("SLEEP_GOAL_CONFLICT"));
+        mvc.perform(auth(put(GOAL), owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"minutes\":61,\"revision\":1}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(auth(put(GOAL), owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"minutes\":480.5,\"revision\":1}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(auth(get(GOAL).queryParam("day", "2026-11-14", "2026-11-13"), owner))
+                .andExpect(status().isBadRequest());
+        mvc.perform(auth(get(GOAL).queryParam("day", "+10000-01-01"), owner))
+                .andExpect(status().isBadRequest());
+        mvc.perform(auth(delete(GOAL).queryParam("revision", "1", "2"), owner))
+                .andExpect(status().isBadRequest());
+        mvc.perform(auth(delete(GOAL).queryParam("revision", "1"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.minutes").value(nullValue())).andExpect(jsonPath("$.revision").value(2));
+        mvc.perform(auth(get(GOAL).queryParam("day", "2026-11-13"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.minutes").value(nullValue()));
+        mvc.perform(auth(get(GOAL).queryParam("day", "2026-11-14"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.minutes").value(nullValue())).andExpect(jsonPath("$.effectiveDay").value("2026-11-14"));
+        mvc.perform(auth(get(GOAL).queryParam("day", "2026-11-15"), owner)).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void sleepGoalRemovalPreservesThePreviousDayAcrossVietnamMidnight() throws Exception {
+        ZoneId zone = ZoneId.of("Asia/Ho_Chi_Minh");
+        Clock beforeMidnight = Clock.fixed(Instant.parse("2026-11-13T16:59:59Z"), ZoneOffset.UTC);
+        new SleepGoalService(goalRepository, beforeMidnight, zone).set(owner, 60, 0L);
+
+        mvc.perform(auth(get(GOAL), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.minutes").value(60))
+                .andExpect(jsonPath("$.effectiveDay").value("2026-11-13"));
+        mvc.perform(auth(put(GOAL), owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"minutes\":1440,\"revision\":1}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.minutes").value(1440))
+                .andExpect(jsonPath("$.effectiveDay").value("2026-11-14"));
+        for (int invalid : new int[] {45, 1455}) {
+            mvc.perform(auth(put(GOAL), owner).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"minutes\":" + invalid + ",\"revision\":2}"))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(auth(delete(GOAL).queryParam("revision", "2"), owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(3))
+                .andExpect(jsonPath("$.minutes").value(nullValue()))
+                .andExpect(jsonPath("$.effectiveDay").value("2026-11-14"));
+        mvc.perform(auth(get(GOAL).queryParam("day", "2026-11-13"), owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.minutes").value(60))
+                .andExpect(jsonPath("$.effectiveDay").value("2026-11-13"));
+        mvc.perform(auth(get(GOAL), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.minutes").value(nullValue()))
+                .andExpect(jsonPath("$.effectiveDay").value("2026-11-14"));
     }
 
     @Test

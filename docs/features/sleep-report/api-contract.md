@@ -2,6 +2,34 @@
 
 **Status** Implemented in P1. Business policy is defined in [SLT-UC-009](https://github.com/vitaloom/vitaloom-business-docs-and-tools/blob/ad9711e01dd486ae2e7b35275cbcacbf61cf65ed/docs/usecase_spec/sleep-tracking/f2-sleep-goals-insights/SLT-UC-009_kham-pha-sleep-insights.md), [Sleep F2 rules](https://github.com/vitaloom/vitaloom-business-docs-and-tools/blob/ad9711e01dd486ae2e7b35275cbcacbf61cf65ed/docs/usecase_spec/sleep-tracking/f2-sleep-goals-insights/rules.md) and [OW-01–61](https://github.com/vitaloom/vitaloom-business-docs-and-tools/blob/ad9711e01dd486ae2e7b35275cbcacbf61cf65ed/docs/usecase_spec/sleep-tracking/f2-sleep-goals-insights/observation-window-decisions-2026-11-14.md). See BR-F2.1–3, .10–11, .18–19, .22, .38–39 and OW-01–05, OW-14, OW-44–48, OW-54/60.
 
+The same contract also defines the authenticated Sleep Goal history operations for SLT-UC-008 and BR-F2.5/6/9/18.
+
+## Sleep Goal history
+
+Sleep owns account-scoped Goal history. All three endpoints require a Bearer access JWT and derive the account only from its subject. Responses use `Cache-Control: no-store`. Valid history is verified on read; malformed persisted history returns an error rather than an empty goal.
+
+### `GET /api/sleep/goal`
+
+Accepts optional `day=YYYY-MM-DD` to read the Goal effective on that day. The default is the current civil day in `Asia/Ho_Chi_Minh`. Dates after today, malformed dates, repeated `day` parameters and all other query parameters return `400`.
+
+`200 OK` returns the account's history revision and the latest snapshot on or before the requested day. No earlier snapshot returns null minutes and effectiveDay. A removal snapshot returns null minutes and its effective day, preserving the preceding snapshots for earlier dates.
+
+```json
+{"minutes":480,"revision":2,"effectiveDay":"2026-11-14","verified":true}
+```
+
+### `PUT /api/sleep/goal`
+
+Accepts exactly integer `minutes` and `revision`. Goal minutes must be 60–1440 inclusive in steps of 15. The current revision is required from a preceding confirmed read. On confirmation, the server records the new value effective today. A second confirmed change on the same day replaces that day's snapshot and advances the account history revision.
+
+### `DELETE /api/sleep/goal?revision=<current revision>`
+
+Writes a removal snapshot effective today. Earlier snapshots remain available to historical reads. The revision query parameter is required and must be the only query parameter.
+
+Both mutations return `200 OK` with the same shape as GET and the incremented revision. Mutations with stale revisions return `409 SLEEP_GOAL_CONFLICT`. Invalid inputs return `400 INVALID_SLEEP_GOAL` or `400 INVALID_REQUEST`. Revision values are limited to JavaScript's safe integer range so Mobile can round-trip them.
+
+The persistence document is keyed by account and uses one snapshot per effective day. Snapshot replacement and revision advancement are atomic within the document. Sleep exposes the effective-day lookup for server-owned Goal-dependent insight work. It does not calculate Statistics aggregates.
+
 ## Scope and ownership
 
 Sleep F2 owns the Recent Sleep Report workflow (SLT-UC-009), the HTTP endpoint in `SleepReportInsightController`, and the response contract. P1 exposes the rolling report and A01 highlight. [Sleep Journal F1](../sleep-journal/contract-reconciliation.md) owns record CRUD and canonical MAIN facts.
@@ -64,7 +92,7 @@ Use [shared Problem Details](../../api/api-contract.md#generic-error-response) w
 | 403 | `FORBIDDEN` | Authenticated request denied by shared security policy, when applicable |
 | 500 | `INTERNAL_ERROR` | Unexpected failure, including a failed Mongo read |
 
-A valid subject with an empty Journal receives `200 NO_DATA`. A request cannot select a different account. Goal history remains a later delivery phase.
+A valid subject with an empty Journal receives `200 NO_DATA`. A request cannot select a different account. Goal history is available through the [Sleep Goal endpoint](#sleep-goal-history).
 
 ## `GET /api/sleep/insights`
 

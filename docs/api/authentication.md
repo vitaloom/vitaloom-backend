@@ -30,6 +30,7 @@ Access JWTs expire after 15 minutes; refresh JWTs after 30 days. They use separa
 | `/api/water/**` | Bearer access JWT required; logs and summaries are scoped to JWT subject | Implemented |
 | `/api/sleep/v2/**` | Bearer access JWT required, scoped to JWT subject | Implemented |
 | `/api/sleep/recent` | Bearer access JWT required, scoped to JWT subject | Implemented |
+| `/api/sleep/goal` | Bearer access JWT required, history scoped to JWT subject | Implemented |
 | Cross-metric dashboard | Account-scoped access required before real multi-user use | Not yet enforced |
 
 Do not infer that a documented endpoint is implemented or safe for real multi-user private health data merely because an authentication flow exists. Each metric contract must state its route-level access behavior.
