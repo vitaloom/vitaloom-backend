@@ -29,9 +29,10 @@ public class SleepStoryController {
     }
 
     @PutMapping("/api/sleep/ai/consent")
-    public ResponseEntity<Preference> consent(Authentication auth, HttpServletRequest request, @RequestBody JsonNode body) {
+    public ResponseEntity<Preference> consent(Authentication auth, HttpServletRequest request,
+            @RequestBody(required = false) JsonNode body) {
         rejectParameters(request);
-        if (!body.isObject() || body.size() != 1 || !body.path("enabled").isBoolean()) {
+        if (body == null || !body.isObject() || body.size() != 1 || !body.path("enabled").isBoolean()) {
             throw new SleepFailure(400, "INVALID_REQUEST", "A boolean enabled field is required.");
         }
         return noStore(story.updatePreference(auth.getName(), body.path("enabled").asBoolean()));

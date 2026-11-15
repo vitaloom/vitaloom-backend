@@ -3,6 +3,7 @@ package com.vitaloom.backend.sleep;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -40,5 +41,36 @@ class SleepRecentReportErrorTest {
                 .andExpect(status().isInternalServerError())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+    }
+
+    @Test
+    void storyAndConsentErrorsUseSleepProblemDetails() throws Exception {
+        String authorization = "Bearer " + tokens.issueAccess("account-a", Instant.now());
+        String consent = "/api/sleep/ai/consent";
+        mvc.perform(get("/api/sleep/recent/story").param("owner", "another-account")
+                        .header("Authorization", authorization))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(put(consent).header("Authorization", authorization)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":\"true\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(put(consent).header("Authorization", authorization)
+                        .contentType(MediaType.APPLICATION_JSON).content("null"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(put(consent).header("Authorization", authorization)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(put(consent).header("Authorization", authorization)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":true}"))
+                .andExpect(status().isConflict())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("SLEEP_STORY_DISABLED"));
     }
 }
