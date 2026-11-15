@@ -1,7 +1,13 @@
+name: vitaloom-observability
+
 services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.149.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    depends_on:
+      cadvisor:
+        condition: service_started
+        restart: true
     ports:
       - "127.0.0.1:${OBS_OTLP_PORT:-4318}:4318"
     volumes:
@@ -10,13 +16,17 @@ services:
   cadvisor:
     image: ghcr.io/google/cadvisor:v0.60.6
     cgroup: host
+    pid: host
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     command:
       - --enable_metrics=cpu,memory,network
       - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.project,com.docker.compose.service
     volumes:
       - /sys:/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
 
 
   prometheus:

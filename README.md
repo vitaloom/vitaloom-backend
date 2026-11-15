@@ -111,7 +111,7 @@ On Windows, start the database and the separate monitoring stack, then run Sprin
 
 ```powershell
 docker compose up -d mongodb
-docker compose -p vitaloom-observability -f docker-compose.obs.yml up -d
+docker compose -f docker-compose.obs.yml up -d
 .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=observability"
 ```
 
@@ -123,13 +123,13 @@ Spring Boot pushes cumulative metrics every 15 seconds to the Collector on local
 - Open Prometheus at http://127.0.0.1:9090. Send requests to `GET /api/health` and check `http_server_requests_milliseconds_count{application="vitaloom-backend"}` and `http_server_requests_milliseconds_bucket{application="vitaloom-backend"}` after an export and scrape cycle. Rate and percentile panels need at least two samples.
 - `up{job="otel-collector"}` shows whether Prometheus can scrape the Collector. The dashboard also checks for a backend process metric, which expires after 45 seconds without updates, plus time for the next scrape to observe its absence.
 
-Stop the monitoring stack with `docker compose -p vitaloom-observability -f docker-compose.obs.yml down`. The Prometheus and Grafana volumes persist.
+Stop the monitoring stack with `docker compose -f docker-compose.obs.yml down`. The Prometheus and Grafana volumes persist.
 
 ### Docker container metrics
 
-The local observability Compose stack starts cAdvisor automatically. The Collector scrapes cAdvisor over the private Compose network. Open **VitaLoom Infrastructure** in Grafana and select a short container ID. Run `docker ps` to match IDs to names.
+The observability Compose stack starts cAdvisor automatically. Open **VitaLoom Infrastructure** in Grafana and select a container by name to see CPU, memory working set, and network receive and transmit rates. The Collector scrapes cAdvisor over the internal Compose network and keeps metrics for the `vitaloom-backend` and `vitaloom-observability` projects. Rate panels need at least two scrapes.
 
-The socket-free Docker Desktop configuration provides CPU and memory working set for individual containers. Per-container network counters are unavailable with these permissions, so the network panel shows no data. CPU rate needs at least two scrapes.
+On Docker Desktop with Linux containers, cAdvisor uses the Linux PID namespace, the Docker socket for container names, and the containerd socket for container metadata with the containerd image store. The sockets grant access to their respective APIs. Only cAdvisor mounts them, and its metrics port stays inside Compose.
 
 
 ## MongoDB lifecycle notes

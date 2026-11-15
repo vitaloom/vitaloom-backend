@@ -15,13 +15,11 @@ receivers:
             - source_labels: [__name__]
               regex: 'container_(cpu_usage_seconds_total|memory_working_set_bytes|network_(receive|transmit)_bytes_total)'
               action: keep
-            - source_labels: [id]
-              regex: '/(docker/[a-f0-9]{64}|system.slice/docker-[a-f0-9]{64}.scope)'
+            - source_labels: [name, container_label_com_docker_compose_project]
+              regex: '.+;(vitaloom-backend|vitaloom-observability)'
               action: keep
-            - source_labels: [id]
-              regex: '/(docker/|system[.]slice/docker-)([a-f0-9]{12})[a-f0-9]{52}([.]scope)?'
-              target_label: container_id
-              replacement: '$${2}'
+            - source_labels: [name]
+              target_label: container_name
 
 
 exporters:
