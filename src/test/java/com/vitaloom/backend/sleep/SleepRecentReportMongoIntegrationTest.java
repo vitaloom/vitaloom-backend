@@ -18,6 +18,7 @@ import com.vitaloom.backend.sleep.goal.SleepGoalHistory;
 import com.vitaloom.backend.support.MongoTestcontainersConfiguration;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -93,6 +94,81 @@ class SleepRecentReportMongoIntegrationTest {
                 .andExpect(jsonPath("$.averageMinutesPerRecordedDay").value(nullValue()))
                 .andExpect(jsonPath("$.insights.length()").value(0))
                 .andExpect(jsonPath("$.highlights.length()").value(0));
+    }
+
+    @Test
+    void fullCatalogPublishesRecentComparisonsAtTheirIndependentThresholds() throws Exception {
+        insertDurationWithFeeling(owner, "2026-11-08", 330, "TIRED");
+        insertDurationWithFeeling(owner, "2026-11-09", 480, "COMFORTABLE");
+        insertDurationWithFeeling(owner, "2026-11-10", 450, "COMFORTABLE");
+        insertDurationWithFeeling(owner, "2026-11-11", 420, "COMFORTABLE");
+        insertDurationWithFeeling(owner, "2026-11-12", 360, "TIRED");
+
+        mvc.perform(auth(get(INSIGHTS + "/A05"), owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("INSUFFICIENT_DATA"));
+        mvc.perform(auth(get(INSIGHTS + "/B02"), owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("INSUFFICIENT_DATA"));
+        insertDurationWithFeeling(owner, "2026-11-14", 390, "TIRED");
+        insertDurationWithFeeling(owner, "2026-11-13", 600, "NORMAL");
+
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "full"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(9))
+                .andExpect(jsonPath("$.timeZones.length()").value(0));
+        mvc.perform(auth(get(INSIGHTS + "/A05"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidence.weekday.days").value(5))
+                .andExpect(jsonPath("$.evidence.weekday.meanMinutes").value(462))
+                .andExpect(jsonPath("$.evidence.weekend.days").value(2))
+                .andExpect(jsonPath("$.evidence.deltaMinutes").value(102));
+        mvc.perform(auth(get(INSIGHTS + "/B02"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidence.comfortable.days").value(3))
+                .andExpect(jsonPath("$.evidence.tired.meanMinutes").value(360))
+                .andExpect(jsonPath("$.evidence.deltaMinutes").value(90))
+                .andExpect(jsonPath("$.sourceRefs.length()").value(6));
+        mvc.perform(auth(get(REPORT).queryParam("catalog", "full"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.highlights.length()").value(3))
+                .andExpect(jsonPath("$.highlights[0].code").value("B01"))
+                .andExpect(jsonPath("$.highlights[2].code").value("A05"))
+                .andExpect(jsonPath("$.insights[0].code").value("A01"));
+        mvc.perform(auth(get(INSIGHTS + "/B02"), other)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NO_DATA"))
+                .andExpect(jsonPath("$.evidence").doesNotExist());
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "full").queryParam("timeZone", "+07:00"), owner))
+                .andExpect(status().isBadRequest());
+        mvc.perform(auth(get(INSIGHTS + "/A05").queryParam("timeZone", "Asia/Ho_Chi_Minh"), owner))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void timingDetailUsesOnlyTheExplicitReferenceZoneFromTheAccountWindow() throws Exception {
+        String zone = "Asia/Ho_Chi_Minh";
+        insertRange("2026-11-09", zone, -60, 360);
+        insertRange("2026-11-10", zone, 10, 420);
+        insertRange("2026-11-11", zone, -30, 390);
+        insertRange("2026-11-12", "Asia/Tokyo", -120, 480);
+        insertDuration(owner, "MAIN", "2026-11-13", 500);
+
+        mvc.perform(auth(get(INSIGHTS + "/A04"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("INSUFFICIENT_DATA"));
+        var listing = mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "full").queryParam("timeZone", zone), owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.timeZones[0]").value(zone))
+                .andExpect(jsonPath("$.timeZones[1]").value("Asia/Tokyo")).andReturn();
+        var detail = mvc.perform(auth(get(INSIGHTS + "/A04").queryParam("timeZone", zone), owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY"))
+                .andExpect(jsonPath("$.sample.eligibleRangeDays").value(3))
+                .andExpect(jsonPath("$.evidence.bedtime.minMinute").value(-60))
+                .andExpect(jsonPath("$.evidence.bedtime.maxMinute").value(10))
+                .andExpect(jsonPath("$.evidence.wake.spanMinutes").value(60)).andReturn();
+        java.util.List<String> catalogVersion = JsonPath.read(listing.getResponse().getContentAsString(),
+                "$.items[?(@.code=='A04')].evidenceVersion");
+        org.assertj.core.api.Assertions.assertThat(catalogVersion).containsExactly(
+                JsonPath.<String>read(detail.getResponse().getContentAsString(), "$.evidenceVersion"));
+        mvc.perform(auth(get(INSIGHTS + "/A04").queryParam("timeZone", "Asia/Tokyo"), owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("INSUFFICIENT_DATA"));
+        mvc.perform(auth(get(REPORT).queryParam("catalog", "full").queryParam("timeZone", zone), owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.highlights[1].code").value("A04"));
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "full").queryParam("timeZone", zone), other))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.timeZones").isEmpty());
     }
 
     @Test
@@ -530,7 +606,7 @@ class SleepRecentReportMongoIntegrationTest {
         mvc.perform(auth(get(INSIGHTS).queryParam("accountId", other), owner)).andExpect(status().isBadRequest());
         mvc.perform(auth(get(INSIGHTS + "/B01").queryParam("start", "2026-11-08"), owner))
                 .andExpect(status().isBadRequest());
-        mvc.perform(auth(get(INSIGHTS + "/A05"), owner)).andExpect(status().isNotFound());
+        mvc.perform(auth(get(INSIGHTS + "/C01"), owner)).andExpect(status().isNotFound());
     }
 
     @Test
@@ -708,6 +784,19 @@ class SleepRecentReportMongoIntegrationTest {
         mongo.insert(new SleepSession(id, account, "MAIN", "DURATION", minutes,
                 day, feeling, Instant.parse("2026-11-14T00:00:00Z"), null, null, null, null, null));
         return id;
+    }
+
+    private void insertRange(String day, String zone, int bedtimeMinutes, int wakeMinutes) {
+        var midnight = LocalDate.parse(day).atStartOfDay();
+        var timezone = ZoneId.of(zone);
+        var start = midnight.plusMinutes(bedtimeMinutes).atZone(timezone);
+        var end = midnight.plusMinutes(wakeMinutes).atZone(timezone);
+        mongo.insert(new SleepSession(UUID.randomUUID().toString(), owner, "MAIN", "RANGE",
+                wakeMinutes - bedtimeMinutes, day, null, Instant.parse("2026-11-14T00:00:00Z"), zone,
+                new CivilTime(start.toLocalDate().toString(), "%02d".formatted(start.getHour()),
+                        "%02d".formatted(start.getMinute()), start.getOffset().getTotalSeconds() / 60.0),
+                new CivilTime(day, "%02d".formatted(end.getHour()), "%02d".formatted(end.getMinute()),
+                        end.getOffset().getTotalSeconds() / 60.0), start.toInstant(), end.toInstant()));
     }
 
     private String createDuration(String day, int minutes) throws Exception {

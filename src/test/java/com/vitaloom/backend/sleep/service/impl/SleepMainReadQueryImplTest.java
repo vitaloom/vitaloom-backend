@@ -66,8 +66,55 @@ class SleepMainReadQueryImplTest {
         assertTrue(result.records().isEmpty());
     }
 
+    @Test
+    void rangeWindowReturnsOnlyVerifiedRangeTimestampsAndKeepsDurationOutOfTimingData() {
+        when(repository.findMainByOwnerAndDayBetween("account-a", from.toString(), to.toString()))
+                .thenReturn(List.of(range("range", "2026-11-03"), session("duration", "DURATION", "2026-11-09", 451)));
+
+        var result = query.readRangeWindow("account-a", from, to);
+
+        assertTrue(result.verified());
+        assertEquals(List.of("range", "duration"), result.records().stream().map(value -> value.sourceId()).toList());
+        assertEquals(Instant.parse("2026-11-02T22:00:00Z"), result.records().getFirst().startAt());
+        assertNull(result.records().getLast().timeZone());
+        assertNull(result.records().getLast().startAt());
+        verify(repository).findMainByOwnerAndDayBetween("account-a", from.toString(), to.toString());
+    }
+
+    @Test
+    void malformedRangeTimestampMakesTimingWindowUnverified() {
+        var malformed = new SleepSession("bad", "account-a", "MAIN", "RANGE", 420,
+                "2026-11-03", null, Instant.parse("2026-11-09T16:00:00Z"), "UTC", null, null,
+                Instant.parse("2026-11-03T22:00:00Z"), null);
+        when(repository.findMainByOwnerAndDayBetween(any(), any(), any())).thenReturn(List.of(malformed));
+
+        var result = query.readRangeWindow("account-a", from, to);
+
+        assertFalse(result.verified());
+        assertTrue(result.records().isEmpty());
+    }
+
+    @Test
+    void fixedOffsetIsNotAcceptedAsAnIanaReferenceZone() {
+        var invalidZone = new SleepSession("offset", "account-a", "MAIN", "RANGE", 420,
+                "2026-11-03", null, Instant.parse("2026-11-09T16:00:00Z"), "+05:00", null, null,
+                Instant.parse("2026-11-02T22:00:00Z"), Instant.parse("2026-11-03T05:00:00Z"));
+        when(repository.findMainByOwnerAndDayBetween(any(), any(), any())).thenReturn(List.of(invalidZone));
+
+        var result = query.readRangeWindow("account-a", from, to);
+
+        assertFalse(result.verified());
+        assertTrue(result.records().isEmpty());
+    }
+
     private static SleepSession session(String id, String method, String day, int minutes) {
         return new SleepSession(id, "account-a", "MAIN", method, minutes, day, null,
                 Instant.parse("2026-11-09T16:00:00Z"), null, null, null, null, null);
+    }
+
+    private static SleepSession range(String id, String day) {
+        return new SleepSession(id, "account-a", "MAIN", "RANGE", 420, day, null,
+                Instant.parse("2026-11-09T16:00:00Z"), "UTC", null, null,
+                Instant.parse("2026-11-02T22:00:00Z"), Instant.parse("2026-11-03T05:00:00Z"));
     }
 }

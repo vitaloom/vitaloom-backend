@@ -10,7 +10,7 @@ import org.springframework.context.annotation.Configuration;
 class SleepRecentReportConfig {
     @Bean
     SleepRecentReportService sleepRecentReportService(SleepRecentStatisticsService statistics) {
-        return accountId -> toResponse(statistics.recent(accountId));
+        return (accountId, full, selectedZone) -> toResponse(statistics.recent(accountId, full, selectedZone));
     }
 
     private static SleepRecentReportResponse toResponse(SleepRecentStatisticsService.Report report) {

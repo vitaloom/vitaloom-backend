@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -60,6 +61,19 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
     @Override
     public Insights trendInsights(String accountId) {
         Period current = period();
+        var currentDuration = mainSleep.readWindow(accountId, current.start(), current.end());
+        return catalog(accountId, current, currentDuration, false, null).insights();
+    }
+
+    @Override
+    public Insights fullInsights(String accountId, ZoneId selectedZone) {
+        Period current = period();
+        var currentDuration = mainSleep.readWindow(accountId, current.start(), current.end());
+        return catalog(accountId, current, currentDuration, true, selectedZone).insights();
+    }
+
+    private CatalogSnapshot catalog(String accountId, Period current, MainSleepWindow currentDuration,
+            boolean full, ZoneId selectedZone) {
         Period recent = trendRecentPeriod(current);
         Period baseline = new Period(recent.start().minusDays(7), recent.start().minusDays(1), ZONE.getId());
         var recentDuration = mainSleep.readWindow(accountId, recent.start(), recent.end());
@@ -68,7 +82,6 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
         var baselineFeelings = mainSleep.readInsightWindow(accountId, baseline.start(), baseline.end());
         var recentWindow = read(accountId, current);
         var goalWindow = goals.readGoalWindow(accountId, current.start(), current.end());
-        var currentDuration = mainSleep.readWindow(accountId, current.start(), current.end());
         var a01 = recentA01(current, currentDuration);
         var a02 = a02(current, recentWindow, goalWindow);
         var b01 = b01(current, recentWindow);
@@ -76,11 +89,50 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
         var a03 = durationTrend(recent, baseline, recentDuration, baselineDuration);
         var b03 = feelingTrend(recent, baseline, recentFeelings, baselineFeelings);
         List<MainSleepInsight> records = new ArrayList<>(recentWindow.records());
+        records.addAll(recentFeelings.records());
         records.addAll(baselineFeelings.records());
         List<MainSleepDay> durations = new ArrayList<>(recentDuration.records());
         durations.addAll(baselineDuration.records());
         List<Item> items = new ArrayList<>(List.of(a01, a02, a03, b01, b03, b04));
-        return new Insights(current, orderCatalog(items, records, durations, currentDuration.records()));
+        List<String> timeZones = null;
+        if (full) {
+            var rangeWindow = mainSleep.readRangeWindow(accountId, current.start(), current.end());
+            items.add(SleepTimingInsight.evaluate(current, rangeWindow, selectedZone));
+            items.add(weekdayWeekend(current, currentDuration));
+            items.add(durationByFeeling(current, recentWindow));
+            timeZones = SleepTimingInsight.availableTimeZones(rangeWindow);
+        }
+        durations.addAll(currentDuration.records());
+        return new CatalogSnapshot(
+                new Insights(current, orderCatalog(items, records, durations, currentDuration.records()), timeZones),
+                recentWindow.records(), records, durations);
+    }
+
+    private record CatalogSnapshot(Insights insights, List<MainSleepInsight> currentRecords,
+            List<MainSleepInsight> records, List<MainSleepDay> durations) {}
+
+    @Override
+    public List<Highlight> fullHighlights(String accountId, Period period, MainSleepWindow currentDuration,
+            ZoneId selectedZone) {
+        if (!currentDuration.verified()) return List.of();
+        var snapshot = catalog(accountId, period, currentDuration, true, selectedZone);
+        Map<String, MainSleepInsight> byId = new java.util.HashMap<>();
+        snapshot.records().forEach(row -> byId.put(row.id(), row));
+        Map<String, MainSleepDay> durationsById = new java.util.HashMap<>();
+        snapshot.durations().forEach(row -> durationsById.put(row.sourceId(), row));
+        var candidates = snapshot.insights().items().stream()
+                .filter(item -> "READY".equals(item.status()))
+                .map(item -> {
+                    LocalDate day = "B01".equals(item.code())
+                            ? snapshot.currentRecords().stream().filter(SleepInsightsStatisticsServiceImpl::hasFeeling)
+                                    .map(MainSleepInsight::day).max(LocalDate::compareTo).orElseThrow()
+                            : freshest(item, byId, durationsById, snapshot.currentRecords(), currentDuration.records());
+                    return new SleepRecentHighlightRanker.Candidate(
+                            item.code(), item.status(), item.title(), item.summary(), day, sampleSize(item));
+                }).toList();
+        return SleepRecentHighlightRanker.rank(candidates).stream()
+                .map(candidate -> new Highlight(candidate.code(), candidate.status(), candidate.title(), candidate.summary()))
+                .toList();
     }
 
     @Override
@@ -110,7 +162,22 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
 
     @Override
     public Detail detail(String accountId, String code) {
+        return detail(accountId, code, null);
+    }
+
+    @Override
+    public Detail detail(String accountId, String code, ZoneId selectedZone) {
         Period period = period();
+        if (List.of("A04", "A05", "B02").contains(code)) {
+            Item item = switch (code) {
+                case "A04" -> SleepTimingInsight.evaluate(period,
+                        mainSleep.readRangeWindow(accountId, period.start(), period.end()), selectedZone);
+                case "A05" -> weekdayWeekend(period, mainSleep.readWindow(accountId, period.start(), period.end()));
+                default -> durationByFeeling(period, read(accountId, period));
+            };
+            return new Detail(item.code(), item.category(), item.status(), period, item.title(), item.summary(),
+                    item.sample(), item.evidence(), item.sourceRefs(), item.limitations(), item.policyVersion(), item.evidenceVersion());
+        }
         if ("A01".equals(code)) {
             MainSleepWindow window = mainSleep.readWindow(accountId, period.start(), period.end());
             var item = recentA01(period, window);
@@ -156,6 +223,56 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
                     item.sample(), item.evidence(), item.sourceRefs(), item.limitations(), item.policyVersion(), item.evidenceVersion());
         }
         throw new IllegalArgumentException("Unsupported insight code");
+    }
+
+    private Item weekdayWeekend(Period period, MainSleepWindow window) {
+        String title = "Weekday and weekend duration";
+        if (!window.verified()) return locked("A05", "A", "UNVERIFIED_DATA", title);
+        if (window.records().isEmpty()) return locked("A05", "A", "NO_DATA", title);
+        List<MainSleepDay> weekday = window.records().stream()
+                .filter(row -> row.day().getDayOfWeek().compareTo(DayOfWeek.SATURDAY) < 0).toList();
+        List<MainSleepDay> weekend = window.records().stream()
+                .filter(row -> row.day().getDayOfWeek().compareTo(DayOfWeek.SATURDAY) >= 0).toList();
+        if (weekday.size() < 3 || weekend.size() < 2) return locked("A05", "A", "INSUFFICIENT_DATA", title);
+        int weekdayMean = meanMinutes(weekday);
+        int weekendMean = meanMinutes(weekend);
+        int delta = weekdayMean - weekendMean;
+        return new Item("A05", "A", "READY", title, true, false,
+                "Mean Main Sleep duration was " + weekdayMean + " minutes on weekdays and " + weekendMean + " on weekends.",
+                Map.of("weekdayDays", weekday.size(), "weekendDays", weekend.size()),
+                Map.of("weekday", durationGroup(weekday.size(), weekdayMean),
+                        "weekend", durationGroup(weekend.size(), weekendMean), "deltaMinutes", delta),
+                window.records().stream().map(MainSleepDay::sourceId).sorted().toList(),
+                List.of("DESCRIPTIVE_ONLY", "NO_HEALTH_CLAIM"), POLICY,
+                evidenceVersionDays(period, window.records()));
+    }
+
+    private Item durationByFeeling(Period period, MainSleepInsightWindow window) {
+        String title = "Duration by feeling";
+        if (!window.verified()) return locked("B02", "B", "UNVERIFIED_DATA", title);
+        if (window.records().isEmpty()) return locked("B02", "B", "NO_DATA", title);
+        List<MainSleepInsight> comfortable = window.records().stream()
+                .filter(row -> "COMFORTABLE".equals(row.feeling())).toList();
+        List<MainSleepInsight> tired = window.records().stream().filter(row -> "TIRED".equals(row.feeling())).toList();
+        if (comfortable.size() < 3 || tired.size() < 3) return locked("B02", "B", "INSUFFICIENT_DATA", title);
+        int comfortableMean = meanMinutes(comfortable.stream()
+                .map(row -> new MainSleepDay(row.id(), row.day(), row.minutes())).toList());
+        int tiredMean = meanMinutes(tired.stream()
+                .map(row -> new MainSleepDay(row.id(), row.day(), row.minutes())).toList());
+        List<MainSleepInsight> sources = new ArrayList<>(comfortable);
+        sources.addAll(tired);
+        return new Item("B02", "B", "READY", title, true, false,
+                "Mean Main Sleep duration was " + comfortableMean + " minutes on Comfortable days and " + tiredMean
+                        + " on Tired days.",
+                Map.of("comfortableDays", comfortable.size(), "tiredDays", tired.size()),
+                Map.of("comfortable", durationGroup(comfortable.size(), comfortableMean),
+                        "tired", durationGroup(tired.size(), tiredMean), "deltaMinutes", comfortableMean - tiredMean),
+                sources.stream().map(MainSleepInsight::id).sorted().toList(), LIMITATIONS, POLICY,
+                evidenceVersion(period, sources, Map.of()));
+    }
+
+    private static Map<String, Object> durationGroup(int days, int meanMinutes) {
+        return Map.of("days", days, "meanMinutes", meanMinutes);
     }
 
     private Item durationTrend(Period recent, Period baseline, MainSleepWindow recentWindow, MainSleepWindow baselineWindow) {
@@ -356,7 +473,7 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
                     : currentDurationRows.stream().map(MainSleepDay::day).toList();
             return days.stream().max(LocalDate::compareTo).orElse(LocalDate.MIN);
         }
-        if ("A03".equals(item.code())) {
+        if (List.of("A03", "A04", "A05").contains(item.code())) {
             return item.sourceRefs().stream().map(durationsById::get).filter(java.util.Objects::nonNull)
                     .map(MainSleepDay::day).max(LocalDate::compareTo).orElse(LocalDate.MIN);
         }
@@ -368,6 +485,7 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
         String field = switch (item.code()) {
             case "A01" -> "recordedMainDays";
             case "A02" -> "eligibleMainDays";
+            case "A04" -> "eligibleRangeDays";
             case "B01", "B04" -> "ratedMain";
             default -> "";
         };
@@ -379,6 +497,7 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
             return ((Number) item.sample().get("baselineRatedMain")).intValue()
                     + ((Number) item.sample().get("recentRatedMain")).intValue();
         }
+        if ("A05".equals(item.code()) || "B02".equals(item.code())) return item.sourceRefs().size();
         Object value = item.sample().get(field);
         return value instanceof Number number ? number.intValue() : 0;
     }

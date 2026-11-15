@@ -54,10 +54,20 @@ A03 independently reads verified MAIN duration facts in both periods. READY requ
 
 B03 independently reads verified MAIN facts and requires at least three rated MAIN in each period. Unrated MAIN is excluded from each distribution denominator and reported as `mainWithoutFeeling`. Its sample has `baselineRatedMain`, `recentRatedMain`, `baselineMainWithoutFeeling` and `recentMainWithoutFeeling`. Evidence has `baseline` and `recent` objects with `period`, `ratedMain`, `mainWithoutFeeling` and `comfortable`, `normal` and `tired` `{count,denominator,percentage}` distributions. `deltaPercentagePoints` reports signed recent-minus-baseline percentage-point changes for all three categories, rounded to two decimal places from the unrounded shares. Both insights are descriptive and make no health claim. Non-READY responses omit sample and evidence. A trend is `NO_DATA` when neither period has MAIN, `INSUFFICIENT_DATA` when either threshold is unmet, and `UNVERIFIED_DATA` when either period cannot be verified.
 
+## A04, A05 and B02 in the full catalog
+
+`catalog=full` returns nine A/B items in the same category and eligibility order. Only this catalog adds top-level `timeZones`, a sorted list of distinct reference IANA zones found on verified, valid MAIN RANGE records in the account's current rolling window. The list is empty when no zone is available or the RANGE history cannot be verified. An optional single, case-sensitive `timeZone` query selects which records can contribute to A04. The service never selects a zone automatically. The full catalog, full Recent and A04 Detail accept the same zone input. Invalid or repeated zone parameters return `400 INVALID_REQUEST`. A valid zone with insufficient matching data gives a locked A04.
+
+- A05 uses the current `[D−6,D]` window. READY requires at least three recorded weekdays and two recorded weekend days. Both RANGE and DURATION MAIN count, including a confirmed MAIN for today. Evidence contains `weekday` and `weekend` objects, each with `days` and `meanMinutes`, plus `deltaMinutes` (weekday minus weekend). Sample fields are `weekdayDays` and `weekendDays`.
+- B02 uses the same rolling window and requires at least three Comfortable and three Tired MAIN. Normal and unrated MAIN are excluded from the two groups. Evidence contains `comfortable` and `tired` objects, each with `days` and `meanMinutes`, plus `deltaMinutes` (Comfortable minus Tired). Sample fields are `comfortableDays` and `tiredDays`. Comparison means are rounded half up to whole minutes. The signed difference uses those published means. Both comparisons describe observations.
+- A04 requires at least three verified MAIN RANGE days in the selected zone. The rolling period still follows the report calendar and stored statistical days. A transition within those civil dates in the selected zone locks A04 for the entire window. A session crossing a transition outside the window is excluded from the sample. A04 uses stored instants and the stored reference zone. The sample field is `eligibleRangeDays`; evidence includes `timeZone` and `bedtime` and `wake` objects with `minMinute`, `maxMinute` and `spanMinutes`. Values are minutes relative to midnight on the stored wake day. For example, bedtime at 23:00 on the previous day is −60. DURATION has no timing contribution.
+
+Locked entries omit evidence and sample. Full catalog support has no effect on the existing AI code support.
+
 ## `GET /api/sleep/recent`
 
 - Requires an access JWT via `Authorization: Bearer <token>`. The verified JWT subject selects the account.
-- The request has no body or query parameters. Any supplied query parameter, including `accountId`, `date`, `week` and `timeZone`, returns `400 INVALID_REQUEST` after authentication.
+- The request has no body. The default request has no query parameters. Opt into expanded highlight candidates with `catalog=full`. Full Recent also accepts the optional A04 `timeZone` described above. Unsupported, empty or repeated query values return `400 INVALID_REQUEST` after authentication.
 - Statistics computes D once per request from the application clock in `Asia/Ho_Chi_Minh`. The inclusive window is [D−6, D]. Every day is an ISO civil date (`YYYY-MM-DD`).
 - The Sleep-owned provider queries canonical MongoDB `sleep_sessions` for the subject, MAIN type and inclusive bounds on stored `statistical_day`. RANGE contributes all stored minutes to its saved wake day in the session reference timezone. DURATION contributes its saved end day and minutes. The report has no bedtime field. [Sleep Journal F1 contract](../sleep-journal/contract-reconciliation.md)
 - Responses carry `Cache-Control: no-store`. A fresh request observes confirmed Journal changes through the read path.
@@ -97,7 +107,7 @@ A successful complete read of canonical MAIN data with one valid record per retu
 
 `UNVERIFIED_DATA` represents a completed request where the service can establish that history is semantically incomplete, for example a malformed MAIN fact detected within the window. Withhold any disputed day and all window-level aggregates and insights. `coverageDenominator: 7` describes the window length. Failure to execute or decode the Mongo read is a request error and returns no report.
 
-The `highlights` array adds Recent Highlight Cards while preserving the legacy `insights` array and its A01 fields. It is always present and may be empty. Each entry contains `code`, `status`, `title` and `summary`; only currently supported READY A01/B01 evaluations are eligible. Results are deduplicated by code and capped at three. Ranking uses the freshest contributing day descending, prefers B01 over A01 for the same day, then orders by larger contributing sample and stable code. B01 contributes only rated MAIN days; A01 contributes recorded MAIN days. Locked, insufficient and unverified evaluations are omitted. The period, JWT subject and no-store behavior are the same as the report.
+The `highlights` array preserves the legacy `insights` array and its A01 fields. It is always present and may be empty. Each entry contains `code`, `status`, `title` and `summary`. Default candidates are A01/B01. Full Recent considers all nine READY A/B evaluations, each with its own observation period and eligibility. Results are deduplicated by code and capped at three. Ranking uses freshest contributing day descending, B01's coverage tie-break, larger contributing sample and stable code. B01 contributes only rated MAIN days and A01 contributes recorded MAIN days. Locked, insufficient and unverified evaluations are omitted. The JWT subject and no-store behavior are the same as the report.
 
 ### Request errors
 
@@ -105,7 +115,7 @@ Use [shared Problem Details](../../api/api-contract.md#generic-error-response) w
 
 | HTTP | Code | Condition |
 | --- | --- | --- |
-| 400 | `INVALID_REQUEST` | Query parameters supplied to `GET /api/sleep/recent` |
+| 400 | `INVALID_REQUEST` | Unsupported, invalid or repeated query parameters |
 | 401 | `UNAUTHORIZED` | Missing, invalid or expired access JWT |
 | 403 | `FORBIDDEN` | Authenticated request denied by shared security policy, when applicable |
 | 500 | `INTERNAL_ERROR` | Unexpected failure, including a failed Mongo read |
@@ -114,7 +124,7 @@ A valid subject with an empty Journal receives `200 NO_DATA`. A request cannot s
 
 ## `GET /api/sleep/insights`
 
-Requires Bearer access JWT; the JWT subject selects the account. The optional `catalog=goal` selects the [Goal catalog](#a02-and-b04-goal-dependent-insights). Other parameters or values return `400 INVALID_REQUEST`. The response is `Cache-Control: no-store`. Statistics evaluates the current `[D−6,D]` period in `Asia/Ho_Chi_Minh` on each request. The default response returns A01 and B01 in category order A then B. Deferred C entries are omitted.
+Requires Bearer access JWT. The JWT subject selects the account. The optional `catalog` values are [`goal`](#a02-and-b04-goal-dependent-insights), [`trend`](#a03-and-b03-completed-window-trends) and [`full`](#a04-a05-and-b02-in-the-full-catalog). Only the full option accepts `timeZone`. The response is `Cache-Control: no-store`. The list period is `[D−6,D]` in `Asia/Ho_Chi_Minh`. The default response returns A01 and B01 in category order A then B. Deferred C entries are omitted.
 
 The response uses `{period,items}`. Every item has `code`, `category` (`A` or `B`), `status`, `title`, `highlight`, and `locked`. READY entries may also carry `summary`, `sample`, `evidence`, `sourceRefs`, `limitations`, `policyVersion`, and `evidenceVersion`. Locked entries carry only status/title metadata in addition to code/category/locked; they do not expose sample progress or evidence.
 
@@ -124,7 +134,7 @@ Status mapping is `NO_DATA` for zero MAIN, `INSUFFICIENT_DATA` when there are MA
 
 ## `GET /api/sleep/insights/{code}`
 
-Requires Bearer access JWT and accepts the currently supported codes `A01`, `A02`, `A03`, `B01`, `B03`, and `B04`. It accepts no query parameters; A01/A02/B01/B04 use current `[D−6,D]`, while A03/B03 use completed `[D−7,D−1]`. An unsupported code returns `404 INSIGHT_NOT_FOUND`. Responses are no-store and refetch current evidence, including the effect of Journal edits and applicable Goal changes.
+Requires Bearer access JWT and accepts all nine A01–A05 and B01–B04 codes. A04 accepts the optional `timeZone` query. A03/B03 use completed `[D−7,D−1]`. The other codes use current `[D−6,D]`. An unsupported code returns `404 INSIGHT_NOT_FOUND`. Responses are no-store and refetch current evidence, including the effect of Journal edits and applicable Goal changes.
 
 The JSON fields are `code`, `category`, `status`, `period`, `title`, optional `summary`, `sample`, and `evidence`, plus `sourceRefs`, `limitations`, `policyVersion`, and `evidenceVersion`. Non-READY detail includes the current status with empty source/limitation lists and no stale evidence. Shared authentication and Problem Details conventions apply.
 

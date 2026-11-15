@@ -31,6 +31,11 @@ public class SleepRecentStatisticsServiceImpl implements SleepRecentStatisticsSe
 
     @Override
     public Report recent(String accountId) {
+        return recent(accountId, false, null);
+    }
+
+    @Override
+    public Report recent(String accountId, boolean full, ZoneId selectedZone) {
         LocalDate end = clock.instant().atZone(REPORT_ZONE).toLocalDate();
         LocalDate start = end.minusDays(WINDOW_DAYS - 1L);
         MainSleepWindow window = mainSleep.readWindow(accountId, start, end);
@@ -61,8 +66,9 @@ public class SleepRecentStatisticsServiceImpl implements SleepRecentStatisticsSe
         String dataStatus = recordedDays == 0 ? "NO_DATA" : "VERIFIED";
         List<Insight> insights = recordedDays < 3 ? List.of() : List.of(
                 new Insight("A01", "READY", recordedDays, WINDOW_DAYS));
-        var highlights = this.insights.recentHighlights(accountId,
-                new SleepInsightsStatisticsService.Period(start, end, REPORT_ZONE.getId()), window);
+        var insightPeriod = new SleepInsightsStatisticsService.Period(start, end, REPORT_ZONE.getId());
+        var highlights = full ? this.insights.fullHighlights(accountId, insightPeriod, window, selectedZone)
+                : this.insights.recentHighlights(accountId, insightPeriod, window);
         return new Report(
                 new Period(start, end, REPORT_ZONE.getId()),
                 dataStatus, days, recordedDays, WINDOW_DAYS, average, insights, highlights);

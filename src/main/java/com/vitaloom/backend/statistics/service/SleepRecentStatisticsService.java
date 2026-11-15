@@ -1,10 +1,12 @@
 package com.vitaloom.backend.statistics.service;
 
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 
 public interface SleepRecentStatisticsService {
     Report recent(String accountId);
+    Report recent(String accountId, boolean full, ZoneId selectedZone);
 
     record Report(Period period, String dataStatus, List<Day> days, Integer recordedDays,
                   int coverageDenominator, Integer averageMinutesPerRecordedDay, List<Insight> insights,

@@ -5,7 +5,8 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
-public record SleepInsightsResponse(Period period, List<Item> items) {
+public record SleepInsightsResponse(Period period, List<Item> items,
+        @JsonInclude(JsonInclude.Include.NON_NULL) List<String> timeZones) {
     public SleepInsightsResponse { items = List.copyOf(items); }
     public record Period(LocalDate start, LocalDate end, String timeZone) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
