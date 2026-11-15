@@ -235,6 +235,116 @@ class SleepRecentReportMongoIntegrationTest {
     }
 
     @Test
+    void trendCatalogComparesTheTwoCompletedWindowsAndKeepsDetailEvidenceCurrent() throws Exception {
+        insertDurationWithFeeling(owner, "2026-10-31", 400, "COMFORTABLE");
+        insertDurationWithFeeling(owner, "2026-11-01", 400, "NORMAL");
+        insertDurationWithFeeling(owner, "2026-11-02", 400, "NORMAL");
+        insertDurationWithFeeling(owner, "2026-11-07", 500, "COMFORTABLE");
+        insertDurationWithFeeling(owner, "2026-11-08", 500, "COMFORTABLE");
+        String unratedRecentId = insertDurationWithFeeling(owner, "2026-11-09", 500, null);
+        insertDurationWithFeeling(owner, "2026-11-10", 500, "TIRED");
+        insertDurationWithFeeling(owner, "2026-11-14", 900, "TIRED");
+
+        String catalog = mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "trend"), owner))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.period.start").value("2026-11-08"))
+                .andExpect(jsonPath("$.items.length()").value(6))
+                .andExpect(jsonPath("$.items[0].code").value("A01"))
+                .andExpect(jsonPath("$.items[1].code").value("A03"))
+                .andExpect(jsonPath("$.items[1].status").value("READY"))
+                .andExpect(jsonPath("$.items[1].sample.baselineMainDays").value(3))
+                .andExpect(jsonPath("$.items[1].sample.recentMainDays").value(4))
+                .andExpect(jsonPath("$.items[1].evidence.baseline.meanMinutes").value(400))
+                .andExpect(jsonPath("$.items[1].evidence.recent.meanMinutes").value(500))
+                .andExpect(jsonPath("$.items[1].evidence.deltaMinutes").value(100))
+                .andExpect(jsonPath("$.items[2].code").value("A02"))
+                .andExpect(jsonPath("$.items[3].code").value("B01"))
+                .andExpect(jsonPath("$.items[4].code").value("B03"))
+                .andExpect(jsonPath("$.items[4].status").value("READY"))
+                .andExpect(jsonPath("$.items[4].sample.baselineRatedMain").value(3))
+                .andExpect(jsonPath("$.items[4].sample.recentRatedMain").value(3))
+                .andExpect(jsonPath("$.items[4].sample.recentMainWithoutFeeling").value(1))
+                .andExpect(jsonPath("$.items[4].evidence.baseline.period.start").value("2026-10-31"))
+                .andExpect(jsonPath("$.items[4].evidence.baseline.comfortable.percentage").value(33.33))
+                .andExpect(jsonPath("$.items[4].evidence.recent.comfortable.percentage").value(66.67))
+                .andExpect(jsonPath("$.items[4].evidence.deltaPercentagePoints.comfortable").value(33.33))
+                .andReturn().getResponse().getContentAsString();
+
+        String listVersion = JsonPath.read(catalog, "$.items[1].evidenceVersion");
+        var detail = mvc.perform(auth(get(INSIGHTS + "/A03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.period.start").value("2026-11-07"))
+                .andExpect(jsonPath("$.period.end").value("2026-11-13"))
+                .andExpect(jsonPath("$.evidence.recent.period.end").value("2026-11-13"))
+                .andReturn().getResponse().getContentAsString();
+        org.junit.jupiter.api.Assertions.assertEquals(listVersion, JsonPath.read(detail, "$.evidenceVersion"));
+        mvc.perform(auth(get(INSIGHTS + "/B03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidence.recent.ratedMain").value(3))
+                .andExpect(jsonPath("$.evidence.recent.mainWithoutFeeling").value(1));
+        String b03Version = mvc.perform(auth(get(INSIGHTS + "/B03"), owner)).andReturn()
+                .getResponse().getContentAsString();
+        String initialB03Version = JsonPath.read(b03Version, "$.evidenceVersion");
+        mongo.getCollection("sleep_sessions").updateOne(new Document("_id", unratedRecentId),
+                new Document("$set", new Document("feeling", "TIRED")));
+        String updatedB03Version = mvc.perform(auth(get(INSIGHTS + "/B03"), owner)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        org.junit.jupiter.api.Assertions.assertNotEquals(initialB03Version,
+                JsonPath.read(updatedB03Version, "$.evidenceVersion"));
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "trend"), other)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[1].status").value("NO_DATA"))
+                .andExpect(jsonPath("$.items[4].status").value("NO_DATA"));
+
+        Document recentRows = new Document("owner", owner)
+                .append("statistical_day", new Document("$gte", "2026-11-07").append("$lte", "2026-11-13"));
+        mongo.getCollection("sleep_sessions").updateMany(recentRows, new Document("$set", new Document("minutes", 400)));
+        mvc.perform(auth(get(INSIGHTS + "/A03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidence.deltaMinutes").value(0));
+        mongo.getCollection("sleep_sessions").updateMany(recentRows, new Document("$set", new Document("minutes", 399)));
+        String updatedA03 = mvc.perform(auth(get(INSIGHTS + "/A03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidence.deltaMinutes").value(-1))
+                .andReturn().getResponse().getContentAsString();
+        org.junit.jupiter.api.Assertions.assertNotEquals(listVersion, JsonPath.read(updatedA03, "$.evidenceVersion"));
+    }
+
+    @Test
+    void trendsRequireThreeEligibleFactsInEachVerifiedWindow() throws Exception {
+        insertDurationWithFeeling(owner, "2026-10-31", 400, "NORMAL");
+        insertDurationWithFeeling(owner, "2026-11-01", 400, "TIRED");
+        insertDurationWithFeeling(owner, "2026-11-07", 500, "NORMAL");
+        insertDurationWithFeeling(owner, "2026-11-08", 500, "TIRED");
+        insertDurationWithFeeling(owner, "2026-11-14", 900, "TIRED");
+        mvc.perform(auth(get(INSIGHTS + "/A03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("INSUFFICIENT_DATA"))
+                .andExpect(jsonPath("$.sample").doesNotExist())
+                .andExpect(jsonPath("$.evidence").doesNotExist());
+        mvc.perform(auth(get(INSIGHTS + "/B03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("INSUFFICIENT_DATA"))
+                .andExpect(jsonPath("$.sample").doesNotExist())
+                .andExpect(jsonPath("$.evidence").doesNotExist());
+
+        insertDurationWithFeeling(owner, "2026-11-02", 400, "NORMAL");
+        insertDurationWithFeeling(owner, "2026-11-09", 500, "NORMAL");
+        mvc.perform(auth(get(INSIGHTS + "/A03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"));
+        mvc.perform(auth(get(INSIGHTS + "/B03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"));
+
+        mongo.getCollection("sleep_sessions").updateOne(
+                new Document("owner", owner).append("statistical_day", "2026-11-01"),
+                new Document("$set", new Document("feeling", "UNKNOWN")));
+        mvc.perform(auth(get(INSIGHTS + "/A03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"));
+        mvc.perform(auth(get(INSIGHTS + "/B03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UNVERIFIED_DATA"));
+        mongo.getCollection("sleep_sessions").updateOne(
+                new Document("owner", owner).append("statistical_day", "2026-11-01"),
+                new Document("$set", new Document("minutes", 0).append("feeling", "NORMAL")));
+        mvc.perform(auth(get(INSIGHTS + "/A03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UNVERIFIED_DATA"));
+        mvc.perform(auth(get(INSIGHTS + "/B03"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UNVERIFIED_DATA"));
+    }
+
+    @Test
     void readyDetailsPublishSevenDayEvidenceAndFingerprintChangesWithFacts() throws Exception {
         createDuration("2026-11-09", 400);
         createDuration("2026-11-10", 500);
@@ -591,6 +701,13 @@ class SleepRecentReportMongoIntegrationTest {
     private void insertDuration(String account, String type, String day, int minutes) {
         mongo.insert(new SleepSession(UUID.randomUUID().toString(), account, type, "DURATION", minutes,
                 day, null, Instant.parse("2026-11-14T00:00:00Z"), null, null, null, null, null));
+    }
+
+    private String insertDurationWithFeeling(String account, String day, int minutes, String feeling) {
+        String id = UUID.randomUUID().toString();
+        mongo.insert(new SleepSession(id, account, "MAIN", "DURATION", minutes,
+                day, feeling, Instant.parse("2026-11-14T00:00:00Z"), null, null, null, null, null));
+        return id;
     }
 
     private String createDuration(String day, int minutes) throws Exception {

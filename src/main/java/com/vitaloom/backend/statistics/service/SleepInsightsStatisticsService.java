@@ -8,6 +8,7 @@ import java.util.Map;
 public interface SleepInsightsStatisticsService {
     Insights insights(String accountId);
     Insights goalInsights(String accountId);
+    Insights trendInsights(String accountId);
     List<Highlight> recentHighlights(String accountId, Period period, MainSleepWindow a01Window);
     Detail detail(String accountId, String code);
     record Period(LocalDate start, LocalDate end, String timeZone) {}

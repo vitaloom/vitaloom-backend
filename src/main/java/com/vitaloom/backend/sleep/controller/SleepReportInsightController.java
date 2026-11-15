@@ -41,11 +41,12 @@ public class SleepReportInsightController {
         String[] catalogs = request.getParameterValues("catalog");
         if (request.getParameterMap().keySet().stream().anyMatch(key -> !"catalog".equals(key))
                 || catalogs != null && catalogs.length != 1
-                || catalog != null && !"goal".equals(catalog)) {
+                || catalog != null && !List.of("goal", "trend").contains(catalog)) {
             throw new SleepFailure(HttpStatus.BAD_REQUEST.value(), "INVALID_REQUEST",
-                    "Only catalog=goal is supported.");
+                    "Only catalog=goal or catalog=trend is supported.");
         }
         var result = "goal".equals(catalog) ? insights.goalInsights(authentication.getName())
+                : "trend".equals(catalog) ? insights.trendInsights(authentication.getName())
                 : insights.insights(authentication.getName());
         var period = result.period();
         var items = result.items().stream().map(item -> new SleepInsightsResponse.Item(

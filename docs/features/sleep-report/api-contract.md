@@ -38,13 +38,21 @@ The controller uses `SleepRecentReportService`. Its mapper adapts the result fro
 
 ## A02 and B04 Goal-dependent insights
 
-`GET /api/sleep/insights` preserves the original A01/B01 result by default. The additive `catalog=goal` option returns A01, A02, B01 and B04 grouped by category. Within each category READY items precede locked items. READY items order by newest contributing day, then contributing sample size, then insight code. Locked items order by insight code. The P5A implementation leaves the Recent report's existing highlight selection unchanged.
+`GET /api/sleep/insights` preserves the original A01/B01 result by default. The additive `catalog=goal` option returns A01, A02, B01 and B04. The additive `catalog=trend` option returns A01, A02, A03, B01, B03 and B04. Both catalog options retain the current `[D−6,D]` list period and the existing category ordering. Within each category READY items precede locked items. READY items order by newest contributing day, then contributing sample size, then insight code. Locked items order by insight code. The catalog options do not change Recent report highlight selection.
 
 `GET /api/sleep/insights/A02` and `GET /api/sleep/insights/B04` return current Detail using the same [authenticated historical Goal source](#sleep-goal-history) and Recent [D−6,D] period as the catalog read. Statistics evaluates the metrics from verified MAIN facts; Sleep reads and validates Goal history once per insight request. An empty verified Goal history is distinct from an unavailable or invalid history. The latter returns `UNVERIFIED_DATA` for A02 and B04 while verified A01 and B01 remain available.
 
 A02 requires at least three distinct days with MAIN and an effective Goal. Its sample is `eligibleMainDays`; its evidence is `metGoalDays` and `eligibleMainDays`. It counts MAIN duration greater than or equal to that day's historical Goal. Days without MAIN or Goal are excluded from its denominator.
 
 B04 requires at least three rated MAIN sessions and at least one tired MAIN whose duration meets the Goal effective on that day. Its sample reports `ratedMain` and `comparableRatedMain`. Evidence reports `exceptionCount`, the `ratedMain` denominator, and each exception's day, duration and effective Goal. A rated day without a Goal cannot be an exception. Both insights use self-reported data descriptively and make no health claim.
+
+## A03 and B03 completed-window trends
+
+`GET /api/sleep/insights?catalog=trend` publishes A03 and B03 alongside the existing insights. `GET /api/sleep/insights/A03` and `/B03` return the same current evidence versions as the corresponding catalog items. Their Detail `period` is the completed recent trend window `[D−7,D−1]`; evidence also includes the baseline `[D−14,D−8]`. Both periods contain seven consecutive civil days in `Asia/Ho_Chi_Minh`. Today is excluded even when it has a confirmed MAIN.
+
+A03 independently reads verified MAIN duration facts in both periods. READY requires at least three distinct recorded MAIN days in each. Its sample has `baselineMainDays` and `recentMainDays`. Evidence has `baseline` and `recent` objects with `period` and `meanMinutes`, plus signed `deltaMinutes` (recent minus baseline). Means are integer minutes rounded half up. A missing, unverified or under-threshold baseline prevents READY publication.
+
+B03 independently reads verified MAIN facts and requires at least three rated MAIN in each period. Unrated MAIN is excluded from each distribution denominator and reported as `mainWithoutFeeling`. Its sample has `baselineRatedMain`, `recentRatedMain`, `baselineMainWithoutFeeling` and `recentMainWithoutFeeling`. Evidence has `baseline` and `recent` objects with `period`, `ratedMain`, `mainWithoutFeeling` and `comfortable`, `normal` and `tired` `{count,denominator,percentage}` distributions. `deltaPercentagePoints` reports signed recent-minus-baseline percentage-point changes for all three categories, rounded to two decimal places from the unrounded shares. Both insights are descriptive and make no health claim. Non-READY responses omit sample and evidence. A trend is `NO_DATA` when neither period has MAIN, `INSUFFICIENT_DATA` when either threshold is unmet, and `UNVERIFIED_DATA` when either period cannot be verified.
 
 ## `GET /api/sleep/recent`
 
@@ -116,7 +124,7 @@ Status mapping is `NO_DATA` for zero MAIN, `INSUFFICIENT_DATA` when there are MA
 
 ## `GET /api/sleep/insights/{code}`
 
-Requires Bearer access JWT and accepts the currently supported codes `A01`, `A02`, `B01`, and `B04`. It accepts no query parameters; the detail period is always the current `[D−6,D]` and any query is `400 INVALID_REQUEST`. An unsupported code returns `404 INSIGHT_NOT_FOUND`. Responses are no-store and refetch current evidence, including the effect of Journal edits and applicable Goal changes.
+Requires Bearer access JWT and accepts the currently supported codes `A01`, `A02`, `A03`, `B01`, `B03`, and `B04`. It accepts no query parameters; A01/A02/B01/B04 use current `[D−6,D]`, while A03/B03 use completed `[D−7,D−1]`. An unsupported code returns `404 INSIGHT_NOT_FOUND`. Responses are no-store and refetch current evidence, including the effect of Journal edits and applicable Goal changes.
 
 The JSON fields are `code`, `category`, `status`, `period`, `title`, optional `summary`, `sample`, and `evidence`, plus `sourceRefs`, `limitations`, `policyVersion`, and `evidenceVersion`. Non-READY detail includes the current status with empty source/limitation lists and no stale evidence. Shared authentication and Problem Details conventions apply.
 
