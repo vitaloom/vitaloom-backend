@@ -125,6 +125,18 @@ Spring Boot pushes cumulative metrics every 15 seconds to the Collector on local
 
 Stop the monitoring stack with `docker compose -p vitaloom-observability -f docker-compose.obs.yml down`. The Prometheus and Grafana volumes persist.
 
+### Docker container metrics on Windows
+
+With the local observability stack running, open a second PowerShell terminal in the backend directory and start polling:
+
+```powershell
+.\tools\Publish-DockerMetrics.ps1
+```
+
+Open **VitaLoom Infrastructure** in Grafana and select a container to see CPU, memory and network traffic. The script reads `docker stats` every 15 seconds for the `vitaloom-backend` and `vitaloom-observability` Compose projects and sends the results to the local Collector via OTLP. It uses the host Docker CLI. The Collector container does not need access to the Docker socket.
+
+Press Ctrl+C to stop polling. Use `-Once` to send one sample or `-ComposeProject` to select custom project names. If you changed the port in `.env`, pass the same value with `-OtlpPort` or set `OBS_OTLP_PORT` in the PowerShell environment. The network rate uses the rounded byte totals returned by `docker stats` and becomes available after two scrapes. Stopped containers disappear from current samples after the Collector's metric expiry and the next scrape.
+
 ## MongoDB lifecycle notes
 
 - Initialization scripts run only when the MongoDB data volume is first created.

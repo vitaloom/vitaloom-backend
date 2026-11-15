@@ -1,0 +1,132 @@
+{
+  "uid": "vitaloom-infrastructure",
+  "title": "VitaLoom Infrastructure",
+  "schemaVersion": 39,
+  "refresh": "15s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "container",
+        "label": "Container",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "vitaloom-prometheus"
+        },
+        "definition": "label_values(vitaloom_docker_container_memory_usage_bytes, container_name)",
+        "query": {
+          "query": "label_values(vitaloom_docker_container_memory_usage_bytes, container_name)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU usage",
+      "description": "100% represents one logical CPU. A container using more than one CPU can exceed 100%.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "vitaloom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vitaloom_docker_container_cpu_utilization{container_name=~\"$container\"}",
+          "legendFormat": "{{container_name}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Memory usage",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "vitaloom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vitaloom_docker_container_memory_usage_bytes{container_name=~\"$container\"}",
+          "legendFormat": "{{container_name}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Network traffic",
+      "description": "Rate calculated from Docker stats' rounded cumulative byte totals.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "vitaloom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(vitaloom_docker_container_network_receive_bytes_total{container_name=~\"$container\"}[2m])",
+          "legendFormat": "{{container_name}} RX"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(vitaloom_docker_container_network_transmit_bytes_total{container_name=~\"$container\"}[2m])",
+          "legendFormat": "{{container_name}} TX"
+        }
+      ]
+    }
+  ]
+}
