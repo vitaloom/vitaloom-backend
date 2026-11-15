@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import java.util.List;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 import com.vitaloom.backend.sleep.dto.response.SleepInsightsResponse;
 import com.vitaloom.backend.sleep.dto.response.SleepInsightDetailResponse;
 
@@ -35,9 +36,17 @@ public class SleepReportInsightController {
     }
 
     @GetMapping("/api/sleep/insights")
-    public ResponseEntity<SleepInsightsResponse> insights(Authentication authentication, HttpServletRequest request) {
-        rejectParameters(request, "Sleep insights do not accept query parameters.");
-        var result = insights.insights(authentication.getName());
+    public ResponseEntity<SleepInsightsResponse> insights(Authentication authentication, HttpServletRequest request,
+            @RequestParam(required = false) String catalog) {
+        String[] catalogs = request.getParameterValues("catalog");
+        if (request.getParameterMap().keySet().stream().anyMatch(key -> !"catalog".equals(key))
+                || catalogs != null && catalogs.length != 1
+                || catalog != null && !"goal".equals(catalog)) {
+            throw new SleepFailure(HttpStatus.BAD_REQUEST.value(), "INVALID_REQUEST",
+                    "Only catalog=goal is supported.");
+        }
+        var result = "goal".equals(catalog) ? insights.goalInsights(authentication.getName())
+                : insights.insights(authentication.getName());
         var period = result.period();
         var items = result.items().stream().map(item -> new SleepInsightsResponse.Item(
                 item.code(), item.category(), item.status(), item.title(), item.highlight(), item.locked(),

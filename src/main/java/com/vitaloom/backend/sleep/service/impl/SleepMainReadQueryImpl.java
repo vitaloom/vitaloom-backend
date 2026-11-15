@@ -93,7 +93,7 @@ public class SleepMainReadQueryImpl implements SleepMainReadQuery {
                 verified = false;
                 continue;
             }
-            records.add(new MainSleepInsight(row.getId(), day, row.getFeeling(), row.getConfirmedAt()));
+            records.add(new MainSleepInsight(row.getId(), day, row.getMinutes(), row.getFeeling(), row.getConfirmedAt()));
         }
         return new MainSleepInsightWindow(verified, records);
     }

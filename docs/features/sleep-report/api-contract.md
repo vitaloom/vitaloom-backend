@@ -36,6 +36,16 @@ Sleep F2 owns the Recent Sleep Report workflow (SLT-UC-009), the HTTP endpoint i
 
 The controller uses `SleepRecentReportService`. Its mapper adapts the result from `SleepRecentStatisticsService` into the Sleep API response. Statistics computes the rolling aggregates and A01 on read through the Sleep-owned `SleepMainReadQuery`, which reads the account's MAIN facts from MongoDB. [ADR-001](../../architecture/decisions/ADR-001-statistics-owns-aggregate-read-models.md)
 
+## A02 and B04 Goal-dependent insights
+
+`GET /api/sleep/insights` preserves the original A01/B01 result by default. The additive `catalog=goal` option returns A01, A02, B01 and B04 grouped by category. Within each category READY items precede locked items. READY items order by newest contributing day, then contributing sample size, then insight code. Locked items order by insight code. The P5A implementation leaves the Recent report's existing highlight selection unchanged.
+
+`GET /api/sleep/insights/A02` and `GET /api/sleep/insights/B04` return current Detail using the same [authenticated historical Goal source](#sleep-goal-history) and Recent [D−6,D] period as the catalog read. Statistics evaluates the metrics from verified MAIN facts; Sleep reads and validates Goal history once per insight request. An empty verified Goal history is distinct from an unavailable or invalid history. The latter returns `UNVERIFIED_DATA` for A02 and B04 while verified A01 and B01 remain available.
+
+A02 requires at least three distinct days with MAIN and an effective Goal. Its sample is `eligibleMainDays`; its evidence is `metGoalDays` and `eligibleMainDays`. It counts MAIN duration greater than or equal to that day's historical Goal. Days without MAIN or Goal are excluded from its denominator.
+
+B04 requires at least three rated MAIN sessions and at least one tired MAIN whose duration meets the Goal effective on that day. Its sample reports `ratedMain` and `comparableRatedMain`. Evidence reports `exceptionCount`, the `ratedMain` denominator, and each exception's day, duration and effective Goal. A rated day without a Goal cannot be an exception. Both insights use self-reported data descriptively and make no health claim.
+
 ## `GET /api/sleep/recent`
 
 - Requires an access JWT via `Authorization: Bearer <token>`. The verified JWT subject selects the account.
@@ -96,7 +106,7 @@ A valid subject with an empty Journal receives `200 NO_DATA`. A request cannot s
 
 ## `GET /api/sleep/insights`
 
-Requires Bearer access JWT; the JWT subject selects the account. It accepts no query parameters and returns `400 INVALID_REQUEST` if any are supplied. The response is `Cache-Control: no-store`. Statistics evaluates the current `[D−6,D]` period in `Asia/Ho_Chi_Minh` on each request. Only supported A01 and B01 are returned, in category order A then B. Other catalog entries and deferred C entries are omitted.
+Requires Bearer access JWT; the JWT subject selects the account. The optional `catalog=goal` selects the [Goal catalog](#a02-and-b04-goal-dependent-insights). Other parameters or values return `400 INVALID_REQUEST`. The response is `Cache-Control: no-store`. Statistics evaluates the current `[D−6,D]` period in `Asia/Ho_Chi_Minh` on each request. The default response returns A01 and B01 in category order A then B. Deferred C entries are omitted.
 
 The response uses `{period,items}`. Every item has `code`, `category` (`A` or `B`), `status`, `title`, `highlight`, and `locked`. READY entries may also carry `summary`, `sample`, `evidence`, `sourceRefs`, `limitations`, `policyVersion`, and `evidenceVersion`. Locked entries carry only status/title metadata in addition to code/category/locked; they do not expose sample progress or evidence.
 
@@ -106,7 +116,7 @@ Status mapping is `NO_DATA` for zero MAIN, `INSUFFICIENT_DATA` when there are MA
 
 ## `GET /api/sleep/insights/{code}`
 
-Requires Bearer access JWT and accepts only currently supported codes `A01` and `B01`. It accepts no query parameters; the detail period is always the current `[D−6,D]` and any query is `400 INVALID_REQUEST`. An unsupported code returns `404 INSIGHT_NOT_FOUND`. Responses are no-store and refetch the current evidence; clients must not treat prior detail evidence as current after Journal changes.
+Requires Bearer access JWT and accepts the currently supported codes `A01`, `A02`, `B01`, and `B04`. It accepts no query parameters; the detail period is always the current `[D−6,D]` and any query is `400 INVALID_REQUEST`. An unsupported code returns `404 INSIGHT_NOT_FOUND`. Responses are no-store and refetch the current evidence; clients must not treat prior detail evidence as current after Journal changes.
 
 The JSON fields are `code`, `category`, `status`, `period`, `title`, optional `summary`, `sample`, and `evidence`, plus `sourceRefs`, `limitations`, `policyVersion`, and `evidenceVersion`. Non-READY detail includes the current status with empty source/limitation lists and no stale evidence. Shared authentication and Problem Details conventions apply.
 

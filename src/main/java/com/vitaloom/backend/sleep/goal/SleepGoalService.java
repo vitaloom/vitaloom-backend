@@ -1,14 +1,20 @@
 package com.vitaloom.backend.sleep.goal;
 
 import com.vitaloom.backend.sleep.exception.SleepFailure;
+import com.vitaloom.backend.sleep.contract.SleepGoalReadQuery;
+import com.vitaloom.backend.sleep.contract.dto.SleepGoalWindow;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.mapping.MappingException;
 import org.springframework.stereotype.Service;
 
 @Service
-public class SleepGoalService {
+public class SleepGoalService implements SleepGoalReadQuery {
     private final SleepGoalRepository repository;
     private final Clock clock;
     private final ZoneId timeZone;
@@ -48,6 +54,32 @@ public class SleepGoalService {
         return repository.effective(accountId, day)
                 .filter(snapshot -> !snapshot.removed())
                 .map(SleepGoalHistory.Snapshot::minutes);
+    }
+
+    @Override
+    public SleepGoalWindow readGoalWindow(String accountId, LocalDate fromInclusive, LocalDate toInclusive) {
+        SleepGoalHistory history;
+        try {
+            history = repository.read(accountId);
+        } catch (SleepFailure invalidHistory) {
+            if (!"SLEEP_GOAL_UNVERIFIED".equals(invalidHistory.code())) throw invalidHistory;
+            return new SleepGoalWindow(false, Map.of());
+        } catch (DataAccessException unavailableHistory) {
+            return new SleepGoalWindow(false, Map.of());
+        } catch (MappingException invalidHistory) {
+            return new SleepGoalWindow(false, Map.of());
+        }
+
+        Map<LocalDate, Integer> goals = new HashMap<>();
+        for (LocalDate day = fromInclusive; !day.isAfter(toInclusive); day = day.plusDays(1)) {
+            LocalDate requestedDay = day;
+            Optional<SleepGoalHistory.Snapshot> effective = history.snapshots().stream()
+                    .filter(snapshot -> !snapshot.day().isAfter(requestedDay))
+                    .max(java.util.Comparator.comparing(SleepGoalHistory.Snapshot::effectiveDay));
+            effective.filter(snapshot -> !snapshot.removed())
+                    .ifPresent(snapshot -> goals.put(requestedDay, snapshot.minutes()));
+        }
+        return new SleepGoalWindow(true, goals);
     }
 
     private SleepGoalResponse change(String accountId, Integer minutes, Long revision, boolean removed) {

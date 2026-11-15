@@ -14,6 +14,7 @@ import com.vitaloom.backend.sleep.goal.SleepGoalRepository;
 import com.vitaloom.backend.sleep.goal.SleepGoalService;
 import com.vitaloom.backend.sleep.model.SleepSession;
 import com.vitaloom.backend.sleep.model.SleepSession.CivilTime;
+import com.vitaloom.backend.sleep.goal.SleepGoalHistory;
 import com.vitaloom.backend.support.MongoTestcontainersConfiguration;
 import java.time.Clock;
 import java.time.Instant;
@@ -29,6 +30,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.bson.Document;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.ActiveProfiles;
@@ -177,6 +179,142 @@ class SleepRecentReportMongoIntegrationTest {
         mvc.perform(auth(get(GOAL), owner)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.minutes").value(nullValue()))
                 .andExpect(jsonPath("$.effectiveDay").value("2026-11-14"));
+    }
+
+    @Test
+    void goalCatalogEvaluatesA02AndB04AgainstHistoricalGoalsAndKeepsDefaultResponse() throws Exception {
+        createDurationWithFeeling("2026-11-11", 450, "TIRED");
+        createDurationWithFeeling("2026-11-12", 480, "TIRED");
+        createDurationWithFeeling("2026-11-13", 450, "NORMAL");
+        createDurationWithFeeling("2026-11-14", 600, "TIRED");
+        mongo.insert(new SleepGoalHistory(owner, 4, java.util.List.of(
+                new SleepGoalHistory.Snapshot("2026-11-11", 450, false),
+                new SleepGoalHistory.Snapshot("2026-11-12", 480, false),
+                new SleepGoalHistory.Snapshot("2026-11-13", 510, false),
+                new SleepGoalHistory.Snapshot("2026-11-14", null, true))));
+
+        mvc.perform(auth(get(INSIGHTS), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.items[0].code").value("A01"))
+                .andExpect(jsonPath("$.items[1].code").value("B01"));
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "goal"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(4))
+                .andExpect(jsonPath("$.items[0].code").value("A01"))
+                .andExpect(jsonPath("$.items[1].code").value("A02"))
+                .andExpect(jsonPath("$.items[1].status").value("READY"))
+                .andExpect(jsonPath("$.items[1].sample.eligibleMainDays").value(3))
+                .andExpect(jsonPath("$.items[1].evidence.metGoalDays").value(2))
+                .andExpect(jsonPath("$.items[2].code").value("B01"))
+                .andExpect(jsonPath("$.items[3].code").value("B04"))
+                .andExpect(jsonPath("$.items[3].status").value("READY"))
+                .andExpect(jsonPath("$.items[3].sample.ratedMain").value(4))
+                .andExpect(jsonPath("$.items[3].sample.comparableRatedMain").value(3))
+                .andExpect(jsonPath("$.items[3].evidence.exceptionCount").value(2))
+                .andExpect(jsonPath("$.items[3].evidence.ratedMain").value(4))
+                .andExpect(jsonPath("$.items[3].evidence.exceptions[0].goalMinutes").value(450))
+                .andExpect(jsonPath("$.items[3].evidence.exceptions[1].goalMinutes").value(480));
+        mvc.perform(auth(get(INSIGHTS + "/A02"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.sample.eligibleMainDays").value(3))
+                .andExpect(jsonPath("$.evidence.metGoalDays").value(2));
+        mvc.perform(auth(get(INSIGHTS + "/B04"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidence.exceptionCount").value(2))
+                .andExpect(jsonPath("$.evidence.exceptions.length()").value(2));
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "goal"), other)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].status").value("NO_DATA"))
+                .andExpect(jsonPath("$.items[1].status").value("NO_DATA"))
+                .andExpect(jsonPath("$.items[2].status").value("NO_DATA"))
+                .andExpect(jsonPath("$.items[3].status").value("NO_DATA"));
+        mvc.perform(auth(get(INSIGHTS + "/A02"), other)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NO_DATA"));
+        mvc.perform(auth(get(INSIGHTS + "/B04"), other)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NO_DATA"));
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "unknown"), owner))
+                .andExpect(status().isBadRequest());
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "goal", "goal"), owner))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void goalCatalogDistinguishesMissingGoalsFromUnverifiedHistory() throws Exception {
+        createDurationWithFeeling("2026-11-12", 420, "TIRED");
+        createDurationWithFeeling("2026-11-13", 435, "NORMAL");
+        createDurationWithFeeling("2026-11-14", 450, "NORMAL");
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "goal"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[1].code").value("A02"))
+                .andExpect(jsonPath("$.items[1].status").value("INSUFFICIENT_DATA"))
+                .andExpect(jsonPath("$.items[0].status").value("READY"))
+                .andExpect(jsonPath("$.items[3].code").value("B04"))
+                .andExpect(jsonPath("$.items[3].status").value("INSUFFICIENT_DATA"))
+                .andExpect(jsonPath("$.items[2].status").value("READY"));
+
+        mongo.getCollection("sleep_goal_history").insertOne(new Document("_id", owner)
+                .append("revision", 1)
+                .append("snapshots", java.util.List.of(new Document("effective_day", "2026-11-12")
+                        .append("minutes", 61).append("removed", false))));
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "goal"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].status").value("READY"))
+                .andExpect(jsonPath("$.items[1].status").value("UNVERIFIED_DATA"))
+                .andExpect(jsonPath("$.items[2].status").value("READY"))
+                .andExpect(jsonPath("$.items[3].status").value("UNVERIFIED_DATA"));
+        mvc.perform(auth(get(INSIGHTS + "/A02"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UNVERIFIED_DATA"));
+        mvc.perform(auth(get(INSIGHTS + "/B04"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UNVERIFIED_DATA"));
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "goal"), other)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[1].status").value("NO_DATA"))
+                .andExpect(jsonPath("$.items[3].status").value("NO_DATA"));
+        mongo.getCollection("sleep_goal_history").insertOne(new Document("_id", other)
+                .append("revision", 1)
+                .append("snapshots", java.util.List.of(new Document("effective_day", "2026-11-12")
+                        .append("minutes", 61).append("removed", false))));
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "goal"), other)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].status").value("NO_DATA"))
+                .andExpect(jsonPath("$.items[1].status").value("UNVERIFIED_DATA"))
+                .andExpect(jsonPath("$.items[2].status").value("NO_DATA"))
+                .andExpect(jsonPath("$.items[3].status").value("UNVERIFIED_DATA"));
+    }
+
+    @Test
+    void goalCatalogKeepsA02ReadyWhenB04HasTwoRatedMainDays() throws Exception {
+        createDurationWithFeeling("2026-11-12", 450, "TIRED");
+        createDurationWithFeeling("2026-11-13", 480, "NORMAL");
+        createDuration("2026-11-14", 510);
+        mongo.insert(new SleepGoalHistory(owner, 1, java.util.List.of(
+                new SleepGoalHistory.Snapshot("2026-11-12", 450, false))));
+
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "goal"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].code").value("A01"))
+                .andExpect(jsonPath("$.items[0].status").value("READY"))
+                .andExpect(jsonPath("$.items[1].code").value("A02"))
+                .andExpect(jsonPath("$.items[1].status").value("READY"))
+                .andExpect(jsonPath("$.items[1].sample.eligibleMainDays").value(3))
+                .andExpect(jsonPath("$.items[2].code").value("B01"))
+                .andExpect(jsonPath("$.items[2].status").value("INSUFFICIENT_DATA"))
+                .andExpect(jsonPath("$.items[3].code").value("B04"))
+                .andExpect(jsonPath("$.items[3].status").value("INSUFFICIENT_DATA"));
+    }
+
+    @Test
+    void goalCatalogKeepsB04ReadyAtThreeRatedDaysWhenA02HasTwoGoalDays() throws Exception {
+        createDurationWithFeeling("2026-11-12", 450, "TIRED");
+        createDurationWithFeeling("2026-11-13", 480, "NORMAL");
+        createDurationWithFeeling("2026-11-14", 510, "TIRED");
+        mongo.insert(new SleepGoalHistory(owner, 1, java.util.List.of(
+                new SleepGoalHistory.Snapshot("2026-11-12", 450, false),
+                new SleepGoalHistory.Snapshot("2026-11-14", null, true))));
+
+        mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "goal"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].code").value("A01"))
+                .andExpect(jsonPath("$.items[0].status").value("READY"))
+                .andExpect(jsonPath("$.items[1].code").value("A02"))
+                .andExpect(jsonPath("$.items[1].status").value("INSUFFICIENT_DATA"))
+                .andExpect(jsonPath("$.items[2].code").value("B01"))
+                .andExpect(jsonPath("$.items[2].status").value("READY"))
+                .andExpect(jsonPath("$.items[3].code").value("B04"))
+                .andExpect(jsonPath("$.items[3].status").value("READY"))
+                .andExpect(jsonPath("$.items[3].sample.ratedMain").value(3))
+                .andExpect(jsonPath("$.items[3].sample.comparableRatedMain").value(2))
+                .andExpect(jsonPath("$.items[3].evidence.exceptionCount").value(1));
     }
 
     @Test

@@ -1,8 +1,10 @@
 package com.vitaloom.backend.statistics.service.impl;
 
 import com.vitaloom.backend.sleep.contract.SleepMainReadQuery;
+import com.vitaloom.backend.sleep.contract.SleepGoalReadQuery;
 import com.vitaloom.backend.sleep.contract.dto.MainSleepInsight;
 import com.vitaloom.backend.sleep.contract.dto.MainSleepInsightWindow;
+import com.vitaloom.backend.sleep.contract.dto.SleepGoalWindow;
 import com.vitaloom.backend.sleep.contract.dto.MainSleepDay;
 import com.vitaloom.backend.sleep.contract.dto.MainSleepWindow;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService;
@@ -25,10 +27,12 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
     private static final String POLICY = "sleep-recent-mvp-2026-11-14";
     private static final List<String> LIMITATIONS = List.of("SELF_REPORTED_FEELING", "DESCRIPTIVE_ONLY", "NO_HEALTH_CLAIM");
     private final SleepMainReadQuery mainSleep;
+    private final SleepGoalReadQuery goals;
     private final Clock clock;
 
-    public SleepInsightsStatisticsServiceImpl(SleepMainReadQuery mainSleep, Clock clock) {
+    public SleepInsightsStatisticsServiceImpl(SleepMainReadQuery mainSleep, SleepGoalReadQuery goals, Clock clock) {
         this.mainSleep = mainSleep;
+        this.goals = goals;
         this.clock = clock;
     }
 
@@ -39,6 +43,18 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
         var a01 = recentA01(accountId, period);
         var b01 = b01(period, window);
         return new Insights(period, List.of(a01, b01));
+    }
+
+    @Override
+    public Insights goalInsights(String accountId) {
+        Period period = period();
+        MainSleepInsightWindow window = read(accountId, period);
+        SleepGoalWindow goalWindow = goals.readGoalWindow(accountId, period.start(), period.end());
+        var a01 = recentA01(accountId, period);
+        var a02 = a02(period, window, goalWindow);
+        var b01 = b01(period, window);
+        var b04 = b04(period, window, goalWindow);
+        return new Insights(period, orderCatalog(List.of(a01, a02, b01, b04), window.records()));
     }
 
     @Override
@@ -79,7 +95,113 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
             return new Detail(item.code(), item.category(), item.status(), period, item.title(), item.summary(),
                     item.sample(), item.evidence(), item.sourceRefs(), item.limitations(), item.policyVersion(), item.evidenceVersion());
         }
+        if ("A02".equals(code) || "B04".equals(code)) {
+            MainSleepInsightWindow window = read(accountId, period);
+            SleepGoalWindow goalWindow = goals.readGoalWindow(accountId, period.start(), period.end());
+            Item item = "A02".equals(code) ? a02(period, window, goalWindow) : b04(period, window, goalWindow);
+            return new Detail(item.code(), item.category(), item.status(), period, item.title(), item.summary(),
+                    item.sample(), item.evidence(), item.sourceRefs(), item.limitations(), item.policyVersion(), item.evidenceVersion());
+        }
         throw new IllegalArgumentException("Unsupported insight code");
+    }
+
+    private Item a02(Period period, MainSleepInsightWindow window, SleepGoalWindow goalWindow) {
+        if (!window.verified()) return locked("A02", "A", "UNVERIFIED_DATA", "Goal achievement");
+        if (!goalWindow.verified()) return locked("A02", "A", "UNVERIFIED_DATA", "Goal achievement");
+        if (window.records().isEmpty()) return locked("A02", "A", "NO_DATA", "Goal achievement");
+        List<MainSleepInsight> eligible = window.records().stream()
+                .filter(row -> goalWindow.goals().containsKey(row.day())).toList();
+        if (eligible.size() < 3) return locked("A02", "A", "INSUFFICIENT_DATA", "Goal achievement");
+        long met = eligible.stream().filter(row -> row.minutes() >= goalWindow.goals().get(row.day())).count();
+        Map<String, Object> sample = Map.of("eligibleMainDays", eligible.size());
+        Map<String, Object> evidence = Map.of("metGoalDays", met, "eligibleMainDays", eligible.size());
+        return new Item("A02", "A", "READY", "Goal achievement", true, false,
+                "Sleep Goal was met on " + met + " of " + eligible.size() + " eligible Main Sleep days.",
+                sample, evidence, eligible.stream().map(MainSleepInsight::id).sorted().toList(),
+                List.of("MAIN_SLEEP_ONLY", "HISTORICAL_GOAL_BY_STATISTICAL_DAY", "NO_HEALTH_CLAIM"), POLICY,
+                evidenceVersion(period, eligible, goalWindow.goals()));
+    }
+
+    private Item b04(Period period, MainSleepInsightWindow window, SleepGoalWindow goalWindow) {
+        if (!window.verified()) return locked("B04", "B", "UNVERIFIED_DATA", "Tired despite meeting Goal");
+        if (!goalWindow.verified()) return locked("B04", "B", "UNVERIFIED_DATA", "Tired despite meeting Goal");
+        if (window.records().isEmpty()) return locked("B04", "B", "NO_DATA", "Tired despite meeting Goal");
+        List<MainSleepInsight> rated = window.records().stream()
+                .filter(row -> row.feeling() != null && !row.feeling().isBlank()).toList();
+        if (rated.size() < 3) return locked("B04", "B", "INSUFFICIENT_DATA", "Tired despite meeting Goal");
+        List<MainSleepInsight> comparable = rated.stream()
+                .filter(row -> goalWindow.goals().containsKey(row.day())).toList();
+        List<MainSleepInsight> exceptions = comparable.stream()
+                .filter(row -> "TIRED".equals(row.feeling()) && row.minutes() >= goalWindow.goals().get(row.day()))
+                .toList();
+        if (exceptions.isEmpty()) return locked("B04", "B", "INSUFFICIENT_DATA", "Tired despite meeting Goal");
+        List<Map<String, Object>> exceptionEvidence = exceptions.stream()
+                .map(row -> Map.<String, Object>of("day", row.day(), "minutes", row.minutes(),
+                        "goalMinutes", goalWindow.goals().get(row.day())))
+                .toList();
+        Map<String, Object> sample = Map.of("ratedMain", rated.size(), "comparableRatedMain", comparable.size());
+        Map<String, Object> evidence = Map.of(
+                "exceptionCount", exceptions.size(), "ratedMain", rated.size(), "exceptions", exceptionEvidence);
+        return new Item("B04", "B", "READY", "Tired despite meeting Goal", true, false,
+                "Reported tired despite meeting the historical Sleep Goal on " + exceptions.size()
+                        + " of " + rated.size() + " rated Main Sleep days.",
+                sample, evidence, rated.stream().map(MainSleepInsight::id).sorted().toList(),
+                List.of("SELF_REPORTED_FEELING", "HISTORICAL_GOAL_BY_STATISTICAL_DAY", "NO_HEALTH_CLAIM"), POLICY,
+                evidenceVersion(period, rated, goalWindow.goals()));
+    }
+
+    private static List<Item> orderCatalog(List<Item> items, List<MainSleepInsight> records) {
+        Map<String, MainSleepInsight> byId = new java.util.HashMap<>();
+        records.forEach(row -> byId.put(row.id(), row));
+        return items.stream()
+                .sorted((left, right) -> {
+                    int category = left.category().compareTo(right.category());
+                    if (category != 0) return category;
+                    boolean leftReady = "READY".equals(left.status());
+                    boolean rightReady = "READY".equals(right.status());
+                    if (leftReady != rightReady) return leftReady ? -1 : 1;
+                    if (!leftReady) return left.code().compareTo(right.code());
+                    LocalDate leftFreshest = freshest(left, byId, records);
+                    LocalDate rightFreshest = freshest(right, byId, records);
+                    int freshness = rightFreshest.compareTo(leftFreshest);
+                    if (freshness != 0) return freshness;
+                    int sample = Integer.compare(sampleSize(right), sampleSize(left));
+                    return sample != 0 ? sample : left.code().compareTo(right.code());
+                })
+                .toList();
+    }
+
+    private static LocalDate freshest(Item item, Map<String, MainSleepInsight> byId, List<MainSleepInsight> records) {
+        if ("A01".equals(item.code())) {
+            return records.stream().map(MainSleepInsight::day).max(LocalDate::compareTo).orElse(LocalDate.MIN);
+        }
+        return item.sourceRefs().stream().map(byId::get).filter(java.util.Objects::nonNull)
+                .map(MainSleepInsight::day).max(LocalDate::compareTo).orElse(LocalDate.MIN);
+    }
+
+    private static int sampleSize(Item item) {
+        String field = switch (item.code()) {
+            case "A01" -> "recordedMainDays";
+            case "A02" -> "eligibleMainDays";
+            case "B01", "B04" -> "ratedMain";
+            default -> "";
+        };
+        Object value = item.sample().get(field);
+        return value instanceof Number number ? number.intValue() : 0;
+    }
+
+    private static String evidenceVersion(Period period, List<MainSleepInsight> records, Map<LocalDate, Integer> goals) {
+        String source = period.start() + "|" + period.end() + "|" + period.timeZone() + "\n" + records.stream()
+                .sorted((left, right) -> left.id().compareTo(right.id()))
+                .map(row -> row.id() + "|" + row.day() + "|" + row.minutes() + "|" + row.feeling()
+                        + "|" + row.confirmedAt() + "|" + goals.get(row.day()))
+                .reduce("", (left, right) -> left + "\n" + right);
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(source.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(exception);
+        }
     }
 
     private MainSleepInsightWindow read(String accountId, Period period) {
