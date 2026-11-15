@@ -62,4 +62,20 @@ Use [shared Problem Details](../../api/api-contract.md#generic-error-response) w
 | 403 | `FORBIDDEN` | Authenticated request denied by shared security policy, when applicable |
 | 500 | `INTERNAL_ERROR` | Unexpected failure, including a failed Mongo read |
 
-A valid subject with an empty Journal receives `200 NO_DATA`. A request cannot select a different account. Goal history, All Insights, Insight Detail, consent and AI each have later delivery phases.
+A valid subject with an empty Journal receives `200 NO_DATA`. A request cannot select a different account. Goal history, consent and AI remain later delivery phases.
+
+## `GET /api/sleep/insights`
+
+Requires Bearer access JWT; the JWT subject selects the account. It accepts no query parameters and returns `400 INVALID_REQUEST` if any are supplied. The response is `Cache-Control: no-store`. Statistics evaluates the current `[D−6,D]` period in `Asia/Ho_Chi_Minh` on each request. Only supported A01 and B01 are returned, in category order A then B. Other catalog entries and deferred C entries are omitted.
+
+The response uses `{period,items}`. Every item has `code`, `category` (`A` or `B`), `status`, `title`, `highlight`, and `locked`. READY entries may also carry `summary`, `sample`, `evidence`, `sourceRefs`, `limitations`, `policyVersion`, and `evidenceVersion`. Locked entries carry only status/title metadata in addition to code/category/locked; they do not expose sample progress or evidence.
+
+For B01, all confirmed, valid MAIN sessions in the current window are counted. `sample.ratedMain` is the denominator and `sample.mainWithoutFeeling` reports MAIN without a nonblank feeling separately. `evidence` reports count, denominator and percentage for COMFORTABLE, NORMAL and TIRED. READY requires at least three rated MAIN. Feeling is self-reported and the output is descriptive; it makes no causal or health claim. The deterministic `evidenceVersion` is a SHA-256 fingerprint of the source facts, and `sourceRefs` contains source session identifiers. A fresh read reflects Journal changes.
+
+Status mapping is `NO_DATA` for zero MAIN, `INSUFFICIENT_DATA` when there are MAIN but fewer than three rated MAIN, and `UNVERIFIED_DATA` when any in-window fact prevents verifying the full history. No distribution or conclusion is returned for non-READY B01. A01 uses the existing recording-coverage rule and source path.
+
+## `GET /api/sleep/insights/{code}`
+
+Requires Bearer access JWT and accepts only currently supported codes `A01` and `B01`. It accepts no query parameters; the detail period is always the current `[D−6,D]` and any query is `400 INVALID_REQUEST`. An unsupported code returns `404 INSIGHT_NOT_FOUND`. Responses are no-store and refetch the current evidence; clients must not treat prior detail evidence as current after Journal changes.
+
+The JSON fields are `code`, `category`, `status`, `period`, `title`, optional `summary`, `sample`, and `evidence`, plus `sourceRefs`, `limitations`, `policyVersion`, and `evidenceVersion`. Non-READY detail includes the current status with empty source/limitation lists and no stale evidence. Shared authentication and Problem Details conventions apply.

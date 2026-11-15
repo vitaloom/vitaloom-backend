@@ -39,6 +39,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 class SleepRecentReportMongoIntegrationTest {
     private static final String SESSIONS = "/api/sleep/v2/sessions";
     private static final String REPORT = "/api/sleep/recent";
+    private static final String INSIGHTS = "/api/sleep/insights";
 
     @Autowired MockMvc mvc;
     @Autowired JwtTokenService tokens;
@@ -96,6 +97,67 @@ class SleepRecentReportMongoIntegrationTest {
     void expiredJwtCannotReadRecentReport() throws Exception {
         String expired = tokens.issueAccess(owner, Instant.parse("2000-01-01T00:00:00Z"));
         mvc.perform(get(REPORT).header("Authorization", "Bearer " + expired)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void insightListAndDetailUseVerifiedRatedMainEvidenceAndAreFreshAndIsolated() throws Exception {
+        createDurationWithFeeling("2026-11-09", 420, "COMFORTABLE");
+        createDurationWithFeeling("2026-11-10", 430, null);
+        createDurationWithFeeling("2026-11-11", 450, "NORMAL");
+        String last = createDurationWithFeeling("2026-11-14", 451, "TIRED");
+        mvc.perform(auth(get(INSIGHTS), owner)).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.items[0].code").value("A01"))
+                .andExpect(jsonPath("$.items[1].code").value("B01"))
+                .andExpect(jsonPath("$.items[1].status").value("READY"));
+        mvc.perform(auth(get(INSIGHTS + "/B01"), owner)).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.status").value("READY"))
+                .andExpect(jsonPath("$.sample.ratedMain").value(3))
+                .andExpect(jsonPath("$.sample.mainWithoutFeeling").value(1))
+                .andExpect(jsonPath("$.evidence.comfortable.count").value(1))
+                .andExpect(jsonPath("$.sourceRefs[0]").exists())
+                .andExpect(jsonPath("$.limitations.length()", org.hamcrest.Matchers.greaterThan(0)))
+                .andExpect(jsonPath("$.policyVersion").exists())
+                .andExpect(jsonPath("$.evidenceVersion").exists());
+        mvc.perform(auth(put(SESSIONS + "/" + last), owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sleepType\":\"MAIN\",\"method\":\"DURATION\",\"endDay\":\"2026-11-14\",\"minutes\":451,\"feeling\":\"COMFORTABLE\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(auth(get(INSIGHTS + "/B01"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidence.comfortable.count").value(2));
+        mvc.perform(auth(get(INSIGHTS), other)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[1].status").value("NO_DATA"));
+        mvc.perform(get(INSIGHTS)).andExpect(status().isUnauthorized());
+        mvc.perform(auth(get(INSIGHTS).queryParam("accountId", other), owner)).andExpect(status().isBadRequest());
+        mvc.perform(auth(get(INSIGHTS + "/B01").queryParam("start", "2026-11-08"), owner))
+                .andExpect(status().isBadRequest());
+        mvc.perform(auth(get(INSIGHTS + "/A05"), owner)).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void insightStatesSeparateNoDataInsufficientAndUnverified() throws Exception {
+        mvc.perform(auth(get(INSIGHTS + "/B01"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NO_DATA"))
+                .andExpect(jsonPath("$.sourceRefs").isArray());
+        createDurationWithFeeling("2026-11-14", 420, null);
+        mvc.perform(auth(get(INSIGHTS), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[1].status").value("INSUFFICIENT_DATA"))
+                .andExpect(jsonPath("$.items[1].locked").value(true))
+                .andExpect(jsonPath("$.items[1].sample").doesNotExist());
+        insertDuration(owner, "MAIN", "2026-11-12", 0);
+        mvc.perform(auth(get(INSIGHTS + "/B01"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UNVERIFIED_DATA"))
+                .andExpect(jsonPath("$.evidence").doesNotExist());
+    }
+
+    private String createDurationWithFeeling(String day, int minutes, String feeling) throws Exception {
+        var result = mvc.perform(auth(post(SESSIONS), owner).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"sleepType\":\"MAIN\",\"method\":\"DURATION\",\"endDay\":\""
+                        + day + "\",\"minutes\":" + minutes
+                        + (feeling == null ? "" : ",\"feeling\":\"" + feeling + "\"") + "}"))
+                .andExpect(status().isCreated()).andReturn();
+        return JsonPath.read(result.getResponse().getContentAsString(), "$.id");
     }
 
     @Test
