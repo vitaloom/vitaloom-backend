@@ -105,6 +105,26 @@ Windows:
 .\mvnw.cmd test
 ```
 
+## Local observability
+
+On Windows, start the database and the separate monitoring stack, then run Spring Boot with the observability profile:
+
+```powershell
+docker compose up -d mongodb
+docker compose -p vitaloom-observability -f docker-compose.obs.yml up -d
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=observability"
+```
+
+On macOS or Linux, use `./mvnw` in the last command. If the wrapper is unavailable on Windows, use `mvn.cmd spring-boot:run "-Dspring-boot.run.profiles=observability"` with an installed Maven. The regular backend launch leaves OTLP export disabled.
+
+Spring Boot pushes cumulative metrics every 15 seconds to the Collector on localhost port 4318. Prometheus scrapes the Collector over the Compose network. Local ports can be overridden with `OBS_OTLP_PORT`, `OBS_PROMETHEUS_PORT` and `OBS_GRAFANA_PORT`. If changing `OBS_OTLP_PORT`, set it in the environment of both Compose and Spring Boot.
+
+- Open Grafana at http://127.0.0.1:3000 and select the **VitaLoom Backend** dashboard. A fresh local Grafana volume uses the default `admin` login and prompts for a password change.
+- Open Prometheus at http://127.0.0.1:9090. Send requests to `GET /api/health` and check `http_server_requests_milliseconds_count{application="vitaloom-backend"}` and `http_server_requests_milliseconds_bucket{application="vitaloom-backend"}` after an export and scrape cycle. Rate and percentile panels need at least two samples.
+- `up{job="otel-collector"}` shows whether Prometheus can scrape the Collector. The dashboard also checks for a backend process metric, which expires after 45 seconds without updates, plus time for the next scrape to observe its absence.
+
+Stop the monitoring stack with `docker compose -p vitaloom-observability -f docker-compose.obs.yml down`. The Prometheus and Grafana volumes persist.
+
 ## MongoDB lifecycle notes
 
 - Initialization scripts run only when the MongoDB data volume is first created.

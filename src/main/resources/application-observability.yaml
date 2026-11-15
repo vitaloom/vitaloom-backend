@@ -1,0 +1,13 @@
+management:
+  metrics:
+    tags:
+      application: vitaloom-backend
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  otlp:
+    metrics:
+      export:
+        enabled: true
+        url: http://127.0.0.1:${OBS_OTLP_PORT:4318}/v1/metrics
+        step: 15s
