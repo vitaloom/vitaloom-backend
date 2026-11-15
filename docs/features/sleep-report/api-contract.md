@@ -51,6 +51,8 @@ A successful complete read of canonical MAIN data with one valid record per retu
 
 `UNVERIFIED_DATA` represents a completed request where the service can establish that history is semantically incomplete, for example a malformed MAIN fact detected within the window. Withhold any disputed day and all window-level aggregates and insights. `coverageDenominator: 7` describes the window length. Failure to execute or decode the Mongo read is a request error and returns no report.
 
+The `highlights` array adds Recent Highlight Cards while preserving the legacy `insights` array and its A01 fields. It is always present and may be empty. Each entry contains `code`, `status`, `title` and `summary`; only currently supported READY A01/B01 evaluations are eligible. Results are deduplicated by code and capped at three. Ranking uses the freshest contributing day descending, prefers B01 over A01 for the same day, then orders by larger contributing sample and stable code. B01 contributes only rated MAIN days; A01 contributes recorded MAIN days. Locked, insufficient and unverified evaluations are omitted. The period, JWT subject and no-store behavior are the same as the report.
+
 ### Request errors
 
 Use [shared Problem Details](../../api/api-contract.md#generic-error-response) with `Content-Type: application/problem+json` and a top-level `code`.

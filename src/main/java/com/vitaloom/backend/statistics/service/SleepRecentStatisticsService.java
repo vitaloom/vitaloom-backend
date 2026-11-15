@@ -7,10 +7,12 @@ public interface SleepRecentStatisticsService {
     Report recent(String accountId);
 
     record Report(Period period, String dataStatus, List<Day> days, Integer recordedDays,
-                  int coverageDenominator, Integer averageMinutesPerRecordedDay, List<Insight> insights) {
+                  int coverageDenominator, Integer averageMinutesPerRecordedDay, List<Insight> insights,
+                  List<SleepInsightsStatisticsService.Highlight> highlights) {
         public Report {
             days = List.copyOf(days);
             insights = List.copyOf(insights);
+            highlights = List.copyOf(highlights);
         }
     }
 

@@ -5,6 +5,7 @@ import com.vitaloom.backend.sleep.contract.dto.MainSleepDay;
 import com.vitaloom.backend.sleep.contract.dto.MainSleepWindow;
 import com.vitaloom.backend.statistics.service.SleepRecentStatisticsService;
 import com.vitaloom.backend.statistics.service.SleepRecentStatisticsService.Report;
+import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -19,10 +20,13 @@ public class SleepRecentStatisticsServiceImpl implements SleepRecentStatisticsSe
 
     private final SleepMainReadQuery mainSleep;
     private final Clock clock;
+    private final SleepInsightsStatisticsService insights;
 
-    public SleepRecentStatisticsServiceImpl(SleepMainReadQuery mainSleep, Clock clock) {
+    public SleepRecentStatisticsServiceImpl(
+            SleepMainReadQuery mainSleep, Clock clock, SleepInsightsStatisticsService insights) {
         this.mainSleep = mainSleep;
         this.clock = clock;
+        this.insights = insights;
     }
 
     @Override
@@ -50,15 +54,17 @@ public class SleepRecentStatisticsServiceImpl implements SleepRecentStatisticsSe
         if (!window.verified()) {
             return new Report(
                     new Period(start, end, REPORT_ZONE.getId()),
-                    "UNVERIFIED_DATA", days, null, WINDOW_DAYS, null, List.of());
+                    "UNVERIFIED_DATA", days, null, WINDOW_DAYS, null, List.of(), List.of());
         }
 
         Integer average = recordedDays == 0 ? null : (minutesTotal * 2 + recordedDays) / (2 * recordedDays);
         String dataStatus = recordedDays == 0 ? "NO_DATA" : "VERIFIED";
         List<Insight> insights = recordedDays < 3 ? List.of() : List.of(
                 new Insight("A01", "READY", recordedDays, WINDOW_DAYS));
+        var highlights = this.insights.recentHighlights(accountId,
+                new SleepInsightsStatisticsService.Period(start, end, REPORT_ZONE.getId()), window);
         return new Report(
                 new Period(start, end, REPORT_ZONE.getId()),
-                dataStatus, days, recordedDays, WINDOW_DAYS, average, insights);
+                dataStatus, days, recordedDays, WINDOW_DAYS, average, insights, highlights);
     }
 }

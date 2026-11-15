@@ -7,6 +7,7 @@ import com.vitaloom.backend.sleep.contract.SleepMainReadQuery;
 import com.vitaloom.backend.sleep.contract.dto.MainSleepDay;
 import com.vitaloom.backend.sleep.contract.dto.MainSleepWindow;
 import com.vitaloom.backend.statistics.service.SleepRecentStatisticsService.Report;
+import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -17,8 +18,9 @@ import org.junit.jupiter.api.Test;
 class SleepRecentStatisticsServiceTest {
     private static final Instant NOW = Instant.parse("2026-11-09T16:59:59Z");
     private final SleepMainReadQuery query = mock(SleepMainReadQuery.class);
+    private final SleepInsightsStatisticsService insights = mock(SleepInsightsStatisticsService.class);
     private final SleepRecentStatisticsServiceImpl service = new SleepRecentStatisticsServiceImpl(
-            query, Clock.fixed(NOW, ZoneOffset.UTC));
+            query, Clock.fixed(NOW, ZoneOffset.UTC), insights);
 
     @Test
     void emptyWindowHasSevenNullDaysAndNullAverage() {
@@ -59,6 +61,9 @@ class SleepRecentStatisticsServiceTest {
         assertEquals("A01", response.insights().getFirst().code());
         assertEquals(3, response.insights().getFirst().sampleDays());
         assertEquals(7, response.insights().getFirst().denominatorDays());
+        verify(insights).recentHighlights(eq("account-a"),
+                eq(new SleepInsightsStatisticsService.Period(LocalDate.parse("2026-11-03"),
+                        LocalDate.parse("2026-11-09"), "Asia/Ho_Chi_Minh")), any());
     }
 
     @Test
@@ -71,6 +76,7 @@ class SleepRecentStatisticsServiceTest {
 
         assertEquals(436, response.averageMinutesPerRecordedDay());
         assertTrue(response.insights().isEmpty());
+        assertTrue(response.highlights().isEmpty());
     }
 
     @Test
@@ -96,6 +102,8 @@ class SleepRecentStatisticsServiceTest {
         assertNull(response.recordedDays());
         assertNull(response.averageMinutesPerRecordedDay());
         assertTrue(response.insights().isEmpty());
+        assertTrue(response.highlights().isEmpty());
+        verifyNoInteractions(insights);
         assertEquals("RECORDED", response.days().getFirst().status());
         assertEquals("UNVERIFIED", response.days().getLast().status());
     }
@@ -123,14 +131,14 @@ class SleepRecentStatisticsServiceTest {
     void dateRollsOverAtVietnamMidnightAndAcrossMonthBoundary() {
         when(query.readWindow(any(), any(), any())).thenReturn(new MainSleepWindow(true, List.of()));
         SleepRecentStatisticsServiceImpl nextDate = new SleepRecentStatisticsServiceImpl(query,
-                Clock.fixed(Instant.parse("2026-11-09T17:00:00Z"), ZoneOffset.UTC));
+                Clock.fixed(Instant.parse("2026-11-09T17:00:00Z"), ZoneOffset.UTC), insights);
 
         nextDate.recent("account-a");
 
         verify(query).readWindow("account-a", LocalDate.parse("2026-11-04"), LocalDate.parse("2026-11-10"));
 
         SleepRecentStatisticsServiceImpl monthEnd = new SleepRecentStatisticsServiceImpl(query,
-                Clock.fixed(Instant.parse("2026-11-30T17:00:00Z"), ZoneOffset.UTC));
+                Clock.fixed(Instant.parse("2026-11-30T17:00:00Z"), ZoneOffset.UTC), insights);
         monthEnd.recent("account-a");
         verify(query).readWindow("account-a", LocalDate.parse("2026-11-25"), LocalDate.parse("2026-12-01"));
     }

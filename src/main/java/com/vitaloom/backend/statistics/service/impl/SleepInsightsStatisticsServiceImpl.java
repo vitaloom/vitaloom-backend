@@ -4,6 +4,7 @@ import com.vitaloom.backend.sleep.contract.SleepMainReadQuery;
 import com.vitaloom.backend.sleep.contract.dto.MainSleepInsight;
 import com.vitaloom.backend.sleep.contract.dto.MainSleepInsightWindow;
 import com.vitaloom.backend.sleep.contract.dto.MainSleepDay;
+import com.vitaloom.backend.sleep.contract.dto.MainSleepWindow;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -41,6 +42,31 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
     }
 
     @Override
+    public List<Highlight> recentHighlights(String accountId, Period period, MainSleepWindow a01Window) {
+        if (!a01Window.verified()) return List.of();
+
+        Item a01 = recentA01(period, a01Window);
+        MainSleepInsightWindow b01Window = read(accountId, period);
+        Item b01 = b01(period, b01Window);
+        List<SleepRecentHighlightRanker.Candidate> candidates = new ArrayList<>();
+        if ("READY".equals(a01.status())) {
+            LocalDate freshest = a01Window.records().stream().map(MainSleepDay::day).max(LocalDate::compareTo).orElseThrow();
+            candidates.add(new SleepRecentHighlightRanker.Candidate(
+                    a01.code(), a01.status(), a01.title(), a01.summary(), freshest, a01Window.records().size()));
+        }
+        if ("READY".equals(b01.status())) {
+            List<MainSleepInsight> rated = b01Window.records().stream()
+                    .filter(row -> row.feeling() != null && !row.feeling().isBlank()).toList();
+            LocalDate freshest = rated.stream().map(MainSleepInsight::day).max(LocalDate::compareTo).orElseThrow();
+            candidates.add(new SleepRecentHighlightRanker.Candidate(
+                    b01.code(), b01.status(), b01.title(), b01.summary(), freshest, rated.size()));
+        }
+        return SleepRecentHighlightRanker.rank(candidates).stream()
+                .map(candidate -> new Highlight(candidate.code(), candidate.status(), candidate.title(), candidate.summary()))
+                .toList();
+    }
+
+    @Override
     public Detail detail(String accountId, String code) {
         Period period = period();
         if ("A01".equals(code)) {
@@ -67,6 +93,10 @@ public class SleepInsightsStatisticsServiceImpl implements SleepInsightsStatisti
 
     private Item recentA01(String accountId, Period period) {
         var window = mainSleep.readWindow(accountId, period.start(), period.end());
+        return recentA01(period, window);
+    }
+
+    private Item recentA01(Period period, MainSleepWindow window) {
         if (!window.verified()) return locked("A01", "A", "UNVERIFIED_DATA", "Recording coverage");
         int days = window.records().size();
         if (days == 0) return locked("A01", "A", "NO_DATA", "Recording coverage");

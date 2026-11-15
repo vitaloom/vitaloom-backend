@@ -22,9 +22,13 @@ class SleepRecentReportConfig {
                 .map(insight -> new SleepRecentReportResponse.Insight(
                         insight.code(), insight.status(), insight.sampleDays(), insight.denominatorDays()))
                 .toList();
+        var highlights = report.highlights().stream()
+                .map(highlight -> new SleepRecentReportResponse.Highlight(
+                        highlight.code(), highlight.status(), highlight.title(), highlight.summary()))
+                .toList();
         return new SleepRecentReportResponse(
                 new SleepRecentReportResponse.Period(period.start(), period.end(), period.timeZone()),
                 report.dataStatus(), days, report.recordedDays(), report.coverageDenominator(),
-                report.averageMinutesPerRecordedDay(), insights);
+                report.averageMinutesPerRecordedDay(), insights, highlights);
     }
 }

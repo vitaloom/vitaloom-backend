@@ -70,13 +70,18 @@ class SleepRecentReportMongoIntegrationTest {
                 .andExpect(jsonPath("$.insights[0].code").value("A01"))
                 .andExpect(jsonPath("$.insights[0].status").value("READY"))
                 .andExpect(jsonPath("$.insights[0].sampleDays").value(3))
-                .andExpect(jsonPath("$.insights[0].denominatorDays").value(7));
+                .andExpect(jsonPath("$.insights[0].denominatorDays").value(7))
+                .andExpect(jsonPath("$.highlights.length()").value(1))
+                .andExpect(jsonPath("$.highlights[0].code").value("A01"))
+                .andExpect(jsonPath("$.highlights[0].status").value("READY"))
+                .andExpect(jsonPath("$.highlights[0].title").value("Recording coverage"));
 
         mvc.perform(auth(get(REPORT), other)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.dataStatus").value("NO_DATA"))
                 .andExpect(jsonPath("$.recordedDays").value(0))
                 .andExpect(jsonPath("$.averageMinutesPerRecordedDay").value(nullValue()))
-                .andExpect(jsonPath("$.insights.length()").value(0));
+                .andExpect(jsonPath("$.insights.length()").value(0))
+                .andExpect(jsonPath("$.highlights.length()").value(0));
     }
 
     @Test
@@ -105,6 +110,9 @@ class SleepRecentReportMongoIntegrationTest {
         createDurationWithFeeling("2026-11-10", 430, null);
         createDurationWithFeeling("2026-11-11", 450, "NORMAL");
         String last = createDurationWithFeeling("2026-11-14", 451, "TIRED");
+        mvc.perform(auth(get(REPORT), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.highlights[0].code").value("B01"))
+                .andExpect(jsonPath("$.highlights[1].code").value("A01"));
         mvc.perform(auth(get(INSIGHTS), owner)).andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(jsonPath("$.items[0].code").value("A01"))
@@ -136,6 +144,19 @@ class SleepRecentReportMongoIntegrationTest {
     }
 
     @Test
+    void recentHighlightsPreferCoverageWhenLatestMainHasNoFeeling() throws Exception {
+        createDurationWithFeeling("2026-11-09", 420, "COMFORTABLE");
+        createDurationWithFeeling("2026-11-10", 430, "NORMAL");
+        createDurationWithFeeling("2026-11-11", 450, "TIRED");
+        createDurationWithFeeling("2026-11-14", 451, null);
+
+        mvc.perform(auth(get(REPORT), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.insights[0].code").value("A01"))
+                .andExpect(jsonPath("$.highlights[0].code").value("A01"))
+                .andExpect(jsonPath("$.highlights[1].code").value("B01"));
+    }
+
+    @Test
     void insightStatesSeparateNoDataInsufficientAndUnverified() throws Exception {
         mvc.perform(auth(get(INSIGHTS + "/B01"), owner)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("NO_DATA"))
@@ -145,6 +166,8 @@ class SleepRecentReportMongoIntegrationTest {
                 .andExpect(jsonPath("$.items[1].status").value("INSUFFICIENT_DATA"))
                 .andExpect(jsonPath("$.items[1].locked").value(true))
                 .andExpect(jsonPath("$.items[1].sample").doesNotExist());
+        mvc.perform(auth(get(REPORT), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.highlights.length()").value(0));
         insertDuration(owner, "MAIN", "2026-11-12", 0);
         mvc.perform(auth(get(INSIGHTS + "/B01"), owner)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("UNVERIFIED_DATA"))
