@@ -120,6 +120,10 @@ Requires Bearer access JWT and accepts the currently supported codes `A01`, `A02
 
 The JSON fields are `code`, `category`, `status`, `period`, `title`, optional `summary`, `sample`, and `evidence`, plus `sourceRefs`, `limitations`, `policyVersion`, and `evidenceVersion`. Non-READY detail includes the current status with empty source/limitation lists and no stale evidence. Shared authentication and Problem Details conventions apply.
 
+READY A01 and A02 Detail add `evidence.days`, an array of exactly seven `{day,status}` objects ordered oldest first for the Detail `period`. `day` is an ISO civil date. A01 statuses are `RECORDED` and `NOT_RECORDED`; they are derived from the same verified MAIN window as the coverage aggregate. A02 statuses are `MET`, `MISSED`, `NO_MAIN`, and `NO_GOAL`; they use the same verified MAIN insight and historical Goal windows as the aggregate. `NO_MAIN` takes precedence when a date has a Goal but no MAIN. List/catalog items and all non-READY Detail responses omit `evidence.days`; existing fields and the A01/B01 catalog filters are unchanged.
+
+A01's `evidenceVersion` includes its period and the MAIN facts used by the aggregate. It therefore matches the A01 List item and Story/AI evidence computed for the same period and facts, and changes when the reporting period changes. A02's `evidenceVersion` includes all seven dated status classifications, including dates outside its eligible sample, plus the existing eligible MAIN source values and effective Goals. Both calendars are calculated from the already-read windows; they do not trigger additional reads. Source references remain aggregate-level identifiers and are not added to individual day entries.
+
 ## Sleep Story preview
 
 All three requests below require an access Bearer JWT, select the account by its subject, accept no query parameters and return `Cache-Control: no-store` on success.

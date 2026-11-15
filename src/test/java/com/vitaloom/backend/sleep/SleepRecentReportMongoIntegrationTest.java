@@ -235,6 +235,67 @@ class SleepRecentReportMongoIntegrationTest {
     }
 
     @Test
+    void readyDetailsPublishSevenDayEvidenceAndFingerprintChangesWithFacts() throws Exception {
+        createDuration("2026-11-09", 400);
+        createDuration("2026-11-10", 500);
+        createDuration("2026-11-11", 500);
+        createDuration("2026-11-12", 400);
+        createDuration("2026-11-14", 400);
+        mongo.insert(new SleepGoalHistory(owner, 1, java.util.List.of(
+                new SleepGoalHistory.Snapshot("2026-11-10", 600, false),
+                new SleepGoalHistory.Snapshot("2026-11-11", 450, false),
+                new SleepGoalHistory.Snapshot("2026-11-12", null, true),
+                new SleepGoalHistory.Snapshot("2026-11-14", 390, false))));
+
+        String catalog = mvc.perform(auth(get(INSIGHTS).queryParam("catalog", "goal"), owner))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String listA01Version = JsonPath.read(catalog, "$.items[0].evidenceVersion");
+        String listA02Version = JsonPath.read(catalog, "$.items[1].evidenceVersion");
+        var a01 = mvc.perform(auth(get(INSIGHTS + "/A01"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidence.days.length()").value(7))
+                .andExpect(jsonPath("$.evidence.days[0].day").value("2026-11-08"))
+                .andExpect(jsonPath("$.evidence.days[0].status").value("NOT_RECORDED"))
+                .andExpect(jsonPath("$.evidence.days[4].day").value("2026-11-12"))
+                .andExpect(jsonPath("$.evidence.days[4].status").value("RECORDED"))
+                .andExpect(jsonPath("$.sample.recordedMainDays").value(5))
+                .andReturn();
+        org.junit.jupiter.api.Assertions.assertEquals(listA01Version,
+                JsonPath.read(a01.getResponse().getContentAsString(), "$.evidenceVersion"));
+
+        var a02 = mvc.perform(auth(get(INSIGHTS + "/A02"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"))
+                .andExpect(jsonPath("$.evidence.metGoalDays").value(2))
+                .andExpect(jsonPath("$.evidence.eligibleMainDays").value(3))
+                .andExpect(jsonPath("$.evidence.days.length()").value(7))
+                .andExpect(jsonPath("$.evidence.days[1].status").value("NO_GOAL"))
+                .andExpect(jsonPath("$.evidence.days[2].status").value("MISSED"))
+                .andExpect(jsonPath("$.evidence.days[4].status").value("NO_GOAL"))
+                .andExpect(jsonPath("$.evidence.days[5].status").value("NO_MAIN"))
+                .andReturn();
+        org.junit.jupiter.api.Assertions.assertEquals(listA02Version,
+                JsonPath.read(a02.getResponse().getContentAsString(), "$.evidenceVersion"));
+        String a02Version = JsonPath.read(a02.getResponse().getContentAsString(), "$.evidenceVersion");
+
+        // Moving Goal coverage from one MAIN day to another preserves counts but changes dated classes.
+        mongo.remove(new org.springframework.data.mongodb.core.query.Query(
+                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(owner)), SleepGoalHistory.class);
+        mongo.insert(new SleepGoalHistory(owner, 2, java.util.List.of(
+                new SleepGoalHistory.Snapshot("2026-11-09", 390, false),
+                new SleepGoalHistory.Snapshot("2026-11-10", 600, false),
+                new SleepGoalHistory.Snapshot("2026-11-11", 450, false),
+                new SleepGoalHistory.Snapshot("2026-11-12", null, true),
+                new SleepGoalHistory.Snapshot("2026-11-14", null, true))));
+        var updatedA02 = mvc.perform(auth(get(INSIGHTS + "/A02"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidence.metGoalDays").value(2))
+                .andExpect(jsonPath("$.evidence.eligibleMainDays").value(3))
+                .andExpect(jsonPath("$.evidence.days[1].status").value("MET"))
+                .andExpect(jsonPath("$.evidence.days[6].status").value("NO_GOAL"))
+                .andReturn();
+        org.junit.jupiter.api.Assertions.assertNotEquals(a02Version,
+                JsonPath.read(updatedA02.getResponse().getContentAsString(), "$.evidenceVersion"));
+    }
+
+    @Test
     void goalCatalogDistinguishesMissingGoalsFromUnverifiedHistory() throws Exception {
         createDurationWithFeeling("2026-11-12", 420, "TIRED");
         createDurationWithFeeling("2026-11-13", 435, "NORMAL");
