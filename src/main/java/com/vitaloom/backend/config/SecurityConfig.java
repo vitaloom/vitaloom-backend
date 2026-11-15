@@ -44,6 +44,7 @@ public class SecurityConfig {
                                 "/api/steps/**", "/api/statistics/steps/**").authenticated()
                         .requestMatchers("/api/auth/me").authenticated()
                         .requestMatchers("/api/water/**").authenticated()
+                        .requestMatchers("/api/sleep/recent").authenticated()
                         .requestMatchers("/api/sleep/v2/**").authenticated()
                         .requestMatchers("/api/**").permitAll()
                         .anyRequest().denyAll())

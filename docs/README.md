@@ -8,6 +8,7 @@ Start with the [repository README](../README.md) for setup and commands. Then us
 | Implementation patterns and persistence behavior | [Implementation conventions](architecture/implementation-conventions.md) |
 | Why aggregate ownership belongs to Statistics | [ADR-001](architecture/decisions/ADR-001-statistics-owns-aggregate-read-models.md) |
 | API paths, payloads, statuses and shared API rules | [API contract index](api/api-contract.md) and its linked area/metric contracts |
+| Sleep Journal and Recent Sleep Report | [Sleep Journal F1](features/sleep-journal/contract-reconciliation.md), [Sleep F2 Report and Insights](features/sleep-report/api-contract.md) |
 | Water feature behavior and implementation notes | [Water feature docs](features/water/README.md) |
 | Task workflow and completion criteria | [Working agreement](agent/working-agreement.md), [Definition of Done](agent/definition-of-done.md) |
 

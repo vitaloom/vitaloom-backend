@@ -2,11 +2,15 @@
 
 VitaLoom Backend owns backend application behavior, persistence and the API contract consumed by the separate Mobile and Data Producer repositories.
 
+## VitaLoom development workflow
+
+For tasks in the VitaLoom workspace, read the [workspace instructions](../AGENTS.md), [workflow and source map](../vitaloom-business-docs-and-tools/docs/development-workflow/README.md) and [Decision Ledger](../vitaloom-business-docs-and-tools/docs/development-workflow/decisions.md). Apply the local working agreement, accepted ADRs and Definition of Done together with the shared task record.
+
 ## Current repository baseline
 
 This repository already contains the Java 21 / Spring Boot application bootstrap, Maven Wrapper, MongoDB local-development infrastructure and baseline Spring configuration. Business features are migrated into this repository incrementally.
 
-`docs/api/api-contract.md` is the canonical API-contract index and shared-conventions entry point. Detailed contracts are split by area under `docs/api/` (including one file per metric in `docs/api/metrics/`). A documented endpoint describes expected behavior; it does **not** mean it is implemented. Read the relevant contract and inspect current controllers, services and tests before changing or relying on an endpoint.
+`docs/api/api-contract.md` is the canonical API-contract index and shared-conventions entry point. The index links to contracts under `docs/api/` and to feature-owned contracts under `docs/features/`, including Sleep F1 and F2. A documented endpoint describes expected behavior; it does **not** mean it is implemented. Read the relevant contract and inspect current controllers, services and tests before changing or relying on an endpoint.
 
 The former demo implementation remains available in [`vitaloom-demo/demo`](https://github.com/vitaloom/vitaloom-demo/tree/main/demo) as a migration and behavior reference. The backend repository and its API contract are the source of truth for new backend work.
 
