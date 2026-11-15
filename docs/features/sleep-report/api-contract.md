@@ -97,7 +97,7 @@ Use [shared Problem Details](../../api/api-contract.md#generic-error-response) w
 
 | HTTP | Code | Condition |
 | --- | --- | --- |
-| 400 | `INVALID_REQUEST` | Query parameters supplied |
+| 400 | `INVALID_REQUEST` | Query parameters supplied to `GET /api/sleep/recent` |
 | 401 | `UNAUTHORIZED` | Missing, invalid or expired access JWT |
 | 403 | `FORBIDDEN` | Authenticated request denied by shared security policy, when applicable |
 | 500 | `INTERNAL_ERROR` | Unexpected failure, including a failed Mongo read |
@@ -116,7 +116,7 @@ Status mapping is `NO_DATA` for zero MAIN, `INSUFFICIENT_DATA` when there are MA
 
 ## `GET /api/sleep/insights/{code}`
 
-Requires Bearer access JWT and accepts the currently supported codes `A01`, `A02`, `B01`, and `B04`. It accepts no query parameters; the detail period is always the current `[D−6,D]` and any query is `400 INVALID_REQUEST`. An unsupported code returns `404 INSIGHT_NOT_FOUND`. Responses are no-store and refetch the current evidence; clients must not treat prior detail evidence as current after Journal changes.
+Requires Bearer access JWT and accepts the currently supported codes `A01`, `A02`, `B01`, and `B04`. It accepts no query parameters; the detail period is always the current `[D−6,D]` and any query is `400 INVALID_REQUEST`. An unsupported code returns `404 INSIGHT_NOT_FOUND`. Responses are no-store and refetch current evidence, including the effect of Journal edits and applicable Goal changes.
 
 The JSON fields are `code`, `category`, `status`, `period`, `title`, optional `summary`, `sample`, and `evidence`, plus `sourceRefs`, `limitations`, `policyVersion`, and `evidenceVersion`. Non-READY detail includes the current status with empty source/limitation lists and no stale evidence. Shared authentication and Problem Details conventions apply.
 
