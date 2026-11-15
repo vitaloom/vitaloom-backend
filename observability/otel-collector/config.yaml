@@ -4,6 +4,26 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
+  prometheus/cadvisor:
+    config:
+      scrape_configs:
+        - job_name: cadvisor
+          scrape_interval: 15s
+          static_configs:
+            - targets: [cadvisor:8080]
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: 'container_(cpu_usage_seconds_total|memory_working_set_bytes|network_(receive|transmit)_bytes_total)'
+              action: keep
+            - source_labels: [id]
+              regex: '/(docker/[a-f0-9]{64}|system.slice/docker-[a-f0-9]{64}.scope)'
+              action: keep
+            - source_labels: [id]
+              regex: '/(docker/|system[.]slice/docker-)([a-f0-9]{12})[a-f0-9]{52}([.]scope)?'
+              target_label: container_id
+              replacement: '$${2}'
+
+
 exporters:
   prometheus:
     endpoint: 0.0.0.0:8889
@@ -13,4 +33,7 @@ service:
   pipelines:
     metrics:
       receivers: [otlp]
+      exporters: [prometheus]
+    metrics/cadvisor:
+      receivers: [prometheus/cadvisor]
       exporters: [prometheus]

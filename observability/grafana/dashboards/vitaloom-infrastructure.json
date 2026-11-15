@@ -11,15 +11,15 @@
     "list": [
       {
         "name": "container",
-        "label": "Container",
+        "label": "Container ID",
         "type": "query",
         "datasource": {
           "type": "prometheus",
           "uid": "vitaloom-prometheus"
         },
-        "definition": "label_values(vitaloom_docker_container_memory_usage_bytes, container_name)",
+        "definition": "label_values(container_memory_working_set_bytes, container_id)",
         "query": {
-          "query": "label_values(vitaloom_docker_container_memory_usage_bytes, container_name)",
+          "query": "label_values(container_memory_working_set_bytes, container_id)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
@@ -59,8 +59,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "vitaloom_docker_container_cpu_utilization{container_name=~\"$container\"}",
-          "legendFormat": "{{container_name}}"
+          "expr": "sum by (container_id) (rate(container_cpu_usage_seconds_total{container_id=~\"$container\",cpu=\"total\"}[2m]))",
+          "legendFormat": "{{container_id}}"
         }
       ]
     },
@@ -88,15 +88,15 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "vitaloom_docker_container_memory_usage_bytes{container_name=~\"$container\"}",
-          "legendFormat": "{{container_name}}"
+          "expr": "container_memory_working_set_bytes{container_id=~\"$container\"}",
+          "legendFormat": "{{container_id}}"
         }
       ]
     },
     {
       "id": 3,
       "title": "Network traffic",
-      "description": "Rate calculated from Docker stats' rounded cumulative byte totals.",
+      "description": "Rate calculated from cAdvisor network counters. The socket-free Docker Desktop setup does not currently emit these counters.",
       "type": "timeseries",
       "gridPos": {
         "x": 0,
@@ -118,13 +118,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(vitaloom_docker_container_network_receive_bytes_total{container_name=~\"$container\"}[2m])",
-          "legendFormat": "{{container_name}} RX"
+          "expr": "rate(container_network_receive_bytes_total{container_id=~\"$container\"}[2m])",
+          "legendFormat": "{{container_id}} RX"
         },
         {
           "refId": "B",
-          "expr": "rate(vitaloom_docker_container_network_transmit_bytes_total{container_name=~\"$container\"}[2m])",
-          "legendFormat": "{{container_name}} TX"
+          "expr": "rate(container_network_transmit_bytes_total{container_id=~\"$container\"}[2m])",
+          "legendFormat": "{{container_id}} TX"
         }
       ]
     }
