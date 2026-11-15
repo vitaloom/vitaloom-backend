@@ -28,18 +28,22 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(locations = "/mongo-integration-test.properties",
-        properties = "vitaloom.test.mongodb.database=sleep_recent_test")
+        properties = {"vitaloom.test.mongodb.database=sleep_recent_test", "vitaloom.sleep.story.enabled=true"})
+@ActiveProfiles("test")
 @AutoConfigureMockMvc
 @Import({SleepRecentReportMongoIntegrationTest.ReportClockConfig.class, MongoTestcontainersConfiguration.class})
 class SleepRecentReportMongoIntegrationTest {
     private static final String SESSIONS = "/api/sleep/v2/sessions";
     private static final String REPORT = "/api/sleep/recent";
     private static final String INSIGHTS = "/api/sleep/insights";
+    private static final String CONSENT = "/api/sleep/ai/consent";
+    private static final String STORY = "/api/sleep/recent/story";
 
     @Autowired MockMvc mvc;
     @Autowired JwtTokenService tokens;
@@ -172,6 +176,74 @@ class SleepRecentReportMongoIntegrationTest {
         mvc.perform(auth(get(INSIGHTS + "/B01"), owner)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("UNVERIFIED_DATA"))
                 .andExpect(jsonPath("$.evidence").doesNotExist());
+    }
+
+    @Test
+    void storyRequiresPersistedAccountConsentAndCurrentReadyNonA01Evidence() throws Exception {
+        createDurationWithFeeling("2026-11-09", 420, "COMFORTABLE");
+        createDurationWithFeeling("2026-11-10", 430, "NORMAL");
+        createDurationWithFeeling("2026-11-11", 450, "TIRED");
+
+        mvc.perform(get(CONSENT)).andExpect(status().isUnauthorized());
+        mvc.perform(get(STORY)).andExpect(status().isUnauthorized());
+
+        mvc.perform(auth(get(CONSENT), owner)).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.enabled").value(false))
+                .andExpect(jsonPath("$.available").value(true));
+        mvc.perform(auth(get(STORY), owner)).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.status").value("CONSENT_REQUIRED"))
+                .andExpect(jsonPath("$.headline").doesNotExist())
+                .andExpect(jsonPath("$.observations").doesNotExist());
+
+        mvc.perform(auth(put(CONSENT), owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.enabled").value(true))
+                .andExpect(jsonPath("$.available").value(true));
+        mvc.perform(auth(get(CONSENT), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(true));
+        mvc.perform(auth(get(CONSENT), other)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false));
+
+        var detail = mvc.perform(auth(get(INSIGHTS + "/B01"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"))
+                .andReturn();
+        String fingerprint = JsonPath.read(detail.getResponse().getContentAsString(), "$.evidenceVersion");
+        mvc.perform(auth(get(STORY), owner)).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.status").value("STORY"))
+                .andExpect(jsonPath("$.headline").isNotEmpty())
+                .andExpect(jsonPath("$.observations.length()").value(org.hamcrest.Matchers.lessThanOrEqualTo(2)))
+                .andExpect(jsonPath("$.observations[0].insightCode").value("B01"))
+                .andExpect(jsonPath("$.observations[0].evidenceFingerprint").value(fingerprint));
+
+        mvc.perform(auth(put(CONSENT), owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false));
+        mvc.perform(auth(get(STORY), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CONSENT_REQUIRED"))
+                .andExpect(jsonPath("$.headline").doesNotExist());
+    }
+
+    @Test
+    void storyIsIneligibleWhenOnlyA01IsReady() throws Exception {
+        createDuration("2026-11-09", 420);
+        createDuration("2026-11-10", 430);
+        createDuration("2026-11-11", 450);
+        mvc.perform(auth(put(CONSENT), owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":true}"))
+                .andExpect(status().isOk());
+        mvc.perform(auth(get(INSIGHTS), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].status").value("READY"))
+                .andExpect(jsonPath("$.items[1].status").value("INSUFFICIENT_DATA"));
+        mvc.perform(auth(get(STORY), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("INELIGIBLE"))
+                .andExpect(jsonPath("$.headline").doesNotExist())
+                .andExpect(jsonPath("$.observations").doesNotExist());
     }
 
     private String createDurationWithFeeling(String day, int minutes, String feeling) throws Exception {

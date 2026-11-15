@@ -64,7 +64,7 @@ Use [shared Problem Details](../../api/api-contract.md#generic-error-response) w
 | 403 | `FORBIDDEN` | Authenticated request denied by shared security policy, when applicable |
 | 500 | `INTERNAL_ERROR` | Unexpected failure, including a failed Mongo read |
 
-A valid subject with an empty Journal receives `200 NO_DATA`. A request cannot select a different account. Goal history, consent and AI remain later delivery phases.
+A valid subject with an empty Journal receives `200 NO_DATA`. A request cannot select a different account. Goal history remains a later delivery phase.
 
 ## `GET /api/sleep/insights`
 
@@ -81,3 +81,15 @@ Status mapping is `NO_DATA` for zero MAIN, `INSUFFICIENT_DATA` when there are MA
 Requires Bearer access JWT and accepts only currently supported codes `A01` and `B01`. It accepts no query parameters; the detail period is always the current `[D−6,D]` and any query is `400 INVALID_REQUEST`. An unsupported code returns `404 INSIGHT_NOT_FOUND`. Responses are no-store and refetch the current evidence; clients must not treat prior detail evidence as current after Journal changes.
 
 The JSON fields are `code`, `category`, `status`, `period`, `title`, optional `summary`, `sample`, and `evidence`, plus `sourceRefs`, `limitations`, `policyVersion`, and `evidenceVersion`. Non-READY detail includes the current status with empty source/limitation lists and no stale evidence. Shared authentication and Problem Details conventions apply.
+
+## Sleep Story preview
+
+All three requests below require an access Bearer JWT, select the account by its subject, accept no query parameters and return `Cache-Control: no-store` on success.
+
+- `GET /api/sleep/ai/consent` returns `{enabled,available}` as booleans. Missing consent defaults to OFF. `available` indicates whether the dev/test provider is active.
+- `PUT /api/sleep/ai/consent` accepts exactly `{"enabled":true}` or `{"enabled":false}` and returns the same shape as GET. It stores one preference per account in `sleep_ai_consent`, keyed by the JWT subject. Revocation is accepted even when the provider is disabled. Enabling while disabled returns `409 SLEEP_STORY_DISABLED`. Invalid body or query parameters return `400 INVALID_REQUEST`.
+- `GET /api/sleep/recent/story` returns `{status}` for `DISABLED`, `CONSENT_REQUIRED` or `INELIGIBLE`. A `STORY` or `FALLBACK` result includes `headline` and one or two `observations`. Each observation has `insightCode`, `text`, `dataContext` and `evidenceFingerprint` matching the evidence version of that insight's current Detail. Clients can open that Detail by code and fetch it again.
+
+The service needs current verified Published READY evidence and at least one insight beyond A01 (B01 in P3). It gives the local fake provider limited counts, the observation period, version and fingerprint, with no journal rows, account identifiers or source references. The server validates Vietnamese sentences against evidence-derived templates and checks the 120-word budget. After generation, it reads consent and the published candidate pool again. A consent revision change suppresses all output. Invalid or stale provider output can yield a deterministic fallback only when the current pool is eligible and consent still matches. If eligibility has been lost, the response has no content.
+
+P3 is a development/test preview. It requires the Spring profile `dev` or `test` and `VITALOOM_SLEEP_STORY_ENABLED=true`. Explicit `prod` or `production` profiles disable the provider. Production readiness, a real provider, Redis, cooldown, timeout, retry, single-flight and operational rate limiting are deferred.
