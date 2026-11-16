@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -41,6 +42,8 @@ public class SleepStoryService {
     private final Clock clock;
     private final Map<String, StorySuccess> storySuccesses = new ConcurrentHashMap<>();
     private final Map<ExplanationKey, ExplanationSuccess> explanationSuccesses = new ConcurrentHashMap<>();
+    private final Map<FlightKey, CompletableFuture<Response>> storyFlights = new ConcurrentHashMap<>();
+    private final Map<FlightKey, CompletableFuture<ExplanationResponse>> explanationFlights = new ConcurrentHashMap<>();
     private static final Duration STORY_COOLDOWN = Duration.ofMinutes(15);
     private static final Duration EXPLANATION_COOLDOWN = Duration.ofMinutes(5);
     private static final String COOLDOWN_NOTICE = "Bạn có thể tạo câu chuyện mới sau thời gian chờ 15 phút.";
@@ -123,6 +126,27 @@ public class SleepStoryService {
         if (!original.eligible()) return Response.empty("INELIGIBLE");
 
         String key = cacheKey("story", owner, original, STORY_PROMPT);
+        return singleFlight(storyFlights, new FlightKey(key, before), deadline,
+                () -> generateStory(owner, selectedZone, provider, before, original, key, deadline), result -> {
+                    Evidence current;
+                    try {
+                        current = timedRead(() -> evidence(owner, selectedZone), deadline, ticker);
+                        if (!before.equals(timedRead(() -> consent.read(owner), deadline, ticker))) {
+                            return Response.empty("CONSENT_REQUIRED");
+                        }
+                    } catch (DeadlineExceeded expired) { return Response.empty("CONSENT_REQUIRED"); }
+                    if (!current.eligible()) return Response.empty("INELIGIBLE");
+                    if (result == null || !key.equals(cacheKey("story", owner, current, STORY_PROMPT))
+                            || (result.observations() != null
+                                    && !valid(new Story(result.headline(), result.observations()), current))) {
+                        return storyFallback(current, false);
+                    }
+                    return mayDispatch(deadline) ? result : Response.empty("CONSENT_REQUIRED");
+                });
+    }
+
+    private Response generateStory(String owner, ZoneId selectedZone, Provider provider, Consent before,
+            Evidence original, String key, long deadline) {
         Story output = null;
         boolean cached = false;
         boolean coolingDown = false;
@@ -187,6 +211,32 @@ public class SleepStoryService {
             return ExplanationResponse.empty("STALE");
         }
         String key = cacheKey("explanation", owner, original, EXPLANATION_PROMPT);
+        return singleFlight(explanationFlights, new FlightKey(key, before), deadline,
+                () -> generateExplanation(owner, code, selectedZone, provider, before, original, key, deadline), result -> {
+                    Evidence current;
+                    try {
+                        current = timedRead(() -> explanationEvidence(owner, code, selectedZone), deadline, ticker);
+                        if (!before.equals(timedRead(() -> consent.read(owner), deadline, ticker))) {
+                            return ExplanationResponse.empty("CONSENT_REQUIRED");
+                        }
+                    } catch (DeadlineExceeded expired) { return ExplanationResponse.empty("CONSENT_REQUIRED"); }
+                    if (current.candidates().isEmpty()) return ExplanationResponse.empty("INELIGIBLE");
+                    if (!key.equals(cacheKey("explanation", owner, current, EXPLANATION_PROMPT))) {
+                        return ExplanationResponse.empty("STALE");
+                    }
+                    if (!mayDispatch(deadline)) return ExplanationResponse.empty("CONSENT_REQUIRED");
+                    Explanation fallback = explanationPreview(current);
+                    if (result == null || (result.evidenceFingerprint() != null
+                            && !fallback.equals(new Explanation(result.observation(), result.evidenceBasis(),
+                                    result.limitations(), result.evidenceFingerprint())))) {
+                        return ExplanationResponse.fallback(fallback);
+                    }
+                    return result;
+                });
+    }
+
+    private ExplanationResponse generateExplanation(String owner, String code, ZoneId selectedZone, Provider provider,
+            Consent before, Evidence original, String key, long deadline) {
         Explanation output = null;
         boolean cached = false;
         ExplanationKey cooldownKey = new ExplanationKey(owner, code);
@@ -233,6 +283,36 @@ public class SleepStoryService {
         }
         return mayDispatch(deadline) ? generated : ExplanationResponse.fallback(fallback);
     }
+
+    private <T> T singleFlight(Map<FlightKey, CompletableFuture<T>> flights, FlightKey key, long deadline,
+            Supplier<T> generate, java.util.function.Function<T, T> revalidate) {
+        CompletableFuture<T> created = new CompletableFuture<>();
+        CompletableFuture<T> existing = flights.putIfAbsent(key, created);
+        if (existing == null) {
+            try {
+                T result = generate.get();
+                created.complete(result);
+                return result;
+            } catch (RuntimeException | Error failure) {
+                created.completeExceptionally(failure);
+                throw failure;
+            } finally {
+                flights.remove(key, created);
+            }
+        }
+        T result = null;
+        try {
+            long remaining = deadline - revalidationReserveNanos - ticker.getAsLong();
+            if (remaining > 0) result = existing.get(remaining, TimeUnit.NANOSECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException | TimeoutException unavailable) {
+            // A waiter owns its deadline, but must not cancel work shared by other requests.
+        }
+        return revalidate.apply(result);
+    }
+
+    private record FlightKey(String identity, Consent consent) {}
 
     private <K, V> boolean recordPublication(Map<K, V> successes, K key, V published, long deadline) {
         // Decide publication and cooldown together so an expired call cannot replace a concurrent success.

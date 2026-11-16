@@ -46,6 +46,57 @@ class SleepAiEvidenceIntegrationTest {
     private static final LocalDate TODAY = LocalDate.of(2026, 11, 16);
 
     @Test
+    void simultaneousHttpRequestsShareOneFakeProviderCallForEachKind() throws Exception {
+        for (boolean explanation : List.of(false, true)) {
+            Harness harness = new Harness();
+            var entered = new java.util.concurrent.CountDownLatch(1);
+            var release = new java.util.concurrent.CountDownLatch(1);
+            org.mockito.stubbing.Answer<Object> answer = call -> {
+                entered.countDown();
+                assertThat(release.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                return explanation ? SleepStoryService.explanationPreview(call.getArgument(0))
+                        : SleepStoryService.preview(call.getArgument(0));
+            };
+            if (explanation) doAnswer(answer).when(harness.provider).explain(any());
+            else doAnswer(answer).when(harness.provider).generate(any());
+            var mvc = MockMvcBuilders.standaloneSetup(new SleepStoryController(harness.service)).build();
+            java.util.concurrent.Callable<Void> request = () -> {
+                var owner = new TestingAuthenticationToken("owner", "unused");
+                var builder = explanation ? post("/api/sleep/ai/explanations").principal(owner)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"insightCode\":\"B01\"}")
+                        : get("/api/sleep/recent/story").principal(owner);
+                mvc.perform(builder).andExpect(status().isOk())
+                        .andExpect(jsonPath("$.status").value(explanation ? "EXPLANATION" : "STORY"));
+                return null;
+            };
+            try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+                var first = executor.submit(request);
+                try {
+                    assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                    var waiter = new AtomicReference<Thread>();
+                    var second = executor.submit(() -> { waiter.set(Thread.currentThread()); return request.call(); });
+                    long until = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
+                    boolean joined = false;
+                    while (System.nanoTime() < until && !joined) {
+                        Thread thread = waiter.get();
+                        StackTraceElement[] stack = thread == null ? new StackTraceElement[0] : thread.getStackTrace();
+                        joined = java.util.Arrays.stream(stack).anyMatch(frame -> frame.getMethodName().equals("singleFlight"))
+                                && java.util.Arrays.stream(stack).anyMatch(frame -> frame.getClassName()
+                                        .equals("java.util.concurrent.CompletableFuture") && frame.getMethodName().equals("get"));
+                        Thread.yield();
+                    }
+                    assertThat(joined).as("second HTTP request joined shared generation").isTrue();
+                    release.countDown();
+                    first.get(5, java.util.concurrent.TimeUnit.SECONDS);
+                    second.get(5, java.util.concurrent.TimeUnit.SECONDS);
+                } finally { release.countDown(); }
+            }
+            if (explanation) verify(harness.provider, times(1)).explain(any());
+            else verify(harness.provider, times(1)).generate(any());
+        }
+    }
+
+    @Test
     void realStatisticsSendsFullEvidenceAndSupportsEveryPublishedExplanation() {
         Harness harness = new Harness();
         Evidence first = harness.capture();

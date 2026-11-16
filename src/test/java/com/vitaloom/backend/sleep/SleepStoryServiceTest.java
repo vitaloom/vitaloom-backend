@@ -299,6 +299,8 @@ class SleepStoryServiceTest {
         try {
             assertThat(firstReady.await(5, TimeUnit.SECONDS)).isTrue();
             ticker.set(TimeUnit.SECONDS.toNanos(5));
+            // A different evidence identity can publish while the earlier flight is still in progress.
+            when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "new-evidence")));
             assertThat(bounded.story("owner").status()).isEqualTo("STORY");
             ticker.set(TimeUnit.SECONDS.toNanos(20));
         } finally {
