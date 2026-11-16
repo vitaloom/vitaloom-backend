@@ -5,13 +5,18 @@ import com.vitaloom.backend.sleep.exception.SleepFailure;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.Item;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.Period;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.time.ZoneId;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -24,6 +29,12 @@ public class SleepStoryService {
     private final SleepInsightsStatisticsService insights;
     private final ObjectProvider<Provider> providers;
     private final SleepAiCache cache;
+    private final Clock clock;
+    private final Map<String, StorySuccess> storySuccesses = new ConcurrentHashMap<>();
+    private final Map<ExplanationKey, Instant> explanationSuccesses = new ConcurrentHashMap<>();
+    private static final Duration STORY_COOLDOWN = Duration.ofMinutes(15);
+    private static final Duration EXPLANATION_COOLDOWN = Duration.ofMinutes(5);
+    private static final String COOLDOWN_NOTICE = "Bạn có thể tạo câu chuyện mới sau thời gian chờ 15 phút.";
     private static final String CONTENT_POLICY = "sleep-ai-policy-v1";
     private static final String STORY_PROMPT = "story-template-v1";
     private static final String EXPLANATION_PROMPT = "explanation-template-v1";
@@ -33,13 +44,19 @@ public class SleepStoryService {
         this(consent, insights, providers, SleepAiCache.bypass());
     }
 
-    @Autowired
     public SleepStoryService(ConsentStore consent, SleepInsightsStatisticsService insights,
             ObjectProvider<Provider> providers, SleepAiCache cache) {
+        this(consent, insights, providers, cache, Clock.systemUTC());
+    }
+
+    @Autowired
+    public SleepStoryService(ConsentStore consent, SleepInsightsStatisticsService insights,
+            ObjectProvider<Provider> providers, SleepAiCache cache, Clock clock) {
         this.consent = consent;
         this.insights = insights;
         this.providers = providers;
         this.cache = cache;
+        this.clock = clock;
     }
 
     public Preference preference(String owner) {
@@ -70,10 +87,16 @@ public class SleepStoryService {
         String key = cacheKey("story", owner, original, STORY_PROMPT);
         Story output = null;
         boolean cached = false;
+        boolean coolingDown = false;
         try {
             output = cache.readStory(key);
             cached = output != null;
-            if (!cached) output = provider.generate(original);
+            if (!cached) {
+                StorySuccess previous = storySuccesses.get(owner);
+                coolingDown = previous != null && !original.period().end().isAfter(previous.day())
+                        && clock.instant().isBefore(previous.at().plus(STORY_COOLDOWN));
+                if (!coolingDown) output = provider.generate(original);
+            }
         } catch (RuntimeException failure) {
             output = null;
         }
@@ -83,7 +106,8 @@ public class SleepStoryService {
         if (!current.eligible()) return Response.empty("INELIGIBLE");
         if (!key.equals(cacheKey("story", owner, current, STORY_PROMPT)) || !valid(output, current)) {
             Story fallback = preview(current);
-            return new Response("FALLBACK", fallback.headline(), fallback.observations());
+            return new Response("FALLBACK", fallback.headline(), fallback.observations(),
+                    coolingDown ? COOLDOWN_NOTICE : null);
         }
         if (!cached) {
             try {
@@ -92,6 +116,7 @@ public class SleepStoryService {
                 Story fallback = preview(current);
                 return new Response("FALLBACK", fallback.headline(), fallback.observations());
             }
+            storySuccesses.put(owner, new StorySuccess(clock.instant(), current.period().end()));
         }
         return new Response("STORY", output.headline(), List.copyOf(output.observations()));
     }
@@ -114,10 +139,16 @@ public class SleepStoryService {
         String key = cacheKey("explanation", owner, original, EXPLANATION_PROMPT);
         Explanation output = null;
         boolean cached = false;
+        ExplanationKey cooldownKey = new ExplanationKey(owner, code);
         try {
             output = cache.readExplanation(key);
             cached = output != null;
-            if (!cached) output = provider.explain(original);
+            if (!cached) {
+                Instant previous = explanationSuccesses.get(cooldownKey);
+                if (previous == null || !clock.instant().isBefore(previous.plus(EXPLANATION_COOLDOWN))) {
+                    output = provider.explain(original);
+                }
+            }
         } catch (RuntimeException failure) {
             output = null;
         }
@@ -138,6 +169,7 @@ public class SleepStoryService {
             } catch (RuntimeException failure) {
                 return ExplanationResponse.fallback(fallback);
             }
+            explanationSuccesses.put(cooldownKey, clock.instant());
         }
         return ExplanationResponse.generated(output);
     }
@@ -344,6 +376,8 @@ public class SleepStoryService {
     public record Story(String headline, List<Observation> observations) {}
     public record Observation(String insightCode, String text, String dataContext, String evidenceFingerprint) {}
     public record Explanation(String observation, String evidenceBasis, String limitations, String evidenceFingerprint) {}
+    private record StorySuccess(Instant at, LocalDate day) {}
+    private record ExplanationKey(String owner, String code) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record ExplanationResponse(String status, String observation, String evidenceBasis, String limitations,
@@ -360,7 +394,10 @@ public class SleepStoryService {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record Response(String status, String headline, List<Observation> observations) {
+    public record Response(String status, String headline, List<Observation> observations, String notice) {
+        public Response(String status, String headline, List<Observation> observations) {
+            this(status, headline, observations, null);
+        }
         static Response empty(String status) {
             return new Response(status, null, null);
         }

@@ -10,6 +10,7 @@ import com.vitaloom.backend.sleep.contract.dto.MainSleepRangeWindow;
 import com.vitaloom.backend.sleep.contract.dto.MainSleepWindow;
 import com.vitaloom.backend.sleep.contract.dto.SleepGoalWindow;
 import com.vitaloom.backend.sleep.service.SleepStoryService;
+import com.vitaloom.backend.sleep.service.SleepAiCache;
 import com.vitaloom.backend.sleep.controller.SleepStoryController;
 import com.vitaloom.backend.sleep.controller.exceptionhandler.SleepExceptionHandler;
 import org.springframework.security.authentication.TestingAuthenticationToken;
@@ -22,6 +23,7 @@ import com.vitaloom.backend.sleep.service.SleepStoryService.Provider;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.Period;
 import com.vitaloom.backend.statistics.service.impl.SleepInsightsStatisticsServiceImpl;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -59,6 +61,7 @@ class SleepAiEvidenceIntegrationTest {
         assertThat(first.fingerprint()).isEqualTo(harness.capture().fingerprint());
 
         for (String code : List.of("A01", "A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04")) {
+            harness.clock.advance(Duration.ofMinutes(5));
             var response = harness.service.explanation("owner", code, null, SELECTED_ZONE);
             assertThat(response.status()).as(code).isEqualTo("EXPLANATION");
             assertThat(response.observation()).as(code).isNotBlank();
@@ -68,6 +71,7 @@ class SleepAiEvidenceIntegrationTest {
                     .as(code + " explanation word budget").isLessThanOrEqualTo(150);
         }
         for (String code : List.of("A02", "A03", "A04", "A05", "B01", "B02", "B03", "B04")) {
+            harness.clock.advance(Duration.ofMinutes(15));
             harness.storyCode.set(code);
             var story = harness.service.story("owner", SELECTED_ZONE);
             assertThat(story.status()).as(code).isEqualTo("STORY");
@@ -84,6 +88,53 @@ class SleepAiEvidenceIntegrationTest {
         assertStoryStale(harness -> harness.changeFeeling("session-0", "TIRED"));
         assertStoryStale(harness -> harness.changeFeeling("session-2", null));
         assertStoryStale(harness -> harness.goals.set(Map.of()));
+    }
+
+    @Test
+    void httpCooldownReturnsCurrentFallbackWithoutAnAutomaticSecondProviderCall() throws Exception {
+        Harness harness = new Harness();
+        var mvc = MockMvcBuilders.standaloneSetup(new SleepStoryController(harness.service))
+                .setControllerAdvice(new SleepExceptionHandler()).build();
+        var owner = new TestingAuthenticationToken("owner", "unused");
+
+        mvc.perform(get("/api/sleep/recent/story").principal(owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("STORY"));
+        String fingerprint = SleepStoryService.preview(harness.sent.get())
+                .observations().getFirst().evidenceFingerprint();
+        mvc.perform(get("/api/sleep/recent/story").principal(owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FALLBACK"))
+                .andExpect(jsonPath("$.observations[0].evidenceFingerprint").value(fingerprint))
+                .andExpect(jsonPath("$.notice").exists());
+        verify(harness.provider, times(1)).generate(any());
+
+        String explanationFingerprint = candidate(harness.sent.get(), "B01").fingerprint();
+        mvc.perform(post("/api/sleep/ai/explanations").principal(owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"insightCode\":\"B01\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("EXPLANATION"));
+        mvc.perform(post("/api/sleep/ai/explanations").principal(owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"insightCode\":\"B01\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FALLBACK"))
+                .andExpect(jsonPath("$.evidenceFingerprint").value(explanationFingerprint));
+        verify(harness.provider, times(1)).explain(any());
+
+        harness.changeFeeling("session-2", null);
+        var current = harness.statistics.detail("owner", "B01");
+        assertThat(current.evidenceVersion()).isNotEqualTo(explanationFingerprint);
+        mvc.perform(post("/api/sleep/ai/explanations").principal(owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"insightCode\":\"B01\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FALLBACK"))
+                .andExpect(jsonPath("$.evidenceFingerprint").value(current.evidenceVersion()));
+        mvc.perform(post("/api/sleep/ai/explanations").principal(owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"insightCode\":\"A01\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("EXPLANATION"));
+        verify(harness.provider, times(2)).explain(any());
+        harness.clock.advance(Duration.ofMinutes(15));
+        verify(harness.provider, times(1)).generate(any());
+        verify(harness.provider, times(2)).explain(any());
+        mvc.perform(get("/api/sleep/recent/story").principal(owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("STORY"))
+                .andExpect(jsonPath("$.notice").doesNotExist());
+        verify(harness.provider, times(2)).generate(any());
     }
 
     @Test
@@ -158,6 +209,8 @@ class SleepAiEvidenceIntegrationTest {
         private final AtomicReference<String> storyCode = new AtomicReference<>();
         private final SleepStoryService service;
         private final AtomicReference<Evidence> sent = new AtomicReference<>();
+        private final Provider provider;
+        private final SleepInsightsStatisticsServiceImpl statistics;
 
         private Harness() {
             SleepMainReadQuery source = mock(SleepMainReadQuery.class);
@@ -181,12 +234,12 @@ class SleepAiEvidenceIntegrationTest {
                         .filter(entry -> in(entry.getKey(), from, to))
                         .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
             });
-            var statistics = new SleepInsightsStatisticsServiceImpl(source, goalQuery, clock);
+            statistics = new SleepInsightsStatisticsServiceImpl(source, goalQuery, clock);
             ConsentStore consent = mock(ConsentStore.class);
             when(consent.read("owner")).thenReturn(new Consent(true, "revision-1"));
             when(consent.read("other")).thenReturn(new Consent(false, "revision-0"));
             ObjectProvider<Provider> providers = mock(ObjectProvider.class);
-            Provider provider = mock(Provider.class);
+            provider = mock(Provider.class);
             when(providers.getIfAvailable()).thenReturn(provider);
             when(provider.generate(any())).thenAnswer(call -> {
                 Evidence original = call.getArgument(0);
@@ -203,11 +256,12 @@ class SleepAiEvidenceIntegrationTest {
                 beforePublish.getAndSet(ignored -> {}).accept(this);
                 return SleepStoryService.explanationPreview(original);
             });
-            service = new SleepStoryService(consent, statistics, providers);
+            service = new SleepStoryService(consent, statistics, providers, SleepAiCache.bypass(), clock);
         }
 
         private Evidence capture() { return capture(SELECTED_ZONE); }
         private Evidence capture(ZoneId zone) {
+            clock.advance(Duration.ofMinutes(15));
             var response = service.story("owner", zone);
             assertThat(response.status()).isIn("STORY", "FALLBACK");
             return sent.get();
@@ -251,6 +305,7 @@ class SleepAiEvidenceIntegrationTest {
         private final ZoneId zone;
         private MutableClock(Instant initial, ZoneId zone) { this.instant = new AtomicReference<>(initial); this.zone = zone; }
         void set(Instant value) { instant.set(value); }
+        void advance(Duration duration) { instant.updateAndGet(value -> value.plus(duration)); }
         @Override public ZoneId getZone() { return zone; }
         @Override public Clock withZone(ZoneId requested) { return new MutableClock(instant.get(), requested); }
         @Override public Instant instant() { return instant.get(); }

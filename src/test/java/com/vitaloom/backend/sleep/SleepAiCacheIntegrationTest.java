@@ -113,6 +113,11 @@ class SleepAiCacheIntegrationTest {
         String oldStoryKey = storyKey;
         harness.changeFeeling("session-2", "TIRED");
         mvc.perform(get("/api/sleep/recent/story").principal(principal))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FALLBACK"))
+                .andExpect(jsonPath("$.notice").exists());
+        assertThat(harness.generated.get()).isEqualTo(1);
+        harness.advance(Duration.ofMinutes(15));
+        mvc.perform(get("/api/sleep/recent/story").principal(principal))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("STORY"));
         String freshStoryKey = harness.cache.keys.stream().filter(key -> key.contains(":story:"))
                 .filter(key -> !key.equals(oldStoryKey)).findFirst().orElseThrow();
@@ -136,6 +141,10 @@ class SleepAiCacheIntegrationTest {
         while (Boolean.TRUE.equals(redis.hasKey(expiring)) && System.nanoTime() < deadline) Thread.sleep(25);
         assertThat(redis.hasKey(expiring)).isFalse();
         mvc.perform(get("/api/sleep/recent/story").principal(principal))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FALLBACK"));
+        assertThat(harness.generated.get()).isEqualTo(2);
+        harness.advance(Duration.ofMinutes(15));
+        mvc.perform(get("/api/sleep/recent/story").principal(principal))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("STORY"));
         assertThat(harness.generated.get()).isEqualTo(3);
 
@@ -146,6 +155,11 @@ class SleepAiCacheIntegrationTest {
         String evicted = harness.cache.keys.stream().filter(key -> key.contains(":explanation:"))
                 .filter(key -> redis.hasKey(key)).reduce((first, second) -> second).orElseThrow();
         redis.delete(evicted);
+        mvc.perform(post("/api/sleep/ai/explanations").principal(principal).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"insightCode\":\"B01\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FALLBACK"));
+        assertThat(harness.explained.get()).isEqualTo(2);
+        harness.advance(Duration.ofMinutes(5));
         mvc.perform(post("/api/sleep/ai/explanations").principal(principal).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"insightCode\":\"B01\"}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("EXPLANATION"));
@@ -317,8 +331,10 @@ class SleepAiCacheIntegrationTest {
             ObjectProvider<Provider> providerLookup = mock(ObjectProvider.class);
             when(providerLookup.getIfAvailable()).thenReturn(fake);
             cache = new TrackingCache(delegate);
-            service = new SleepStoryService(consentStore, statistics, providerLookup, cache);
+            service = new SleepStoryService(consentStore, statistics, providerLookup, cache, mutableClock);
         }
+
+        private void advance(Duration duration) { now.updateAndGet(value -> value.plus(duration)); }
 
         private void changeFeeling(String id, String feeling) {
             rows.updateAndGet(current -> current.stream().map(row -> row.id().equals(id)
