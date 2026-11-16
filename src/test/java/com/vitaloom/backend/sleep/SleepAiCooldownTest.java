@@ -66,7 +66,7 @@ class SleepAiCooldownTest {
 
     @Test
     void validCurrentCacheHitBypassesCooldownWithoutExtendingIt() {
-        SleepAiCache cache = mock(SleepAiCache.class);
+        SleepAiCache cache = mock(SleepAiCache.class, CALLS_REAL_METHODS);
         Harness h = new Harness(cache);
         assertThat(h.service.story("alice").status()).isEqualTo("STORY");
         h.clock.advance(Duration.ofMinutes(14));
@@ -218,7 +218,7 @@ class SleepAiCooldownTest {
         final SleepStoryService service;
         Duration generateDelay = Duration.ZERO;
 
-        Harness() { this(mock(SleepAiCache.class)); }
+        Harness() { this(mock(SleepAiCache.class, CALLS_REAL_METHODS)); }
         Harness(SleepAiCache cache) {
             this.cache = cache;
             when(consent.read(any())).thenReturn(new Consent(true, "on"));

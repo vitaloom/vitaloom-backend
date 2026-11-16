@@ -52,6 +52,19 @@ class RedisSleepAiCacheTest {
     }
 
     @Test
+    void doesNotDispatchWritesWhenDeadlineGuardExpiresDuringSerialization() {
+        var story = new Story("headline", List.of());
+        var explanation = new Explanation("observation", "basis", "limits", "evidence");
+        var checks = new java.util.concurrent.atomic.AtomicInteger();
+
+        cache.writeStory("late-story", story, () -> { checks.incrementAndGet(); return false; });
+        cache.writeExplanation("late-explanation", explanation, () -> { checks.incrementAndGet(); return false; });
+
+        assertThat(checks).hasValue(2);
+        verify(values, never()).setIfAbsent(anyString(), anyString(), any(Duration.class));
+    }
+
+    @Test
     void propagatesRedisAndMalformedValueFailuresForServiceFailSafeHandling() {
         when(values.get("outage")).thenThrow(new IllegalStateException("redis unavailable"));
         when(values.get("corrupt")).thenReturn("not-json");

@@ -4,6 +4,7 @@ import com.vitaloom.backend.sleep.service.SleepAiCache;
 import com.vitaloom.backend.sleep.service.SleepStoryService.Explanation;
 import com.vitaloom.backend.sleep.service.SleepStoryService.Story;
 import java.time.Duration;
+import java.util.function.BooleanSupplier;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
 import tools.jackson.databind.ObjectMapper;
@@ -34,11 +35,23 @@ public class RedisSleepAiCache implements SleepAiCache {
 
     @Override
     public void writeStory(String key, Story value) {
-        redis.opsForValue().setIfAbsent(key, json.writeValueAsString(value), TTL);
+        writeStory(key, value, () -> true);
     }
 
     @Override
     public void writeExplanation(String key, Explanation value) {
-        redis.opsForValue().setIfAbsent(key, json.writeValueAsString(value), TTL);
+        writeExplanation(key, value, () -> true);
+    }
+
+    @Override
+    public void writeStory(String key, Story value, BooleanSupplier mayDispatch) {
+        String serialized = json.writeValueAsString(value);
+        if (mayDispatch.getAsBoolean()) redis.opsForValue().setIfAbsent(key, serialized, TTL);
+    }
+
+    @Override
+    public void writeExplanation(String key, Explanation value, BooleanSupplier mayDispatch) {
+        String serialized = json.writeValueAsString(value);
+        if (mayDispatch.getAsBoolean()) redis.opsForValue().setIfAbsent(key, serialized, TTL);
     }
 }

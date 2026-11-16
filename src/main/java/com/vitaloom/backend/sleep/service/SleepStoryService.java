@@ -23,6 +23,7 @@ import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import org.springframework.beans.factory.ObjectProvider;
@@ -39,7 +40,7 @@ public class SleepStoryService {
     private final SleepAiCache cache;
     private final Clock clock;
     private final Map<String, StorySuccess> storySuccesses = new ConcurrentHashMap<>();
-    private final Map<ExplanationKey, Instant> explanationSuccesses = new ConcurrentHashMap<>();
+    private final Map<ExplanationKey, ExplanationSuccess> explanationSuccesses = new ConcurrentHashMap<>();
     private static final Duration STORY_COOLDOWN = Duration.ofMinutes(15);
     private static final Duration EXPLANATION_COOLDOWN = Duration.ofMinutes(5);
     private static final String COOLDOWN_NOTICE = "Bạn có thể tạo câu chuyện mới sau thời gian chờ 15 phút.";
@@ -132,12 +133,13 @@ public class SleepStoryService {
                 StorySuccess previous = storySuccesses.get(owner);
                 coolingDown = previous != null && !original.period().end().isAfter(previous.day())
                         && clock.instant().isBefore(previous.at().plus(STORY_COOLDOWN));
-                if (!coolingDown) output = providerCall(() -> provider.generate(original), deadline, revalidationReserveNanos, ticker, () -> {
-                    long retryDeadline = deadline - revalidationReserveNanos;
-                    if (!before.equals(timedRead(() -> consent.read(owner), retryDeadline, ticker))
-                            || !key.equals(cacheKey("story", owner, timedRead(() -> evidence(owner, selectedZone), retryDeadline, ticker), STORY_PROMPT)))
-                        throw new IllegalStateException("Current consent or evidence changed");
-                });
+                if (!coolingDown) {
+                    long providerDeadline = deadline - revalidationReserveNanos;
+                    output = providerCall(() -> provider.generate(original), providerDeadline,
+                            () -> key.equals(cacheKey("story", owner,
+                                    timedRead(() -> evidence(owner, selectedZone), providerDeadline, ticker), STORY_PROMPT)),
+                            () -> before.equals(consent.read(owner)));
+                }
             }
         } catch (RuntimeException failure) {
             output = null;
@@ -149,46 +151,19 @@ public class SleepStoryService {
         try { if (!before.equals(timedRead(() -> consent.read(owner), deadline, ticker))) return Response.empty("CONSENT_REQUIRED"); }
         catch (DeadlineExceeded expired) { return Response.empty("CONSENT_REQUIRED"); }
         if (!current.eligible()) return Response.empty("INELIGIBLE");
-        if (deadline - ticker.getAsLong() <= 0) {
-            Story fallback = preview(current);
-            return new Response("FALLBACK", fallback.headline(), fallback.observations());
-        }
         if (!key.equals(cacheKey("story", owner, current, STORY_PROMPT)) || !valid(output, current)) {
-            Story fallback = preview(current);
-            return new Response("FALLBACK", fallback.headline(), fallback.observations(),
-                    coolingDown ? COOLDOWN_NOTICE : null);
+            return storyFallback(current, coolingDown);
         }
-        if (deadline - ticker.getAsLong() <= 0) {
-            Story fallback = preview(current);
-            return new Response("FALLBACK", fallback.headline(), fallback.observations());
-        }
+        Response generated = new Response("STORY", output.headline(), List.copyOf(output.observations()));
         if (!cached) {
             Story publish = output;
-            if (!timedWrite(() -> cache.writeStory(key, publish), deadline, ticker)) {
-                Story fallback = preview(current);
-                return new Response("FALLBACK", fallback.headline(), fallback.observations());
-            }
-            if (deadline - ticker.getAsLong() <= 0) {
-                Story fallback = preview(current);
-                return new Response("FALLBACK", fallback.headline(), fallback.observations());
+            if (!timedWrite(() -> cache.writeStory(key, publish, () -> mayDispatch(deadline)), deadline)) {
+                return storyFallback(current, false);
             }
             StorySuccess published = new StorySuccess(clock.instant(), current.period().end());
-            if (deadline - ticker.getAsLong() <= 0) {
-                Story fallback = preview(current);
-                return new Response("FALLBACK", fallback.headline(), fallback.observations());
-            }
-            storySuccesses.put(owner, published);
-            if (deadline - ticker.getAsLong() <= 0) {
-                storySuccesses.remove(owner, published);
-                Story fallback = preview(current);
-                return new Response("FALLBACK", fallback.headline(), fallback.observations());
-            }
+            return recordPublication(storySuccesses, owner, published, deadline) ? generated : storyFallback(current, false);
         }
-        if (deadline - ticker.getAsLong() <= 0) {
-            Story fallback = preview(current);
-            return new Response("FALLBACK", fallback.headline(), fallback.observations());
-        }
-        return new Response("STORY", output.headline(), List.copyOf(output.observations()));
+        return mayDispatch(deadline) ? generated : storyFallback(current, false);
     }
 
     public ExplanationResponse explanation(String owner, String code, String versionHint) {
@@ -219,15 +194,14 @@ public class SleepStoryService {
             output = timedRead(() -> cache.readExplanation(key), deadline, ticker);
             cached = output != null;
             if (!cached) {
-                Instant previous = explanationSuccesses.get(cooldownKey);
-                if (previous == null || !clock.instant().isBefore(previous.plus(EXPLANATION_COOLDOWN))) {
-                    output = providerCall(() -> provider.explain(original), deadline, revalidationReserveNanos, ticker, () -> {
-                        long retryDeadline = deadline - revalidationReserveNanos;
-                        if (!before.equals(timedRead(() -> consent.read(owner), retryDeadline, ticker))
-                                || !key.equals(cacheKey("explanation", owner,
-                                timedRead(() -> explanationEvidence(owner, code, selectedZone), retryDeadline, ticker), EXPLANATION_PROMPT)))
-                            throw new IllegalStateException("Current consent or evidence changed");
-                    });
+                ExplanationSuccess previous = explanationSuccesses.get(cooldownKey);
+                if (previous == null || !clock.instant().isBefore(previous.at().plus(EXPLANATION_COOLDOWN))) {
+                    long providerDeadline = deadline - revalidationReserveNanos;
+                    output = providerCall(() -> provider.explain(original), providerDeadline,
+                            () -> key.equals(cacheKey("explanation", owner,
+                                    timedRead(() -> explanationEvidence(owner, code, selectedZone), providerDeadline, ticker),
+                                    EXPLANATION_PROMPT)),
+                            () -> before.equals(consent.read(owner)));
                 }
             }
         } catch (RuntimeException failure) {
@@ -239,7 +213,6 @@ public class SleepStoryService {
         try { if (!before.equals(timedRead(() -> consent.read(owner), deadline, ticker))) return ExplanationResponse.empty("CONSENT_REQUIRED"); }
         catch (DeadlineExceeded expired) { return ExplanationResponse.empty("CONSENT_REQUIRED"); }
         if (current.candidates().isEmpty()) return ExplanationResponse.empty("INELIGIBLE");
-        if (deadline - ticker.getAsLong() <= 0) return ExplanationResponse.fallback(explanationPreview(current));
         if (!key.equals(cacheKey("explanation", owner, current, EXPLANATION_PROMPT))) {
             return ExplanationResponse.empty("STALE");
         }
@@ -248,21 +221,27 @@ public class SleepStoryService {
                 + wordCount(fallback.limitations()) > 150) {
             return ExplanationResponse.fallback(fallback);
         }
-        if (deadline - ticker.getAsLong() <= 0) return ExplanationResponse.fallback(fallback);
+        ExplanationResponse generated = ExplanationResponse.generated(output);
         if (!cached) {
             Explanation publish = output;
-            if (!timedWrite(() -> cache.writeExplanation(key, publish), deadline, ticker)) return ExplanationResponse.fallback(fallback);
-            if (deadline - ticker.getAsLong() <= 0) return ExplanationResponse.fallback(fallback);
-            Instant published = clock.instant();
-            if (deadline - ticker.getAsLong() <= 0) return ExplanationResponse.fallback(fallback);
-            explanationSuccesses.put(cooldownKey, published);
-            if (deadline - ticker.getAsLong() <= 0) {
-                explanationSuccesses.remove(cooldownKey, published);
+            if (!timedWrite(() -> cache.writeExplanation(key, publish, () -> mayDispatch(deadline)), deadline)) {
                 return ExplanationResponse.fallback(fallback);
             }
+            var published = new ExplanationSuccess(clock.instant());
+            return recordPublication(explanationSuccesses, cooldownKey, published, deadline)
+                    ? generated : ExplanationResponse.fallback(fallback);
         }
-        if (deadline - ticker.getAsLong() <= 0) return ExplanationResponse.fallback(fallback);
-        return ExplanationResponse.generated(output);
+        return mayDispatch(deadline) ? generated : ExplanationResponse.fallback(fallback);
+    }
+
+    private <K, V> boolean recordPublication(Map<K, V> successes, K key, V published, long deadline) {
+        // Decide publication and cooldown together so an expired call cannot replace a concurrent success.
+        return successes.compute(key, (ignored, previous) -> mayDispatch(deadline) ? published : previous) == published;
+    }
+
+    private static Response storyFallback(Evidence evidence, boolean coolingDown) {
+        Story fallback = preview(evidence);
+        return new Response("FALLBACK", fallback.headline(), fallback.observations(), coolingDown ? COOLDOWN_NOTICE : null);
     }
 
     private static String cacheKey(String kind, String owner, Evidence evidence, String prompt) {
@@ -436,15 +415,15 @@ public class SleepStoryService {
         default Explanation explain(Evidence evidence) { return null; }
     }
 
-    @FunctionalInterface private interface ProviderOperation<T> { T run(); }
-
     private static <T> T timedRead(Supplier<T> operation, long deadline, LongSupplier ticker) {
         long remaining = deadline - ticker.getAsLong();
         if (remaining <= 0) throw new DeadlineExceeded();
         Future<T> future = null;
         try {
             future = READ_WORK.submit(operation::get);
-            return future.get(remaining, TimeUnit.NANOSECONDS);
+            T result = future.get(deadline - ticker.getAsLong(), TimeUnit.NANOSECONDS);
+            if (deadline - ticker.getAsLong() <= 0) throw new DeadlineExceeded();
+            return result;
         } catch (TimeoutException timeout) {
             if (future != null) future.cancel(true);
             throw new DeadlineExceeded();
@@ -462,17 +441,19 @@ public class SleepStoryService {
         }
     }
 
-    private static boolean timedWrite(Runnable operation, long deadline, LongSupplier ticker) {
-        long remaining = deadline - ticker.getAsLong();
-        if (remaining <= 0) return false;
+    private boolean mayDispatch(long deadline) {
+        return !Thread.currentThread().isInterrupted() && deadline - ticker.getAsLong() > 0;
+    }
+
+    private boolean timedWrite(Runnable operation, long deadline) {
+        if (!mayDispatch(deadline)) return false;
         Future<?> future = null;
         try {
             future = WRITE_WORK.submit(() -> {
-                if (deadline - ticker.getAsLong() <= 0) return;
-                operation.run();
+                if (mayDispatch(deadline)) operation.run();
             });
-            future.get(remaining, TimeUnit.NANOSECONDS);
-            return deadline - ticker.getAsLong() > 0;
+            future.get(deadline - ticker.getAsLong(), TimeUnit.NANOSECONDS);
+            return mayDispatch(deadline);
         } catch (TimeoutException timeout) {
             if (future != null) future.cancel(true);
             return false;
@@ -487,17 +468,19 @@ public class SleepStoryService {
 
     private static final class DeadlineExceeded extends RuntimeException {}
 
-    private static <T> T providerCall(ProviderOperation<T> operation, long deadline, long reserve,
-            LongSupplier ticker, Runnable retryCheck) {
+    private <T> T providerCall(Supplier<T> operation, long providerDeadline,
+            BooleanSupplier retryEvidenceCurrent, BooleanSupplier retryConsentCurrent) {
         for (int attempt = 0; attempt < 2; attempt++) {
-            long remaining = deadline - ticker.getAsLong() - reserve;
-            if (remaining <= 0) return null;
+            if (!mayDispatch(providerDeadline)) return null;
             Future<T> future = null;
+            boolean retry = attempt == 1;
             try {
-                future = PROVIDER_WORK.submit(operation::run);
-                T result = future.get(remaining, TimeUnit.NANOSECONDS);
-                if (deadline - reserve - ticker.getAsLong() <= 0) return null;
-                return result;
+                future = PROVIDER_WORK.submit(() -> {
+                    if (!mayDispatch(providerDeadline) || (retry && !retryConsentCurrent.getAsBoolean())) return null;
+                    return mayDispatch(providerDeadline) ? operation.get() : null;
+                });
+                T result = future.get(providerDeadline - ticker.getAsLong(), TimeUnit.NANOSECONDS);
+                return mayDispatch(providerDeadline) ? result : null;
             } catch (TimeoutException timeout) {
                 if (future != null) future.cancel(true);
                 return null;
@@ -508,7 +491,11 @@ public class SleepStoryService {
             } catch (ExecutionException failed) {
                 Throwable cause = failed.getCause();
                 if (!(cause instanceof TransientProviderException) || attempt == 1) return null;
-                try { retryCheck.run(); } catch (RuntimeException changed) { return null; }
+                try {
+                    if (!mayDispatch(providerDeadline) || !retryEvidenceCurrent.getAsBoolean()) return null;
+                } catch (RuntimeException unavailable) {
+                    return null;
+                }
             } catch (RuntimeException rejected) {
                 return null;
             }
@@ -553,6 +540,7 @@ public class SleepStoryService {
     public record Explanation(String observation, String evidenceBasis, String limitations, String evidenceFingerprint) {}
     private record StorySuccess(Instant at, LocalDate day) {}
     private record ExplanationKey(String owner, String code) {}
+    private record ExplanationSuccess(Instant at) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record ExplanationResponse(String status, String observation, String evidenceBasis, String limitations,

@@ -355,6 +355,20 @@ class SleepAiCacheIntegrationTest {
         }
         @Override public void writeStory(String key, SleepStoryService.Story value) { keys.add(key); ownedKeys.add(key); delegate.writeStory(key, value); }
         @Override public void writeExplanation(String key, SleepStoryService.Explanation value) { keys.add(key); ownedKeys.add(key); delegate.writeExplanation(key, value); }
+        @Override public void writeStory(String key, SleepStoryService.Story value, java.util.function.BooleanSupplier mayDispatch) {
+            delegate.writeStory(key, value, () -> {
+                boolean allowed = mayDispatch.getAsBoolean();
+                if (allowed) { keys.add(key); ownedKeys.add(key); }
+                return allowed;
+            });
+        }
+        @Override public void writeExplanation(String key, SleepStoryService.Explanation value, java.util.function.BooleanSupplier mayDispatch) {
+            delegate.writeExplanation(key, value, () -> {
+                boolean allowed = mayDispatch.getAsBoolean();
+                if (allowed) { keys.add(key); ownedKeys.add(key); }
+                return allowed;
+            });
+        }
     }
 
     private static List<MainSleepInsight> fixtureRows() {

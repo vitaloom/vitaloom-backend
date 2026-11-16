@@ -204,10 +204,13 @@ class SleepAiEvidenceIntegrationTest {
             try { releaseExplanation.await(); } catch (InterruptedException ignored) { releaseExplanation.await(); }
             return SleepStoryService.explanationPreview(call.getArgument(0));
         }).when(harness.provider).explain(any());
-        mvc.perform(post("/api/sleep/ai/explanations").principal(owner).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"insightCode\":\"B01\"}"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FALLBACK"));
-        releaseExplanation.countDown();
+        try {
+            mvc.perform(post("/api/sleep/ai/explanations").principal(owner).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"insightCode\":\"B01\"}"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FALLBACK"));
+        } finally {
+            releaseExplanation.countDown();
+        }
         verify(harness.provider).explain(any());
     }
 
@@ -283,7 +286,7 @@ class SleepAiEvidenceIntegrationTest {
                 return SleepStoryService.explanationPreview(original);
             });
             service = new SleepStoryService(consent, statistics, providers, SleepAiCache.bypass(), clock,
-                    budget.toNanos(), budget.toNanos(), Duration.ofMillis(20).toNanos(), System::nanoTime);
+                    budget.toNanos(), budget.toNanos(), Duration.ofMillis(125).toNanos(), System::nanoTime);
         }
 
         private Evidence capture() { return capture(SELECTED_ZONE); }

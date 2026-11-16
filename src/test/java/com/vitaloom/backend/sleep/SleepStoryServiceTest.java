@@ -14,11 +14,15 @@ import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.In
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.Detail;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.Item;
 import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.Period;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -35,7 +39,7 @@ class SleepStoryServiceTest {
 
     @Test
     void redisReadFailureUsesCurrentFallbackWithoutCallingProviderOrWriting() {
-        SleepAiCache cache = mock(SleepAiCache.class);
+        SleepAiCache cache = mock(SleepAiCache.class, CALLS_REAL_METHODS);
         var cachedService = new SleepStoryService(consent, insights, providerLookup(), cache);
         when(consent.read("owner")).thenReturn(new Consent(true, "on"));
         when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
@@ -51,7 +55,7 @@ class SleepStoryServiceTest {
 
     @Test
     void invalidCachedOutputsAreNotPublishedOverwrittenOrRegenerated() {
-        SleepAiCache cache = mock(SleepAiCache.class);
+        SleepAiCache cache = mock(SleepAiCache.class, CALLS_REAL_METHODS);
         var cachedService = new SleepStoryService(consent, insights, providerLookup(), cache);
         when(consent.read("owner")).thenReturn(new Consent(true, "on"));
         when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
@@ -67,7 +71,7 @@ class SleepStoryServiceTest {
 
     @Test
     void cacheWriteFailureUsesNonAiFallbackForBothPaths() {
-        SleepAiCache cache = mock(SleepAiCache.class);
+        SleepAiCache cache = mock(SleepAiCache.class, CALLS_REAL_METHODS);
         var cachedService = new SleepStoryService(consent, insights, providerLookup(), cache);
         when(consent.read("owner")).thenReturn(new Consent(true, "on"));
         when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
@@ -82,7 +86,7 @@ class SleepStoryServiceTest {
 
     @Test
     void staleOrWithdrawnGeneratedOutputIsNeverStored() {
-        SleepAiCache cache = mock(SleepAiCache.class);
+        SleepAiCache cache = mock(SleepAiCache.class, CALLS_REAL_METHODS);
         var cachedService = new SleepStoryService(consent, insights, providerLookup(), cache);
         when(consent.read("owner")).thenReturn(new Consent(true, "on"));
         when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "old")), snapshot(item("B01", "new")));
@@ -161,8 +165,48 @@ class SleepStoryServiceTest {
     }
 
     @Test
+    void revocationDuringRetryEvidenceRefreshPreventsSecondProviderCall() {
+        var currentConsent = new java.util.concurrent.atomic.AtomicReference<>(new Consent(true, "on"));
+        when(consent.read("owner")).thenAnswer(call -> currentConsent.get());
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        when(insights.fullInsights("owner", null)).thenAnswer(call -> {
+            if (reads.incrementAndGet() == 2) currentConsent.set(new Consent(false, "revoked"));
+            return snapshot(item("B01", "b"));
+        });
+        when(provider.generate(any())).thenThrow(new SleepStoryService.TransientProviderException("temporary"))
+                .thenAnswer(call -> SleepStoryService.preview(call.getArgument(0)));
+
+        var response = service.story("owner");
+
+        assertThat(response.status()).isEqualTo("CONSENT_REQUIRED");
+        assertThat(response.observations()).isNull();
+        verify(provider).generate(any());
+    }
+
+    @Test
+    void consentReadReturningAtDeadlineCannotPublishOrWriteCache() {
+        var ticker = new java.util.concurrent.atomic.AtomicLong(50);
+        var deadlineCache = mock(SleepAiCache.class, CALLS_REAL_METHODS);
+        when(consent.read("owner")).thenAnswer(call -> {
+            if (org.mockito.Mockito.mockingDetails(consent).getInvocations().size() >= 2)
+                ticker.set(50 + TimeUnit.SECONDS.toNanos(20));
+            return new Consent(true, "on");
+        });
+        when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
+        when(provider.generate(any())).thenAnswer(call -> SleepStoryService.preview(call.getArgument(0)));
+        var bounded = new SleepStoryService(consent, insights, providerLookup(), deadlineCache, java.time.Clock.systemUTC(),
+                TimeUnit.SECONDS.toNanos(20), TimeUnit.SECONDS.toNanos(10), TimeUnit.MILLISECONDS.toNanos(100), ticker::get);
+
+        var response = bounded.story("owner");
+
+        assertThat(response.status()).isNotEqualTo("STORY");
+        assertThat(response.observations()).isNull();
+        verify(deadlineCache, never()).writeStory(any(), any(), any());
+    }
+
+    @Test
     void storyAndExplanationSuppressResultsAtTheirExactBudgets() {
-        var cache = mock(SleepAiCache.class);
+        var cache = mock(SleepAiCache.class, CALLS_REAL_METHODS);
         var storyTicker = new java.util.concurrent.atomic.AtomicLong(100);
         var bounded = new SleepStoryService(consent, insights, providerLookup(), cache, java.time.Clock.systemUTC(),
                 TimeUnit.SECONDS.toNanos(20), TimeUnit.SECONDS.toNanos(10), TimeUnit.MILLISECONDS.toNanos(100),
@@ -191,7 +235,7 @@ class SleepStoryServiceTest {
 
     @Test
     void suppressesGeneratedStoryWhenFinalEvidenceReadConsumesRemainingBudget() {
-        var cache = mock(SleepAiCache.class);
+        var cache = mock(SleepAiCache.class, CALLS_REAL_METHODS);
         var ticker = new java.util.concurrent.atomic.AtomicLong(100);
         var bounded = new SleepStoryService(consent, insights, providerLookup(), cache, java.time.Clock.systemUTC(),
                 TimeUnit.SECONDS.toNanos(20), TimeUnit.SECONDS.toNanos(10), TimeUnit.MILLISECONDS.toNanos(100), ticker::get);
@@ -222,12 +266,47 @@ class SleepStoryServiceTest {
                 java.time.Clock.systemUTC(), TimeUnit.MILLISECONDS.toNanos(120), TimeUnit.MILLISECONDS.toNanos(80),
                 TimeUnit.MILLISECONDS.toNanos(70), System::nanoTime);
         long started = System.nanoTime();
-        var response = bounded.story("owner");
-        releaseProvider.countDown();
+        SleepStoryService.Response response;
+        try {
+            response = bounded.story("owner");
+        } finally {
+            releaseProvider.countDown();
+        }
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
         assertThat(elapsedMs).isLessThan(300);
         assertThat(response.status()).isEqualTo("FALLBACK");
         verify(provider).generate(any());
+    }
+
+    @Test
+    void expiredPublicationPreservesAnotherRequestsSuccessfulCooldown() throws Exception {
+        var ticker = new AtomicLong();
+        var clock = mock(Clock.class);
+        var firstReady = new CountDownLatch(1);
+        var releaseFirst = new CountDownLatch(1);
+        when(clock.instant()).thenAnswer(call -> {
+            firstReady.countDown();
+            assertThat(releaseFirst.await(5, TimeUnit.SECONDS)).isTrue();
+            return Instant.EPOCH;
+        }).thenReturn(Instant.EPOCH);
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
+        when(provider.generate(any())).thenAnswer(call -> SleepStoryService.preview(call.getArgument(0)));
+        var bounded = new SleepStoryService(consent, insights, providerLookup(), SleepAiCache.bypass(), clock,
+                TimeUnit.SECONDS.toNanos(20), TimeUnit.SECONDS.toNanos(10), TimeUnit.SECONDS.toNanos(1), ticker::get);
+
+        var expired = CompletableFuture.supplyAsync(() -> bounded.story("owner"));
+        try {
+            assertThat(firstReady.await(5, TimeUnit.SECONDS)).isTrue();
+            ticker.set(TimeUnit.SECONDS.toNanos(5));
+            assertThat(bounded.story("owner").status()).isEqualTo("STORY");
+            ticker.set(TimeUnit.SECONDS.toNanos(20));
+        } finally {
+            releaseFirst.countDown();
+        }
+        assertThat(expired.get(5, TimeUnit.SECONDS).status()).isEqualTo("FALLBACK");
+        assertThat(bounded.story("owner").notice()).isNotBlank();
+        verify(provider, times(2)).generate(any());
     }
 
     @Test
