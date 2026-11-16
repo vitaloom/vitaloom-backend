@@ -12,6 +12,9 @@ services:
       - "127.0.0.1:${OBS_OTLP_PORT:-4318}:4318"
     volumes:
       - ./observability/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    networks:
+      - default
+      - vitaloom-network
 
   cadvisor:
     image: ghcr.io/google/cadvisor:v0.60.6
@@ -45,6 +48,11 @@ services:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
+
+networks:
+  vitaloom-network:
+    external: true
+    name: vitaloom-network
 
 volumes:
   prometheus-data:

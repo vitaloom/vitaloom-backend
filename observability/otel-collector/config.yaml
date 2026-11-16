@@ -21,6 +21,9 @@ receivers:
             - source_labels: [name]
               target_label: container_name
 
+  nginx:
+    endpoint: http://nginx:8080/stub_status
+    collection_interval: 15s
 
 exporters:
   prometheus:
@@ -34,4 +37,7 @@ service:
       exporters: [prometheus]
     metrics/cadvisor:
       receivers: [prometheus/cadvisor]
+      exporters: [prometheus]
+    metrics/nginx:
+      receivers: [nginx]
       exporters: [prometheus]

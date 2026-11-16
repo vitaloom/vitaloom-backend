@@ -110,7 +110,7 @@ Windows:
 On Windows, start the database and the separate monitoring stack, then run Spring Boot with the observability profile:
 
 ```powershell
-docker compose up -d mongodb
+docker compose up -d mongodb nginx
 docker compose -f docker-compose.obs.yml up -d
 .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=observability"
 ```
@@ -128,6 +128,10 @@ Stop the monitoring stack with `docker compose -f docker-compose.obs.yml down`. 
 ### Docker container metrics
 
 The observability Compose stack starts cAdvisor automatically. Open **VitaLoom Infrastructure** in Grafana and select a container by name to see CPU, memory working set, and network receive and transmit rates. The Collector scrapes cAdvisor over the internal Compose network and keeps metrics for the `vitaloom-backend` and `vitaloom-observability` projects. Rate panels need at least two scrapes.
+
+Start the backend Compose stack first so it creates the `vitaloom-network` that the Collector uses to reach Nginx. Open **VitaLoom Nginx** in Grafana to see HTTP request rate, current connections by state, and accepted and handled connection rates. Nginx serves `stub_status` on an unpublished container port. The Nginx counters include the Collector's own status requests, including when there is no application traffic.
+
+Docker rotates the Nginx container logs at 10 MB per file and keeps up to three files. Recreate the Nginx container to apply logging changes to an existing container.
 
 On Docker Desktop with Linux containers, cAdvisor uses the Linux PID namespace, the Docker socket for container names, and the containerd socket for container metadata with the containerd image store. The sockets grant access to their respective APIs. Only cAdvisor mounts them, and its metrics port stays inside Compose.
 
