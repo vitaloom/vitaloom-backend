@@ -19,6 +19,11 @@ spring:
     username: ${APP_USER:vitaloom_app}
     password: ${APP_PASSWORD:change-me-local-app-password}
   data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      connect-timeout: 500ms
+      timeout: 500ms
     mongodb:
       auto-index-creation: true
 

@@ -13,6 +13,7 @@ import java.util.Objects;
 import java.time.ZoneId;
 import java.util.Set;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -22,12 +23,23 @@ public class SleepStoryService {
     private final ConsentStore consent;
     private final SleepInsightsStatisticsService insights;
     private final ObjectProvider<Provider> providers;
+    private final SleepAiCache cache;
+    private static final String CONTENT_POLICY = "sleep-ai-policy-v1";
+    private static final String STORY_PROMPT = "story-template-v1";
+    private static final String EXPLANATION_PROMPT = "explanation-template-v1";
 
     public SleepStoryService(ConsentStore consent, SleepInsightsStatisticsService insights,
             ObjectProvider<Provider> providers) {
+        this(consent, insights, providers, SleepAiCache.bypass());
+    }
+
+    @Autowired
+    public SleepStoryService(ConsentStore consent, SleepInsightsStatisticsService insights,
+            ObjectProvider<Provider> providers, SleepAiCache cache) {
         this.consent = consent;
         this.insights = insights;
         this.providers = providers;
+        this.cache = cache;
     }
 
     public Preference preference(String owner) {
@@ -55,9 +67,13 @@ public class SleepStoryService {
         Evidence original = evidence(owner, selectedZone);
         if (!original.eligible()) return Response.empty("INELIGIBLE");
 
-        Story output;
+        String key = cacheKey("story", owner, original, STORY_PROMPT);
+        Story output = null;
+        boolean cached = false;
         try {
-            output = provider.generate(original);
+            output = cache.readStory(key);
+            cached = output != null;
+            if (!cached) output = provider.generate(original);
         } catch (RuntimeException failure) {
             output = null;
         }
@@ -65,9 +81,17 @@ public class SleepStoryService {
         Evidence current = evidence(owner, selectedZone);
         if (!before.equals(consent.read(owner))) return Response.empty("CONSENT_REQUIRED");
         if (!current.eligible()) return Response.empty("INELIGIBLE");
-        if (!original.fingerprint().equals(current.fingerprint()) || !valid(output, current)) {
+        if (!key.equals(cacheKey("story", owner, current, STORY_PROMPT)) || !valid(output, current)) {
             Story fallback = preview(current);
             return new Response("FALLBACK", fallback.headline(), fallback.observations());
+        }
+        if (!cached) {
+            try {
+                cache.writeStory(key, output);
+            } catch (RuntimeException failure) {
+                Story fallback = preview(current);
+                return new Response("FALLBACK", fallback.headline(), fallback.observations());
+            }
         }
         return new Response("STORY", output.headline(), List.copyOf(output.observations()));
     }
@@ -87,16 +111,20 @@ public class SleepStoryService {
         if (versionHint != null && !versionHint.isBlank() && !versionHint.equals(selected.fingerprint())) {
             return ExplanationResponse.empty("STALE");
         }
-        Explanation output;
+        String key = cacheKey("explanation", owner, original, EXPLANATION_PROMPT);
+        Explanation output = null;
+        boolean cached = false;
         try {
-            output = provider.explain(original);
+            output = cache.readExplanation(key);
+            cached = output != null;
+            if (!cached) output = provider.explain(original);
         } catch (RuntimeException failure) {
             output = null;
         }
         Evidence current = explanationEvidence(owner, code, selectedZone);
         if (!before.equals(consent.read(owner))) return ExplanationResponse.empty("CONSENT_REQUIRED");
         if (current.candidates().isEmpty()) return ExplanationResponse.empty("INELIGIBLE");
-        if (!original.fingerprint().equals(current.fingerprint())) {
+        if (!key.equals(cacheKey("explanation", owner, current, EXPLANATION_PROMPT))) {
             return ExplanationResponse.empty("STALE");
         }
         Explanation fallback = explanationPreview(current);
@@ -104,7 +132,19 @@ public class SleepStoryService {
                 + wordCount(fallback.limitations()) > 150) {
             return ExplanationResponse.fallback(fallback);
         }
+        if (!cached) {
+            try {
+                cache.writeExplanation(key, output);
+            } catch (RuntimeException failure) {
+                return ExplanationResponse.fallback(fallback);
+            }
+        }
         return ExplanationResponse.generated(output);
+    }
+
+    private static String cacheKey(String kind, String owner, Evidence evidence, String prompt) {
+        return "sleep:ai:" + kind + ":" + SleepAiEvidenceIdentity.hash(
+                List.of(owner, evidence.fingerprint(), CONTENT_POLICY, prompt));
     }
 
     private Evidence explanationEvidence(String owner, String code, ZoneId selectedZone) {

@@ -2,6 +2,7 @@ package com.vitaloom.backend.sleep;
 
 import com.vitaloom.backend.sleep.service.DeterministicSleepStoryProvider;
 import com.vitaloom.backend.sleep.service.SleepStoryService;
+import com.vitaloom.backend.sleep.service.SleepAiCache;
 import com.vitaloom.backend.sleep.service.SleepStoryService.Consent;
 import com.vitaloom.backend.sleep.service.SleepStoryService.ConsentStore;
 import com.vitaloom.backend.sleep.service.SleepStoryService.Explanation;
@@ -29,6 +30,72 @@ class SleepStoryServiceTest {
     private final SleepInsightsStatisticsService insights = mock(SleepInsightsStatisticsService.class);
     private final Provider provider = mock(Provider.class);
     private final SleepStoryService service = new SleepStoryService(consent, insights, providerLookup());
+
+    @Test
+    void redisReadFailureUsesCurrentFallbackWithoutCallingProviderOrWriting() {
+        SleepAiCache cache = mock(SleepAiCache.class);
+        var cachedService = new SleepStoryService(consent, insights, providerLookup(), cache);
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
+        when(insights.detail("owner", "B01")).thenReturn(detail("b"));
+        when(cache.readStory(any())).thenThrow(new IllegalStateException("offline"));
+        when(cache.readExplanation(any())).thenThrow(new IllegalStateException("offline"));
+        assertThat(cachedService.story("owner").status()).isEqualTo("FALLBACK");
+        assertThat(cachedService.explanation("owner", "B01", null).status()).isEqualTo("FALLBACK");
+        verifyNoInteractions(provider);
+        verify(cache, never()).writeStory(any(), any());
+        verify(cache, never()).writeExplanation(any(), any());
+    }
+
+    @Test
+    void invalidCachedOutputsAreNotPublishedOverwrittenOrRegenerated() {
+        SleepAiCache cache = mock(SleepAiCache.class);
+        var cachedService = new SleepStoryService(consent, insights, providerLookup(), cache);
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
+        when(insights.detail("owner", "B01")).thenReturn(detail("b"));
+        when(cache.readStory(any())).thenReturn(new Story("invalid", List.of()));
+        when(cache.readExplanation(any())).thenReturn(new Explanation("invalid", "invalid", "invalid", "b"));
+        assertThat(cachedService.story("owner").status()).isEqualTo("FALLBACK");
+        assertThat(cachedService.explanation("owner", "B01", null).status()).isEqualTo("FALLBACK");
+        verifyNoInteractions(provider);
+        verify(cache, never()).writeStory(any(), any());
+        verify(cache, never()).writeExplanation(any(), any());
+    }
+
+    @Test
+    void cacheWriteFailureUsesNonAiFallbackForBothPaths() {
+        SleepAiCache cache = mock(SleepAiCache.class);
+        var cachedService = new SleepStoryService(consent, insights, providerLookup(), cache);
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
+        when(insights.detail("owner", "B01")).thenReturn(detail("b"));
+        when(provider.generate(any())).thenAnswer(call -> SleepStoryService.preview(call.getArgument(0)));
+        when(provider.explain(any())).thenAnswer(call -> SleepStoryService.explanationPreview(call.getArgument(0)));
+        doThrow(new IllegalStateException("offline")).when(cache).writeStory(any(), any());
+        doThrow(new IllegalStateException("offline")).when(cache).writeExplanation(any(), any());
+        assertThat(cachedService.story("owner").status()).isEqualTo("FALLBACK");
+        assertThat(cachedService.explanation("owner", "B01", null).status()).isEqualTo("FALLBACK");
+    }
+
+    @Test
+    void staleOrWithdrawnGeneratedOutputIsNeverStored() {
+        SleepAiCache cache = mock(SleepAiCache.class);
+        var cachedService = new SleepStoryService(consent, insights, providerLookup(), cache);
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "old")), snapshot(item("B01", "new")));
+        when(provider.generate(any())).thenAnswer(call -> SleepStoryService.preview(call.getArgument(0)));
+        assertThat(cachedService.story("owner").status()).isEqualTo("FALLBACK");
+        when(insights.detail("owner", "B01")).thenReturn(detail("old"), detail("new"));
+        when(provider.explain(any())).thenAnswer(call -> SleepStoryService.explanationPreview(call.getArgument(0)));
+        assertThat(cachedService.explanation("owner", "B01", null).status()).isEqualTo("STALE");
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"), new Consent(true, "re-enabled"));
+        assertThat(cachedService.story("owner").status()).isEqualTo("CONSENT_REQUIRED");
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"), new Consent(false, "off"));
+        assertThat(cachedService.explanation("owner", "B01", null).status()).isEqualTo("CONSENT_REQUIRED");
+        verify(cache, never()).writeStory(any(), any());
+        verify(cache, never()).writeExplanation(any(), any());
+    }
 
     @SuppressWarnings("unchecked")
     private ObjectProvider<Provider> providerLookup() {
