@@ -217,7 +217,9 @@ class SleepStoryServiceTest {
             storyTicker.addAndGet(TimeUnit.SECONDS.toNanos(20));
             return SleepStoryService.preview(call.getArgument(0));
         });
-        assertThat(bounded.story("owner").status()).isEqualTo("INELIGIBLE");
+        var storyResult = bounded.story("owner");
+        assertThat(storyResult.status()).isEqualTo("CONSENT_REQUIRED");
+        assertThat(storyResult.observations()).isNull();
         verify(cache, never()).writeStory(any(), any());
 
         var explanationTicker = new java.util.concurrent.atomic.AtomicLong(200);
@@ -229,7 +231,9 @@ class SleepStoryServiceTest {
             explanationTicker.addAndGet(TimeUnit.SECONDS.toNanos(10));
             return SleepStoryService.explanationPreview(call.getArgument(0));
         });
-        assertThat(explanationBounded.explanation("owner", "B01", null).status()).isEqualTo("INELIGIBLE");
+        var explanationResult = explanationBounded.explanation("owner", "B01", null);
+        assertThat(explanationResult.status()).isEqualTo("CONSENT_REQUIRED");
+        assertThat(explanationResult.observation()).isNull();
         verify(cache, never()).writeExplanation(any(), any());
     }
 
@@ -306,7 +310,9 @@ class SleepStoryServiceTest {
         } finally {
             releaseFirst.countDown();
         }
-        assertThat(expired.get(5, TimeUnit.SECONDS).status()).isEqualTo("FALLBACK");
+        var expiredResult = expired.get(5, TimeUnit.SECONDS);
+        assertThat(expiredResult.status()).isEqualTo("CONSENT_REQUIRED");
+        assertThat(expiredResult.observations()).isNull();
         assertThat(bounded.story("owner").notice()).isNotBlank();
         verify(provider, times(2)).generate(any());
     }

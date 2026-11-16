@@ -181,11 +181,13 @@ public class SleepStoryService {
         Response generated = new Response("STORY", output.headline(), List.copyOf(output.observations()));
         if (!cached) {
             Story publish = output;
-            if (!timedWrite(() -> cache.writeStory(key, publish, () -> mayDispatch(deadline)), deadline)) {
+            if (!timedWrite(() -> cache.writeStory(key, publish,
+                    () -> mayPublish(owner, before, deadline)), deadline)) {
                 return storyFallback(current, false);
             }
             StorySuccess published = new StorySuccess(clock.instant(), current.period().end());
-            return recordPublication(storySuccesses, owner, published, deadline) ? generated : storyFallback(current, false);
+            return recordPublication(storySuccesses, owner, published,
+                    () -> mayPublish(owner, before, deadline)) ? generated : storyFallback(current, false);
         }
         return mayDispatch(deadline) ? generated : storyFallback(current, false);
     }
@@ -274,11 +276,13 @@ public class SleepStoryService {
         ExplanationResponse generated = ExplanationResponse.generated(output);
         if (!cached) {
             Explanation publish = output;
-            if (!timedWrite(() -> cache.writeExplanation(key, publish, () -> mayDispatch(deadline)), deadline)) {
+            if (!timedWrite(() -> cache.writeExplanation(key, publish,
+                    () -> mayPublish(owner, before, deadline)), deadline)) {
                 return ExplanationResponse.fallback(fallback);
             }
             var published = new ExplanationSuccess(clock.instant());
-            return recordPublication(explanationSuccesses, cooldownKey, published, deadline)
+            return recordPublication(explanationSuccesses, cooldownKey, published,
+                    () -> mayPublish(owner, before, deadline))
                     ? generated : ExplanationResponse.fallback(fallback);
         }
         return mayDispatch(deadline) ? generated : ExplanationResponse.fallback(fallback);
@@ -290,7 +294,7 @@ public class SleepStoryService {
         CompletableFuture<T> existing = flights.putIfAbsent(key, created);
         if (existing == null) {
             try {
-                T result = generate.get();
+                T result = revalidate.apply(generate.get());
                 created.complete(result);
                 return result;
             } catch (RuntimeException | Error failure) {
@@ -314,9 +318,19 @@ public class SleepStoryService {
 
     private record FlightKey(String identity, Consent consent) {}
 
-    private <K, V> boolean recordPublication(Map<K, V> successes, K key, V published, long deadline) {
+    private <K, V> boolean recordPublication(Map<K, V> successes, K key, V published, BooleanSupplier mayPublish) {
         // Decide publication and cooldown together so an expired call cannot replace a concurrent success.
-        return successes.compute(key, (ignored, previous) -> mayDispatch(deadline) ? published : previous) == published;
+        return successes.compute(key, (ignored, previous) -> mayPublish.getAsBoolean() ? published : previous) == published;
+    }
+
+    private boolean mayPublish(String owner, Consent expected, long deadline) {
+        try {
+            return mayDispatch(deadline)
+                    && expected.equals(timedRead(() -> consent.read(owner), deadline, ticker))
+                    && mayDispatch(deadline);
+        } catch (DeadlineExceeded unavailable) {
+            return false;
+        }
     }
 
     private static Response storyFallback(Evidence evidence, boolean coolingDown) {

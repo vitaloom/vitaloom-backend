@@ -19,6 +19,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.ObjectProvider;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -27,6 +29,62 @@ import static org.mockito.Mockito.*;
 
 class SleepAiSingleFlightTest {
     private static final long WAIT_SECONDS = 5;
+
+    @ParameterizedTest
+    @CsvSource({"false,true", "true,true", "false,false", "true,false"})
+    void consentWithdrawalAtCachePublicationSuppressesLeaderAndWaiter(boolean explanation,
+            boolean beforeDispatch) throws Exception {
+        var provider = mock(Provider.class);
+        var fixture = fixture(provider);
+        var consentState = new AtomicReference<>(new Consent(true, "enabled-1"));
+        when(fixture.consent.read("owner")).thenAnswer(call -> consentState.get());
+        when(provider.generate(any())).thenAnswer(call -> SleepStoryService.preview(call.getArgument(0)));
+        when(provider.explain(any())).thenAnswer(call -> SleepStoryService.explanationPreview(call.getArgument(0)));
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        org.mockito.stubbing.Answer<Object> withdrawAtPublication = call -> {
+            entered.countDown();
+            await(release);
+            if (beforeDispatch) consentState.set(new Consent(false, "withdrawn-2"));
+            call.callRealMethod();
+            if (!beforeDispatch) consentState.set(new Consent(false, "withdrawn-2"));
+            return null;
+        };
+        if (explanation) doAnswer(withdrawAtPublication).when(fixture.cache).writeExplanation(any(), any(), any());
+        else doAnswer(withdrawAtPublication).when(fixture.cache).writeStory(any(), any(), any());
+
+        java.util.function.Supplier<?> request = explanation
+                ? () -> fixture.service.explanation("owner", "B01", "version")
+                : () -> fixture.service.story("owner");
+        var leader = caller(request);
+        await(entered); // Provider output and the existing post-provider consent check have completed.
+        var waiter = caller(request);
+        try {
+            awaitJoined(waiter, "singleFlight");
+        } finally {
+            release.countDown();
+        }
+        if (explanation) {
+            assertThat(leader.explanationResult().status()).isEqualTo("CONSENT_REQUIRED");
+            assertThat(waiter.explanationResult().status()).isEqualTo("CONSENT_REQUIRED");
+            if (beforeDispatch) verify(fixture.cache, never()).writeExplanation(any(), any());
+            doCallRealMethod().when(fixture.cache).writeExplanation(any(), any(), any());
+        } else {
+            assertThat(leader.response().status()).isEqualTo("CONSENT_REQUIRED");
+            assertThat(waiter.response().status()).isEqualTo("CONSENT_REQUIRED");
+            if (beforeDispatch) verify(fixture.cache, never()).writeStory(any(), any());
+            doCallRealMethod().when(fixture.cache).writeStory(any(), any(), any());
+        }
+        consentState.set(new Consent(true, "enabled-3"));
+        // A withdrawn publication must neither retain its flight nor start a successful-generation cooldown.
+        if (explanation) {
+            assertThat(fixture.service.explanation("owner", "B01", "version").status()).isEqualTo("EXPLANATION");
+            verify(provider, times(2)).explain(any());
+        } else {
+            assertThat(fixture.service.story("owner").status()).isEqualTo("STORY");
+            verify(provider, times(2)).generate(any());
+        }
+    }
 
     @Test
     void equalStoryRequestsShareOneProviderCall() throws Exception {
