@@ -157,6 +157,16 @@ db.getSiblingDB("admin").createUser({
 
 Set `OBS_MONGODB_PASSWORD` to that password in your local `.env`. Set `OBS_MONGODB_USER` if you chose a different username. Restart the Collector with `docker compose -f docker-compose.obs.yml up -d --no-deps otel-collector` and open **VitaLoom MongoDB**. The Collector connects directly to the single local replica-set node over Docker and collects service metrics every 30 seconds. The dashboard shows current and available connections and operations per second by type. The operation counters apply to the MongoDB server and include traffic from clients other than VitaLoom Backend.
 
+### Windows host metrics
+
+Download the [windows_exporter executable](https://github.com/prometheus-community/windows_exporter/releases/tag/v0.32.1) and run it directly on Windows during measurement. For the x64 executable downloaded to the Downloads folder:
+
+```powershell
+& "$env:USERPROFILE\Downloads\windows_exporter-0.32.1-amd64.exe" --web.listen-address=127.0.0.1:9182 --collectors.enabled=cpu,memory,logical_disk,physical_disk,net
+```
+
+Leave the window open while measuring and press Ctrl+C to stop. The Collector reads metrics every 15 seconds through `host.docker.internal:9182`. Open **VitaLoom Windows Host** for host CPU, available RAM, free disk space, disk latency, and network throughput. Use the network adapter selector to focus on the interface carrying application traffic. If the exporter is stopped or unreachable, the dashboard shows that the Windows metrics source is down.
+
 On Docker Desktop with Linux containers, cAdvisor uses the Linux PID namespace, the Docker socket for container names, and the containerd socket for container metadata with the containerd image store. The sockets grant access to their respective APIs. Only cAdvisor mounts them, and its metrics port stays inside Compose.
 
 

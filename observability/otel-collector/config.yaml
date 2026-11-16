@@ -21,6 +21,18 @@ receivers:
             - source_labels: [name]
               target_label: container_name
 
+  prometheus/windows:
+    config:
+      scrape_configs:
+        - job_name: windows-host
+          scrape_interval: 15s
+          static_configs:
+            - targets: [host.docker.internal:9182]
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: 'windows_(cpu_time_seconds_total|memory_available_bytes|logical_disk_(free|size)_bytes|physical_disk_(read_latency_seconds_total|write_latency_seconds_total|reads_total|writes_total)|net_bytes_(received|sent)_total)'
+              action: keep
+
   nginx:
     endpoint: http://nginx:8080/stub_status
     collection_interval: 15s
@@ -82,6 +94,9 @@ service:
       exporters: [prometheus]
     metrics/cadvisor:
       receivers: [prometheus/cadvisor]
+      exporters: [prometheus]
+    metrics/windows:
+      receivers: [prometheus/windows]
       exporters: [prometheus]
     metrics/nginx:
       receivers: [nginx]
