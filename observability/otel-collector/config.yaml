@@ -25,12 +25,40 @@ receivers:
     endpoint: http://nginx:8080/stub_status
     collection_interval: 15s
 
+  filelog/nginx_rate_limit:
+    include:
+      - /var/log/vitaloom/rate-limit.log
+      - '/var/log/vitaloom/rate-limit.log.[12]'
+    start_at: end
+    storage: file_storage
+    include_file_name: false
+    operators:
+      - type: regex_parser
+        regex: '^(?P<rejected>[01]) [0-9]+\.[0-9]+ [0-9]+$'
+
+extensions:
+  file_storage:
+    directory: /var/lib/vitaloom-collector
+
+connectors:
+  signal_to_metrics:
+    logs:
+      - name: nginx.rate_limit.rejected
+        description: Client requests rejected by the Nginx rate limiter
+        sum:
+          value: Int(attributes["rejected"])
+          monotonic: true
+
+processors:
+  deltatocumulative:
+
 exporters:
   prometheus:
     endpoint: 0.0.0.0:8889
     metric_expiration: 45s
 
 service:
+  extensions: [file_storage]
   pipelines:
     metrics:
       receivers: [otlp]
@@ -40,4 +68,11 @@ service:
       exporters: [prometheus]
     metrics/nginx:
       receivers: [nginx]
+      exporters: [prometheus]
+    logs/nginx_rate_limit:
+      receivers: [filelog/nginx_rate_limit]
+      exporters: [signal_to_metrics]
+    metrics/nginx_rate_limit:
+      receivers: [signal_to_metrics]
+      processors: [deltatocumulative]
       exporters: [prometheus]

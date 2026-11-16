@@ -129,9 +129,13 @@ Stop the monitoring stack with `docker compose -f docker-compose.obs.yml down`. 
 
 The observability Compose stack starts cAdvisor automatically. Open **VitaLoom Infrastructure** in Grafana and select a container by name to see CPU, memory working set, and network receive and transmit rates. The Collector scrapes cAdvisor over the internal Compose network and keeps metrics for the `vitaloom-backend` and `vitaloom-observability` projects. Rate panels need at least two scrapes.
 
-Start the backend Compose stack first so it creates the `vitaloom-network` that the Collector uses to reach Nginx. Open **VitaLoom Nginx** in Grafana to see HTTP request rate, current connections by state, and accepted and handled connection rates. Nginx serves `stub_status` on an unpublished container port. The Nginx counters include the Collector's own status requests, including when there is no application traffic.
+Start the backend Compose stack first so it creates the `vitaloom-network` and the Nginx monitoring volumes used by the Collector. Open **VitaLoom Nginx** in Grafana to see HTTP request rate, current connections by state, rate-limit rejections, and accepted and handled connection rates. Nginx serves `stub_status` on an unpublished container port. The request counter includes the Collector's own status requests, including when there is no application traffic.
 
 Docker rotates the Nginx container logs at 10 MB per file and keeps up to three files. Recreate the Nginx container to apply logging changes to an existing container.
+
+The separate monitoring file records requests rejected by the Nginx rate limiter and a zero-value heartbeat for each internal status scrape. The Collector reads this volume with read-only access and publishes the rejection counter to Prometheus. The Nginx container checks the file size every five seconds, rotates at 10 MiB, and retains two rotated files. A burst can take the active file over the threshold between checks.
+
+The Collector stores its read position in a separate volume. Its in-memory rejection counter resets on restart, and an extended outage can miss entries if their files rotate out before collection. To compare gateway activity with backend traffic, run Spring Boot with the `observability` profile and view **VitaLoom Backend** over the same time range.
 
 On Docker Desktop with Linux containers, cAdvisor uses the Linux PID namespace, the Docker socket for container names, and the containerd socket for container metadata with the containerd image store. The sockets grant access to their respective APIs. Only cAdvisor mounts them, and its metrics port stays inside Compose.
 

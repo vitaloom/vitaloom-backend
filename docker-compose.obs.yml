@@ -12,6 +12,8 @@ services:
       - "127.0.0.1:${OBS_OTLP_PORT:-4318}:4318"
     volumes:
       - ./observability/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - nginx-monitoring-logs:/var/log/vitaloom:ro
+      - nginx-monitoring-offsets:/var/lib/vitaloom-collector
     networks:
       - default
       - vitaloom-network
@@ -55,5 +57,11 @@ networks:
     name: vitaloom-network
 
 volumes:
+  nginx-monitoring-logs:
+    external: true
+    name: vitaloom-nginx-monitoring-logs
+  nginx-monitoring-offsets:
+    external: true
+    name: vitaloom-nginx-monitoring-offsets
   prometheus-data:
   grafana-data:
