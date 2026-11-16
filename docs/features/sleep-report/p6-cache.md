@@ -44,7 +44,7 @@ Tests cover typed serialization, 24h non-overwriting writes, corrupt/read/write 
 
 The original full verify failure was environmental: Spring test contexts defaulted to `localhost:6379` while the supplied disposable Redis fixture was published at `127.0.0.1:62915`. A cache write failure correctly produced the covered deterministic fallback. With `REDIS_HOST` and `REDIS_PORT` set to the fixture, the same persisted-consent test returned STORY and passed; fallback behavior was not changed. Docker named-pipe access also had to be enabled for Mongo Testcontainers.
 
-Confidence is medium: the declared dependency graph, focused cache tests, real Redis integration, Mongo-backed target test and full Maven lifecycle passed. Independent review of the exact delivery commit remains the integration gate. No device check was required for this backend-only unit. No paid-provider call, production data change, push or deployment occurred.
+Confidence is high for this backend unit: the declared dependency graph, focused cache tests, real Redis integration, Mongo-backed target test and full Maven lifecycle passed, and an independent reviewer approved exact commit `a57b094b210f209359f68e8fb72f3c4144c0af5e` with no findings. That commit was fast-forwarded to local `main`. No device check was required for this backend-only unit. No paid-provider call, production data change, push or deployment occurred.
 
 The first offline dependency-resolution and compatibility-test results above are retained as history. The final verification used:
 
@@ -54,6 +54,6 @@ mvn -o '-Dmaven.repo.local=D:/prj/vita-loom/temp/sleep-p6-maven/repository' '-Ds
 mvn -o '-Dmaven.repo.local=D:/prj/vita-loom/temp/sleep-p6-maven/repository' verify
 ```
 
-Commit the scoped backend changes, request independent review against that exact SHA, and integrate only after reviewer approval and passing checks. Do not advance the queue to P6-COOLDOWN in this continuation.
+P6-CACHE has been reviewed and integrated locally. Before a later queue continuation starts P6-COOLDOWN, reconcile the intentionally preserved runner checkpoint with the recorded completion and verify the queue continuation. Do not infer completion of later P6 units from this result.
 
-P6-EVIDENCE is the accepted prerequisite. P6-CACHE checks passed; independent review and local integration remain pending. P6-COOLDOWN, P6-DEADLINE, P6-SINGLEFLIGHT and P6-FE-REFRESH remain NOT STARTED here. P6-REAL-PROVIDER remains BLOCKED on its separate prerequisites and privacy/security/budget gates. This delivery does not claim P6 production readiness.
+P6-EVIDENCE is the accepted prerequisite. P6-CACHE checks, independent review and local integration passed. P6-COOLDOWN, P6-DEADLINE, P6-SINGLEFLIGHT and P6-FE-REFRESH remain NOT STARTED here. P6-REAL-PROVIDER remains BLOCKED on its separate prerequisites and privacy/security/budget gates. This delivery does not claim P6 production readiness.
