@@ -125,7 +125,7 @@ public class SleepStoryService {
         catch (DeadlineExceeded expired) { return Response.empty("INELIGIBLE"); }
         if (!original.eligible()) return Response.empty("INELIGIBLE");
 
-        String key = cacheKey("story", owner, original, STORY_PROMPT);
+        String key = cacheKey("story", owner, original, STORY_PROMPT, provider);
         return singleFlight(storyFlights, new FlightKey(key, before), deadline,
                 () -> generateStory(owner, selectedZone, provider, before, original, key, deadline), result -> {
                     Evidence current;
@@ -136,7 +136,7 @@ public class SleepStoryService {
                         }
                     } catch (DeadlineExceeded expired) { return Response.empty("CONSENT_REQUIRED"); }
                     if (!current.eligible()) return Response.empty("INELIGIBLE");
-                    if (result == null || !key.equals(cacheKey("story", owner, current, STORY_PROMPT))
+                    if (result == null || !key.equals(cacheKey("story", owner, current, STORY_PROMPT, provider))
                             || (result.observations() != null
                                     && !valid(new Story(result.headline(), result.observations()), current))) {
                         return storyFallback(current, false);
@@ -159,9 +159,9 @@ public class SleepStoryService {
                         && clock.instant().isBefore(previous.at().plus(STORY_COOLDOWN));
                 if (!coolingDown) {
                     long providerDeadline = deadline - revalidationReserveNanos;
-                    output = providerCall(() -> provider.generate(original), providerDeadline,
+                    output = providerCall(provider, () -> provider.generate(original), providerDeadline,
                             () -> key.equals(cacheKey("story", owner,
-                                    timedRead(() -> evidence(owner, selectedZone), providerDeadline, ticker), STORY_PROMPT)),
+                                    timedRead(() -> evidence(owner, selectedZone), providerDeadline, ticker), STORY_PROMPT, provider)),
                             () -> before.equals(consent.read(owner)));
                 }
             }
@@ -175,7 +175,7 @@ public class SleepStoryService {
         try { if (!before.equals(timedRead(() -> consent.read(owner), deadline, ticker))) return Response.empty("CONSENT_REQUIRED"); }
         catch (DeadlineExceeded expired) { return Response.empty("CONSENT_REQUIRED"); }
         if (!current.eligible()) return Response.empty("INELIGIBLE");
-        if (!key.equals(cacheKey("story", owner, current, STORY_PROMPT)) || !valid(output, current)) {
+        if (!key.equals(cacheKey("story", owner, current, STORY_PROMPT, provider)) || !valid(output, current)) {
             return storyFallback(current, coolingDown);
         }
         Response generated = new Response("STORY", output.headline(), List.copyOf(output.observations()));
@@ -212,7 +212,7 @@ public class SleepStoryService {
         if (versionHint != null && !versionHint.isBlank() && !versionHint.equals(selected.fingerprint())) {
             return ExplanationResponse.empty("STALE");
         }
-        String key = cacheKey("explanation", owner, original, EXPLANATION_PROMPT);
+        String key = cacheKey("explanation", owner, original, EXPLANATION_PROMPT, provider);
         return singleFlight(explanationFlights, new FlightKey(key, before), deadline,
                 () -> generateExplanation(owner, code, selectedZone, provider, before, original, key, deadline), result -> {
                     Evidence current;
@@ -223,7 +223,7 @@ public class SleepStoryService {
                         }
                     } catch (DeadlineExceeded expired) { return ExplanationResponse.empty("CONSENT_REQUIRED"); }
                     if (current.candidates().isEmpty()) return ExplanationResponse.empty("INELIGIBLE");
-                    if (!key.equals(cacheKey("explanation", owner, current, EXPLANATION_PROMPT))) {
+                    if (!key.equals(cacheKey("explanation", owner, current, EXPLANATION_PROMPT, provider))) {
                         return ExplanationResponse.empty("STALE");
                     }
                     if (!mayDispatch(deadline)) return ExplanationResponse.empty("CONSENT_REQUIRED");
@@ -249,10 +249,10 @@ public class SleepStoryService {
                 ExplanationSuccess previous = explanationSuccesses.get(cooldownKey);
                 if (previous == null || !clock.instant().isBefore(previous.at().plus(EXPLANATION_COOLDOWN))) {
                     long providerDeadline = deadline - revalidationReserveNanos;
-                    output = providerCall(() -> provider.explain(original), providerDeadline,
+                    output = providerCall(provider, () -> provider.explain(original), providerDeadline,
                             () -> key.equals(cacheKey("explanation", owner,
                                     timedRead(() -> explanationEvidence(owner, code, selectedZone), providerDeadline, ticker),
-                                    EXPLANATION_PROMPT)),
+                                    EXPLANATION_PROMPT, provider)),
                             () -> before.equals(consent.read(owner)));
                 }
             }
@@ -265,12 +265,12 @@ public class SleepStoryService {
         try { if (!before.equals(timedRead(() -> consent.read(owner), deadline, ticker))) return ExplanationResponse.empty("CONSENT_REQUIRED"); }
         catch (DeadlineExceeded expired) { return ExplanationResponse.empty("CONSENT_REQUIRED"); }
         if (current.candidates().isEmpty()) return ExplanationResponse.empty("INELIGIBLE");
-        if (!key.equals(cacheKey("explanation", owner, current, EXPLANATION_PROMPT))) {
+        if (!key.equals(cacheKey("explanation", owner, current, EXPLANATION_PROMPT, provider))) {
             return ExplanationResponse.empty("STALE");
         }
         Explanation fallback = explanationPreview(current);
-        if (!fallback.equals(output) || wordCount(fallback.observation()) + wordCount(fallback.evidenceBasis())
-                + wordCount(fallback.limitations()) > 150) {
+        if (!validExplanation(output, fallback) || wordCount(output.observation()) + wordCount(output.evidenceBasis())
+                + wordCount(output.limitations()) > 150) {
             return ExplanationResponse.fallback(fallback);
         }
         ExplanationResponse generated = ExplanationResponse.generated(output);
@@ -338,9 +338,23 @@ public class SleepStoryService {
         return new Response("FALLBACK", fallback.headline(), fallback.observations(), coolingDown ? COOLDOWN_NOTICE : null);
     }
 
-    private static String cacheKey(String kind, String owner, Evidence evidence, String prompt) {
-        return "sleep:ai:" + kind + ":" + SleepAiEvidenceIdentity.hash(
-                List.of(owner, evidence.fingerprint(), CONTENT_POLICY, prompt));
+    private static String cacheKey(String kind, String owner, Evidence evidence, String prompt, Provider provider) {
+        List<String> identity = provider instanceof CacheNamespacedProvider namespaced
+                ? List.of(owner, evidence.fingerprint(), CONTENT_POLICY, prompt, namespaced.cacheNamespace())
+                : List.of(owner, evidence.fingerprint(), CONTENT_POLICY, prompt);
+        return "sleep:ai:" + kind + ":" + SleepAiEvidenceIdentity.hash(identity);
+    }
+
+    private static boolean validExplanation(Explanation output, Explanation approved) {
+        if (output == null || approved == null || !Objects.equals(output.evidenceFingerprint(), approved.evidenceFingerprint())
+                || !Objects.equals(output.evidenceBasis(), approved.evidenceBasis())
+                || !Objects.equals(output.limitations(), approved.limitations())) return false;
+        return Objects.equals(output.observation(), approved.observation())
+                || Objects.equals(output.observation(), gentleExplanation(approved));
+    }
+
+    static String gentleExplanation(Explanation approved) {
+        return "Bạn có thể nhìn nhận rằng: " + approved.observation();
     }
 
     private Evidence explanationEvidence(String owner, String code, ZoneId selectedZone) {
@@ -383,6 +397,12 @@ public class SleepStoryService {
                 .findFirst().map(candidate -> observation(evidence.period(), candidate)).orElseThrow();
         return new Story(HEADLINE, List.of(observation));
     }
+
+    static Observation approvedObservation(Candidate candidate) {
+        return observation(candidate.period(), candidate);
+    }
+
+    static String approvedHeadline() { return HEADLINE; }
 
     private static Observation observation(Period period, Candidate candidate) {
         period = candidate.period();
@@ -507,6 +527,11 @@ public class SleepStoryService {
     public interface Provider {
         Story generate(Evidence evidence);
         default Explanation explain(Evidence evidence) { return null; }
+        default boolean sendsEvidenceExternally() { return false; }
+    }
+
+    interface CacheNamespacedProvider extends Provider {
+        String cacheNamespace();
     }
 
     private static <T> T timedRead(Supplier<T> operation, long deadline, LongSupplier ticker) {
@@ -562,7 +587,7 @@ public class SleepStoryService {
 
     private static final class DeadlineExceeded extends RuntimeException {}
 
-    private <T> T providerCall(Supplier<T> operation, long providerDeadline,
+    private <T> T providerCall(Provider provider, Supplier<T> operation, long providerDeadline,
             BooleanSupplier retryEvidenceCurrent, BooleanSupplier retryConsentCurrent) {
         for (int attempt = 0; attempt < 2; attempt++) {
             if (!mayDispatch(providerDeadline)) return null;
@@ -570,7 +595,8 @@ public class SleepStoryService {
             boolean retry = attempt == 1;
             try {
                 future = PROVIDER_WORK.submit(() -> {
-                    if (!mayDispatch(providerDeadline) || (retry && !retryConsentCurrent.getAsBoolean())) return null;
+                    if (!mayDispatch(providerDeadline)
+                            || ((retry || provider.sendsEvidenceExternally()) && !retryConsentCurrent.getAsBoolean())) return null;
                     return mayDispatch(providerDeadline) ? operation.get() : null;
                 });
                 T result = future.get(providerDeadline - ticker.getAsLong(), TimeUnit.NANOSECONDS);

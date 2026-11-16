@@ -5,7 +5,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 @Component
-@Profile("(dev | test) & !prod & !production")
+@Profile("(dev | test) & !prod & !production & !sleep-ai-gemini-sandbox")
 @ConditionalOnProperty(name = "vitaloom.sleep.story.enabled", havingValue = "true")
 public class DeterministicSleepStoryProvider implements SleepStoryService.Provider {
     @Override
