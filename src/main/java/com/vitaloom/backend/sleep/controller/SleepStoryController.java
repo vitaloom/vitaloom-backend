@@ -5,6 +5,8 @@ import com.vitaloom.backend.sleep.service.SleepStoryService;
 import com.vitaloom.backend.sleep.service.SleepStoryService.Preference;
 import com.vitaloom.backend.sleep.service.SleepStoryService.Response;
 import jakarta.servlet.http.HttpServletRequest;
+import java.time.ZoneId;
+import java.util.Set;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -41,8 +43,14 @@ public class SleepStoryController {
 
     @GetMapping("/api/sleep/recent/story")
     public ResponseEntity<Response> recentStory(Authentication auth, HttpServletRequest request) {
-        rejectParameters(request);
-        return noStore(story.story(auth.getName()));
+        if (!Set.of("timeZone").containsAll(request.getParameterMap().keySet())) {
+            throw new SleepFailure(400, "INVALID_REQUEST", "Only an optional timeZone is accepted.");
+        }
+        String[] zones = request.getParameterValues("timeZone");
+        if (zones != null && zones.length != 1) {
+            throw new SleepFailure(400, "INVALID_REQUEST", "A single timeZone is required.");
+        }
+        return noStore(story.story(auth.getName(), zones == null ? null : selectedZone(zones[0])));
     }
 
     @PostMapping("/api/sleep/ai/explanations")
@@ -50,13 +58,23 @@ public class SleepStoryController {
             HttpServletRequest request, @RequestBody(required = false) JsonNode body) {
         rejectParameters(request);
         if (body == null || !body.isObject() || !body.path("insightCode").isTextual()
-                || !java.util.Set.of("A01", "B01").contains(body.path("insightCode").asText())
-                || body.size() != (body.has("evidenceVersion") ? 2 : 1)
-                || (body.has("evidenceVersion") && !body.path("evidenceVersion").isTextual())) {
+                || !SleepStoryService.SUPPORTED_CODES.contains(body.path("insightCode").asText())
+                || body.size() != 1 + (body.has("evidenceVersion") ? 1 : 0) + (body.has("timeZone") ? 1 : 0)
+                || (body.has("evidenceVersion") && !body.path("evidenceVersion").isTextual())
+                || (body.has("timeZone") && (!"A04".equals(body.path("insightCode").asText())
+                        || !body.path("timeZone").isTextual()))) {
             throw new SleepFailure(400, "INVALID_REQUEST", "A supported insightCode and optional evidenceVersion are accepted.");
         }
         return noStore(story.explanation(auth.getName(), body.path("insightCode").asText(),
-                body.has("evidenceVersion") ? body.path("evidenceVersion").asText() : null));
+                body.has("evidenceVersion") ? body.path("evidenceVersion").asText() : null,
+                body.has("timeZone") ? selectedZone(body.path("timeZone").asText()) : null));
+    }
+
+    private static ZoneId selectedZone(String id) {
+        if (!ZoneId.getAvailableZoneIds().contains(id)) {
+            throw new SleepFailure(400, "INVALID_REQUEST", "Select a valid IANA timeZone.");
+        }
+        return ZoneId.of(id);
     }
 
     private static void rejectParameters(HttpServletRequest request) {
