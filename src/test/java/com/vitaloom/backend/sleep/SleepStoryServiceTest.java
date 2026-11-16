@@ -17,6 +17,8 @@ import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService.Pe
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -128,6 +130,104 @@ class SleepStoryServiceTest {
             return SleepStoryService.preview(evidence);
         });
         assertThat(service.story("owner").status()).isEqualTo("STORY");
+    }
+
+    @Test
+    void retriesOnlyOneTypedTransientProviderFailure() {
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
+        when(provider.generate(any())).thenThrow(new SleepStoryService.TransientProviderException("temporary"))
+                .thenAnswer(invocation -> SleepStoryService.preview(invocation.getArgument(0)));
+        assertThat(service.story("owner").status()).isEqualTo("STORY");
+        verify(provider, times(2)).generate(any());
+    }
+
+    @Test
+    void neverMakesThirdAttemptAfterTwoTransientFailures() {
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
+        when(provider.generate(any())).thenThrow(new SleepStoryService.TransientProviderException("temporary"));
+        assertThat(service.story("owner").status()).isEqualTo("FALLBACK");
+        verify(provider, times(2)).generate(any());
+    }
+
+    @Test
+    void transientFailureDoesNotRetryWhenConsentWasRevoked() {
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"), new Consent(false, "off"));
+        when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
+        when(provider.generate(any())).thenThrow(new SleepStoryService.TransientProviderException("temporary"));
+        assertThat(service.story("owner").status()).isEqualTo("CONSENT_REQUIRED");
+        verify(provider).generate(any());
+    }
+
+    @Test
+    void storyAndExplanationSuppressResultsAtTheirExactBudgets() {
+        var cache = mock(SleepAiCache.class);
+        var storyTicker = new java.util.concurrent.atomic.AtomicLong(100);
+        var bounded = new SleepStoryService(consent, insights, providerLookup(), cache, java.time.Clock.systemUTC(),
+                TimeUnit.SECONDS.toNanos(20), TimeUnit.SECONDS.toNanos(10), TimeUnit.MILLISECONDS.toNanos(100),
+                () -> storyTicker.get());
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
+        when(provider.generate(any())).thenAnswer(call -> {
+            storyTicker.addAndGet(TimeUnit.SECONDS.toNanos(20));
+            return SleepStoryService.preview(call.getArgument(0));
+        });
+        assertThat(bounded.story("owner").status()).isEqualTo("INELIGIBLE");
+        verify(cache, never()).writeStory(any(), any());
+
+        var explanationTicker = new java.util.concurrent.atomic.AtomicLong(200);
+        var explanationBounded = new SleepStoryService(consent, insights, providerLookup(), cache,
+                java.time.Clock.systemUTC(), TimeUnit.SECONDS.toNanos(20), TimeUnit.SECONDS.toNanos(10),
+                TimeUnit.MILLISECONDS.toNanos(100), explanationTicker::get);
+        when(insights.detail("owner", "B01")).thenReturn(detail("b"));
+        when(provider.explain(any())).thenAnswer(call -> {
+            explanationTicker.addAndGet(TimeUnit.SECONDS.toNanos(10));
+            return SleepStoryService.explanationPreview(call.getArgument(0));
+        });
+        assertThat(explanationBounded.explanation("owner", "B01", null).status()).isEqualTo("INELIGIBLE");
+        verify(cache, never()).writeExplanation(any(), any());
+    }
+
+    @Test
+    void suppressesGeneratedStoryWhenFinalEvidenceReadConsumesRemainingBudget() {
+        var cache = mock(SleepAiCache.class);
+        var ticker = new java.util.concurrent.atomic.AtomicLong(100);
+        var bounded = new SleepStoryService(consent, insights, providerLookup(), cache, java.time.Clock.systemUTC(),
+                TimeUnit.SECONDS.toNanos(20), TimeUnit.SECONDS.toNanos(10), TimeUnit.MILLISECONDS.toNanos(100), ticker::get);
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.fullInsights("owner", null)).thenAnswer(call -> {
+            if (org.mockito.Mockito.mockingDetails(insights).getInvocations().size() >= 2) {
+                ticker.set(100 + TimeUnit.SECONDS.toNanos(20));
+            }
+            return snapshot(item("B01", "b"));
+        });
+        when(provider.generate(any())).thenAnswer(call -> SleepStoryService.preview(call.getArgument(0)));
+        var response = bounded.story("owner");
+        assertThat(response.status()).isIn("CONSENT_REQUIRED", "INELIGIBLE");
+        assertThat(response.observations()).isNull();
+        verify(cache, never()).writeStory(any(), any());
+    }
+
+    @Test
+    void blockedProviderIsCancelledAtBudgetAndReturnsCurrentFallback() {
+        when(consent.read("owner")).thenReturn(new Consent(true, "on"));
+        when(insights.fullInsights("owner", null)).thenReturn(snapshot(item("B01", "b")));
+        CountDownLatch releaseProvider = new CountDownLatch(1);
+        when(provider.generate(any())).thenAnswer(invocation -> {
+            try { releaseProvider.await(); } catch (InterruptedException ignored) { releaseProvider.await(); }
+            return SleepStoryService.preview(invocation.getArgument(0));
+        });
+        var bounded = new SleepStoryService(consent, insights, providerLookup(), SleepAiCache.bypass(),
+                java.time.Clock.systemUTC(), TimeUnit.MILLISECONDS.toNanos(120), TimeUnit.MILLISECONDS.toNanos(80),
+                TimeUnit.MILLISECONDS.toNanos(70), System::nanoTime);
+        long started = System.nanoTime();
+        var response = bounded.story("owner");
+        releaseProvider.countDown();
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+        assertThat(elapsedMs).isLessThan(300);
+        assertThat(response.status()).isEqualTo("FALLBACK");
+        verify(provider).generate(any());
     }
 
     @Test

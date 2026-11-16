@@ -17,6 +17,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -38,6 +46,19 @@ public class SleepStoryService {
     private static final String CONTENT_POLICY = "sleep-ai-policy-v1";
     private static final String STORY_PROMPT = "story-template-v1";
     private static final String EXPLANATION_PROMPT = "explanation-template-v1";
+    private final long storyBudgetNanos;
+    private final long explanationBudgetNanos;
+    private final long revalidationReserveNanos;
+    private final LongSupplier ticker;
+    private static final ThreadPoolExecutor PROVIDER_WORK = new ThreadPoolExecutor(4, 4, 0, TimeUnit.MILLISECONDS,
+            new SynchronousQueue<>(), task -> { Thread thread = new Thread(task, "sleep-ai-provider"); thread.setDaemon(true); return thread; },
+            new ThreadPoolExecutor.AbortPolicy());
+    private static final ThreadPoolExecutor READ_WORK = new ThreadPoolExecutor(4, 4, 0, TimeUnit.MILLISECONDS,
+            new SynchronousQueue<>(), task -> { Thread thread = new Thread(task, "sleep-ai-read"); thread.setDaemon(true); return thread; },
+            new ThreadPoolExecutor.AbortPolicy());
+    private static final ThreadPoolExecutor WRITE_WORK = new ThreadPoolExecutor(4, 4, 0, TimeUnit.MILLISECONDS,
+            new SynchronousQueue<>(), task -> { Thread thread = new Thread(task, "sleep-ai-write"); thread.setDaemon(true); return thread; },
+            new ThreadPoolExecutor.AbortPolicy());
 
     public SleepStoryService(ConsentStore consent, SleepInsightsStatisticsService insights,
             ObjectProvider<Provider> providers) {
@@ -52,11 +73,22 @@ public class SleepStoryService {
     @Autowired
     public SleepStoryService(ConsentStore consent, SleepInsightsStatisticsService insights,
             ObjectProvider<Provider> providers, SleepAiCache cache, Clock clock) {
+        this(consent, insights, providers, cache, clock, TimeUnit.SECONDS.toNanos(20),
+                TimeUnit.SECONDS.toNanos(10), TimeUnit.SECONDS.toNanos(1), System::nanoTime);
+    }
+
+    public SleepStoryService(ConsentStore consent, SleepInsightsStatisticsService insights, ObjectProvider<Provider> providers,
+            SleepAiCache cache, Clock clock, long storyBudgetNanos, long explanationBudgetNanos,
+            long revalidationReserveNanos, LongSupplier ticker) {
         this.consent = consent;
         this.insights = insights;
         this.providers = providers;
         this.cache = cache;
         this.clock = clock;
+        this.storyBudgetNanos = storyBudgetNanos;
+        this.explanationBudgetNanos = explanationBudgetNanos;
+        this.revalidationReserveNanos = revalidationReserveNanos;
+        this.ticker = ticker;
     }
 
     public Preference preference(String owner) {
@@ -75,13 +107,18 @@ public class SleepStoryService {
     public Response story(String owner) { return story(owner, null); }
 
     public Response story(String owner, ZoneId selectedZone) {
+        long deadline = ticker.getAsLong() + storyBudgetNanos;
         Provider provider = providers.getIfAvailable();
         if (provider == null) return Response.empty("DISABLED");
 
-        Consent before = consent.read(owner);
+        Consent before;
+        try { before = timedRead(() -> consent.read(owner), deadline, ticker); }
+        catch (DeadlineExceeded expired) { return Response.empty("CONSENT_REQUIRED"); }
         if (!before.enabled()) return Response.empty("CONSENT_REQUIRED");
 
-        Evidence original = evidence(owner, selectedZone);
+        Evidence original;
+        try { original = timedRead(() -> evidence(owner, selectedZone), deadline, ticker); }
+        catch (DeadlineExceeded expired) { return Response.empty("INELIGIBLE"); }
         if (!original.eligible()) return Response.empty("INELIGIBLE");
 
         String key = cacheKey("story", owner, original, STORY_PROMPT);
@@ -89,34 +126,67 @@ public class SleepStoryService {
         boolean cached = false;
         boolean coolingDown = false;
         try {
-            output = cache.readStory(key);
+            output = timedRead(() -> cache.readStory(key), deadline, ticker);
             cached = output != null;
             if (!cached) {
                 StorySuccess previous = storySuccesses.get(owner);
                 coolingDown = previous != null && !original.period().end().isAfter(previous.day())
                         && clock.instant().isBefore(previous.at().plus(STORY_COOLDOWN));
-                if (!coolingDown) output = provider.generate(original);
+                if (!coolingDown) output = providerCall(() -> provider.generate(original), deadline, revalidationReserveNanos, ticker, () -> {
+                    long retryDeadline = deadline - revalidationReserveNanos;
+                    if (!before.equals(timedRead(() -> consent.read(owner), retryDeadline, ticker))
+                            || !key.equals(cacheKey("story", owner, timedRead(() -> evidence(owner, selectedZone), retryDeadline, ticker), STORY_PROMPT)))
+                        throw new IllegalStateException("Current consent or evidence changed");
+                });
             }
         } catch (RuntimeException failure) {
             output = null;
         }
 
-        Evidence current = evidence(owner, selectedZone);
-        if (!before.equals(consent.read(owner))) return Response.empty("CONSENT_REQUIRED");
+        Evidence current;
+        try { current = timedRead(() -> evidence(owner, selectedZone), deadline, ticker); }
+        catch (DeadlineExceeded expired) { return Response.empty("INELIGIBLE"); }
+        try { if (!before.equals(timedRead(() -> consent.read(owner), deadline, ticker))) return Response.empty("CONSENT_REQUIRED"); }
+        catch (DeadlineExceeded expired) { return Response.empty("CONSENT_REQUIRED"); }
         if (!current.eligible()) return Response.empty("INELIGIBLE");
+        if (deadline - ticker.getAsLong() <= 0) {
+            Story fallback = preview(current);
+            return new Response("FALLBACK", fallback.headline(), fallback.observations());
+        }
         if (!key.equals(cacheKey("story", owner, current, STORY_PROMPT)) || !valid(output, current)) {
             Story fallback = preview(current);
             return new Response("FALLBACK", fallback.headline(), fallback.observations(),
                     coolingDown ? COOLDOWN_NOTICE : null);
         }
+        if (deadline - ticker.getAsLong() <= 0) {
+            Story fallback = preview(current);
+            return new Response("FALLBACK", fallback.headline(), fallback.observations());
+        }
         if (!cached) {
-            try {
-                cache.writeStory(key, output);
-            } catch (RuntimeException failure) {
+            Story publish = output;
+            if (!timedWrite(() -> cache.writeStory(key, publish), deadline, ticker)) {
                 Story fallback = preview(current);
                 return new Response("FALLBACK", fallback.headline(), fallback.observations());
             }
-            storySuccesses.put(owner, new StorySuccess(clock.instant(), current.period().end()));
+            if (deadline - ticker.getAsLong() <= 0) {
+                Story fallback = preview(current);
+                return new Response("FALLBACK", fallback.headline(), fallback.observations());
+            }
+            StorySuccess published = new StorySuccess(clock.instant(), current.period().end());
+            if (deadline - ticker.getAsLong() <= 0) {
+                Story fallback = preview(current);
+                return new Response("FALLBACK", fallback.headline(), fallback.observations());
+            }
+            storySuccesses.put(owner, published);
+            if (deadline - ticker.getAsLong() <= 0) {
+                storySuccesses.remove(owner, published);
+                Story fallback = preview(current);
+                return new Response("FALLBACK", fallback.headline(), fallback.observations());
+            }
+        }
+        if (deadline - ticker.getAsLong() <= 0) {
+            Story fallback = preview(current);
+            return new Response("FALLBACK", fallback.headline(), fallback.observations());
         }
         return new Response("STORY", output.headline(), List.copyOf(output.observations()));
     }
@@ -126,11 +196,16 @@ public class SleepStoryService {
     }
 
     public ExplanationResponse explanation(String owner, String code, String versionHint, ZoneId selectedZone) {
+        long deadline = ticker.getAsLong() + explanationBudgetNanos;
         Provider provider = providers.getIfAvailable();
         if (provider == null) return ExplanationResponse.empty("DISABLED");
-        Consent before = consent.read(owner);
+        Consent before;
+        try { before = timedRead(() -> consent.read(owner), deadline, ticker); }
+        catch (DeadlineExceeded expired) { return ExplanationResponse.empty("CONSENT_REQUIRED"); }
         if (!before.enabled()) return ExplanationResponse.empty("CONSENT_REQUIRED");
-        Evidence original = explanationEvidence(owner, code, selectedZone);
+        Evidence original;
+        try { original = timedRead(() -> explanationEvidence(owner, code, selectedZone), deadline, ticker); }
+        catch (DeadlineExceeded expired) { return ExplanationResponse.empty("INELIGIBLE"); }
         if (original.candidates().isEmpty()) return ExplanationResponse.empty("INELIGIBLE");
         Candidate selected = original.candidates().getFirst();
         if (versionHint != null && !versionHint.isBlank() && !versionHint.equals(selected.fingerprint())) {
@@ -141,20 +216,30 @@ public class SleepStoryService {
         boolean cached = false;
         ExplanationKey cooldownKey = new ExplanationKey(owner, code);
         try {
-            output = cache.readExplanation(key);
+            output = timedRead(() -> cache.readExplanation(key), deadline, ticker);
             cached = output != null;
             if (!cached) {
                 Instant previous = explanationSuccesses.get(cooldownKey);
                 if (previous == null || !clock.instant().isBefore(previous.plus(EXPLANATION_COOLDOWN))) {
-                    output = provider.explain(original);
+                    output = providerCall(() -> provider.explain(original), deadline, revalidationReserveNanos, ticker, () -> {
+                        long retryDeadline = deadline - revalidationReserveNanos;
+                        if (!before.equals(timedRead(() -> consent.read(owner), retryDeadline, ticker))
+                                || !key.equals(cacheKey("explanation", owner,
+                                timedRead(() -> explanationEvidence(owner, code, selectedZone), retryDeadline, ticker), EXPLANATION_PROMPT)))
+                            throw new IllegalStateException("Current consent or evidence changed");
+                    });
                 }
             }
         } catch (RuntimeException failure) {
             output = null;
         }
-        Evidence current = explanationEvidence(owner, code, selectedZone);
-        if (!before.equals(consent.read(owner))) return ExplanationResponse.empty("CONSENT_REQUIRED");
+        Evidence current;
+        try { current = timedRead(() -> explanationEvidence(owner, code, selectedZone), deadline, ticker); }
+        catch (DeadlineExceeded expired) { return ExplanationResponse.empty("INELIGIBLE"); }
+        try { if (!before.equals(timedRead(() -> consent.read(owner), deadline, ticker))) return ExplanationResponse.empty("CONSENT_REQUIRED"); }
+        catch (DeadlineExceeded expired) { return ExplanationResponse.empty("CONSENT_REQUIRED"); }
         if (current.candidates().isEmpty()) return ExplanationResponse.empty("INELIGIBLE");
+        if (deadline - ticker.getAsLong() <= 0) return ExplanationResponse.fallback(explanationPreview(current));
         if (!key.equals(cacheKey("explanation", owner, current, EXPLANATION_PROMPT))) {
             return ExplanationResponse.empty("STALE");
         }
@@ -163,14 +248,20 @@ public class SleepStoryService {
                 + wordCount(fallback.limitations()) > 150) {
             return ExplanationResponse.fallback(fallback);
         }
+        if (deadline - ticker.getAsLong() <= 0) return ExplanationResponse.fallback(fallback);
         if (!cached) {
-            try {
-                cache.writeExplanation(key, output);
-            } catch (RuntimeException failure) {
+            Explanation publish = output;
+            if (!timedWrite(() -> cache.writeExplanation(key, publish), deadline, ticker)) return ExplanationResponse.fallback(fallback);
+            if (deadline - ticker.getAsLong() <= 0) return ExplanationResponse.fallback(fallback);
+            Instant published = clock.instant();
+            if (deadline - ticker.getAsLong() <= 0) return ExplanationResponse.fallback(fallback);
+            explanationSuccesses.put(cooldownKey, published);
+            if (deadline - ticker.getAsLong() <= 0) {
+                explanationSuccesses.remove(cooldownKey, published);
                 return ExplanationResponse.fallback(fallback);
             }
-            explanationSuccesses.put(cooldownKey, clock.instant());
         }
+        if (deadline - ticker.getAsLong() <= 0) return ExplanationResponse.fallback(fallback);
         return ExplanationResponse.generated(output);
     }
 
@@ -343,6 +434,90 @@ public class SleepStoryService {
     public interface Provider {
         Story generate(Evidence evidence);
         default Explanation explain(Evidence evidence) { return null; }
+    }
+
+    @FunctionalInterface private interface ProviderOperation<T> { T run(); }
+
+    private static <T> T timedRead(Supplier<T> operation, long deadline, LongSupplier ticker) {
+        long remaining = deadline - ticker.getAsLong();
+        if (remaining <= 0) throw new DeadlineExceeded();
+        Future<T> future = null;
+        try {
+            future = READ_WORK.submit(operation::get);
+            return future.get(remaining, TimeUnit.NANOSECONDS);
+        } catch (TimeoutException timeout) {
+            if (future != null) future.cancel(true);
+            throw new DeadlineExceeded();
+        } catch (InterruptedException interrupted) {
+            if (future != null) future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new DeadlineExceeded();
+        } catch (ExecutionException failed) {
+            Throwable cause = failed.getCause();
+            if (cause instanceof RuntimeException runtime) throw runtime;
+            if (cause instanceof Error error) throw error;
+            throw new IllegalStateException(cause);
+        } catch (RuntimeException rejected) {
+            throw new DeadlineExceeded();
+        }
+    }
+
+    private static boolean timedWrite(Runnable operation, long deadline, LongSupplier ticker) {
+        long remaining = deadline - ticker.getAsLong();
+        if (remaining <= 0) return false;
+        Future<?> future = null;
+        try {
+            future = WRITE_WORK.submit(() -> {
+                if (deadline - ticker.getAsLong() <= 0) return;
+                operation.run();
+            });
+            future.get(remaining, TimeUnit.NANOSECONDS);
+            return deadline - ticker.getAsLong() > 0;
+        } catch (TimeoutException timeout) {
+            if (future != null) future.cancel(true);
+            return false;
+        } catch (InterruptedException interrupted) {
+            if (future != null) future.cancel(true);
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (ExecutionException | RuntimeException failed) {
+            return false;
+        }
+    }
+
+    private static final class DeadlineExceeded extends RuntimeException {}
+
+    private static <T> T providerCall(ProviderOperation<T> operation, long deadline, long reserve,
+            LongSupplier ticker, Runnable retryCheck) {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            long remaining = deadline - ticker.getAsLong() - reserve;
+            if (remaining <= 0) return null;
+            Future<T> future = null;
+            try {
+                future = PROVIDER_WORK.submit(operation::run);
+                T result = future.get(remaining, TimeUnit.NANOSECONDS);
+                if (deadline - reserve - ticker.getAsLong() <= 0) return null;
+                return result;
+            } catch (TimeoutException timeout) {
+                if (future != null) future.cancel(true);
+                return null;
+            } catch (InterruptedException interrupted) {
+                if (future != null) future.cancel(true);
+                Thread.currentThread().interrupt();
+                return null;
+            } catch (ExecutionException failed) {
+                Throwable cause = failed.getCause();
+                if (!(cause instanceof TransientProviderException) || attempt == 1) return null;
+                try { retryCheck.run(); } catch (RuntimeException changed) { return null; }
+            } catch (RuntimeException rejected) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    public static final class TransientProviderException extends RuntimeException {
+        public TransientProviderException(String message) { super(message); }
     }
 
     public record Consent(boolean enabled, String revision) {}

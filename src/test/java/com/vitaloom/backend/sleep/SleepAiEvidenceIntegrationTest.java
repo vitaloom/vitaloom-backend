@@ -187,6 +187,30 @@ class SleepAiEvidenceIntegrationTest {
                 .andExpect(jsonPath("$.observations").doesNotExist());
     }
 
+    @Test
+    void httpStoryRetriesTransientOnceAndExplanationFallsBackAtItsDeadline() throws Exception {
+        Harness harness = new Harness(Duration.ofSeconds(1));
+        doThrow(new SleepStoryService.TransientProviderException("temporary"))
+                .doAnswer(call -> SleepStoryService.preview(call.getArgument(0))).when(harness.provider).generate(any());
+        var mvc = MockMvcBuilders.standaloneSetup(new SleepStoryController(harness.service))
+                .setControllerAdvice(new SleepExceptionHandler()).build();
+        var owner = new TestingAuthenticationToken("owner", "unused");
+        mvc.perform(get("/api/sleep/recent/story").principal(owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("STORY"));
+        verify(harness.provider, times(2)).generate(any());
+
+        java.util.concurrent.CountDownLatch releaseExplanation = new java.util.concurrent.CountDownLatch(1);
+        doAnswer(call -> {
+            try { releaseExplanation.await(); } catch (InterruptedException ignored) { releaseExplanation.await(); }
+            return SleepStoryService.explanationPreview(call.getArgument(0));
+        }).when(harness.provider).explain(any());
+        mvc.perform(post("/api/sleep/ai/explanations").principal(owner).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"insightCode\":\"B01\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FALLBACK"));
+        releaseExplanation.countDown();
+        verify(harness.provider).explain(any());
+    }
+
     private static void assertStoryStale(Consumer<Harness> mutation) {
         Harness harness = new Harness();
         harness.beforePublish.set(mutation);
@@ -212,7 +236,9 @@ class SleepAiEvidenceIntegrationTest {
         private final Provider provider;
         private final SleepInsightsStatisticsServiceImpl statistics;
 
-        private Harness() {
+        private Harness() { this(Duration.ofSeconds(20)); }
+
+        private Harness(Duration budget) {
             SleepMainReadQuery source = mock(SleepMainReadQuery.class);
             when(source.readWindow(eq("owner"), any(), any())).thenAnswer(call -> {
                 LocalDate from = call.getArgument(1), to = call.getArgument(2);
@@ -256,7 +282,8 @@ class SleepAiEvidenceIntegrationTest {
                 beforePublish.getAndSet(ignored -> {}).accept(this);
                 return SleepStoryService.explanationPreview(original);
             });
-            service = new SleepStoryService(consent, statistics, providers, SleepAiCache.bypass(), clock);
+            service = new SleepStoryService(consent, statistics, providers, SleepAiCache.bypass(), clock,
+                    budget.toNanos(), budget.toNanos(), Duration.ofMillis(20).toNanos(), System::nanoTime);
         }
 
         private Evidence capture() { return capture(SELECTED_ZONE); }
