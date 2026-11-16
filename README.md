@@ -137,6 +137,26 @@ The separate monitoring file records requests rejected by the Nginx rate limiter
 
 The Collector stores its read position in a separate volume. Its in-memory rejection counter resets on restart, and an extended outage can miss entries if their files rotate out before collection. To compare gateway activity with backend traffic, run Spring Boot with the `observability` profile and view **VitaLoom Backend** over the same time range.
 
+### MongoDB service metrics
+
+On a new or existing MongoDB volume, create a dedicated monitoring account once. After MongoDB is healthy, open its shell as the local administrator:
+
+```powershell
+docker compose exec mongodb sh -c 'exec mongosh --username "$MONGO_INITDB_ROOT_USERNAME" --authenticationDatabase admin --password'
+```
+
+In `mongosh`, run the following and enter a new monitoring password when prompted:
+
+```javascript
+db.getSiblingDB("admin").createUser({
+  user: "vitaloom_monitor",
+  pwd: passwordPrompt(),
+  roles: [{ role: "clusterMonitor", db: "admin" }]
+})
+```
+
+Set `OBS_MONGODB_PASSWORD` to that password in your local `.env`. Set `OBS_MONGODB_USER` if you chose a different username. Restart the Collector with `docker compose -f docker-compose.obs.yml up -d --no-deps otel-collector` and open **VitaLoom MongoDB**. The Collector connects directly to the single local replica-set node over Docker and collects service metrics every 30 seconds. The dashboard shows current and available connections and operations per second by type. The operation counters apply to the MongoDB server and include traffic from clients other than VitaLoom Backend.
+
 On Docker Desktop with Linux containers, cAdvisor uses the Linux PID namespace, the Docker socket for container names, and the containerd socket for container metadata with the containerd image store. The sockets grant access to their respective APIs. Only cAdvisor mounts them, and its metrics port stays inside Compose.
 
 

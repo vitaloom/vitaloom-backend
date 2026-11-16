@@ -25,6 +25,18 @@ receivers:
     endpoint: http://nginx:8080/stub_status
     collection_interval: 15s
 
+  mongodb:
+    hosts:
+      - endpoint: mongodb:27017
+    username: ${env:OBS_MONGODB_USER}
+    password: ${env:OBS_MONGODB_PASSWORD}
+    auth_source: admin
+    direct_connection: true
+    collection_interval: 30s
+    timeout: 5s
+    tls:
+      insecure: true
+
   filelog/nginx_rate_limit:
     include:
       - /var/log/vitaloom/rate-limit.log
@@ -51,6 +63,11 @@ connectors:
 
 processors:
   deltatocumulative:
+  filter/mongodb:
+    error_mode: ignore
+    metrics:
+      metric:
+        - 'name != "mongodb.connection.count" and name != "mongodb.operation.count"'
 
 exporters:
   prometheus:
@@ -68,6 +85,10 @@ service:
       exporters: [prometheus]
     metrics/nginx:
       receivers: [nginx]
+      exporters: [prometheus]
+    metrics/mongodb:
+      receivers: [mongodb]
+      processors: [filter/mongodb]
       exporters: [prometheus]
     logs/nginx_rate_limit:
       receivers: [filelog/nginx_rate_limit]

@@ -4,6 +4,9 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.149.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      OBS_MONGODB_USER: ${OBS_MONGODB_USER:-vitaloom_monitor}
+      OBS_MONGODB_PASSWORD: ${OBS_MONGODB_PASSWORD:-}
     depends_on:
       cadvisor:
         condition: service_started
