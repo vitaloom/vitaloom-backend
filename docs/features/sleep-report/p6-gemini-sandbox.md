@@ -1,6 +1,6 @@
 # P6 Gemini Developer API sandbox
 
-The Sleep API can use the stable `gemini-3.1-flash-lite` model in an isolated, synthetic-data sandbox. The provider is disabled by default. The sandbox profile excludes `prod` and `production`. The fake and Gemini profiles use separate cache identities. Existing authentication, opt-in consent, READY evidence, deterministic fallback and HTTP response shapes apply to both.
+The Sleep API can use the stable `gemini-3.1-flash-lite` model in an isolated, synthetic-data sandbox. The provider is available under Spring's `default` profile or the explicit `sleep-ai-gemini-sandbox` profile, and is disabled unless `VITALOOM_SLEEP_GEMINI_SANDBOX_APPROVED=true` is set. `VITALOOM_SLEEP_GEMINI_ENABLED` defaults to true when omitted and can explicitly disable the provider with `false`. The Gemini provider excludes `prod` and `production`. The fake provider remains limited to dev/test without the Gemini sandbox profile. The fake and Gemini providers use separate cache identities. Existing authentication, opt-in consent, READY evidence, deterministic fallback and HTTP response shapes apply to both.
 
 ## Provider request and publication
 
@@ -14,9 +14,9 @@ Both flows share a local dispatch limit of four attempts per rolling minute and 
 
 After the owner approves the isolated run, its cost and provider privacy/retention review, use a dedicated AI Studio project and an isolated fixture containing only synthetic data. Verify the project quota and available spend. Keep optional project prompt/response logging and data sharing disabled. Google may retain Paid Services data for abuse monitoring. Its terms describe additional uses of prompts and responses on the unpaid tier. Use a Gemini-restricted AI Studio authorization key and supply it as `GEMINI_API_KEY` through the process environment or a local secret manager. Keep HTTP request/response and header logging off.
 
-For the local Backend application, activate Spring profile `sleep-ai-gemini-sandbox` and set `VITALOOM_SLEEP_GEMINI_ENABLED=true` and `VITALOOM_SLEEP_GEMINI_SANDBOX_APPROVED=true`. Use the approval flag only after the checks above are complete. Existing user consent storage still applies, so use a separate synthetic account and its explicit opt-in if exercising the Backend HTTP endpoints.
+For the local Backend application, use Spring's default profile (or explicitly activate `sleep-ai-gemini-sandbox`), set `VITALOOM_SLEEP_GEMINI_SANDBOX_APPROVED=true`, and provide `GEMINI_API_KEY`. The enabled flag can be omitted; set `VITALOOM_SLEEP_GEMINI_ENABLED=false` to turn the provider off. Use the approval flag only after the checks above are complete. Existing user consent storage still applies, so use a separate synthetic account and its explicit opt-in if exercising the Backend HTTP endpoints.
 
-Run the live smoke from the Backend root with both environment flags set after approval and the key injected. It exercises the adapter directly with two synthetic requests and starts neither the application nor a database. Maven's default test selection excludes this class.
+Run the live smoke from the Backend root with the approval flag set and the key injected after approval. The smoke exercises the adapter directly with two synthetic requests and starts neither the application nor a database. Maven's default test selection excludes this class.
 
 ```powershell
 mvn '-Dtest=GeminiSleepStorySmokeIT' test

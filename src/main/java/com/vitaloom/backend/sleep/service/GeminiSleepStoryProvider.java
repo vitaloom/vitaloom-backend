@@ -35,8 +35,9 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 @Component
-@Profile("sleep-ai-gemini-sandbox & !prod & !production")
-@ConditionalOnProperty(prefix = "vitaloom.sleep.gemini", name = {"enabled", "sandbox-approved"}, havingValue = "true")
+@Profile("((default & !dev & !test) | sleep-ai-gemini-sandbox) & !prod & !production")
+@ConditionalOnProperty(prefix = "vitaloom.sleep.gemini", name = "sandbox-approved", havingValue = "true")
+@ConditionalOnProperty(prefix = "vitaloom.sleep.gemini", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class GeminiSleepStoryProvider implements CacheNamespacedProvider {
     private static final String MODEL = "gemini-3.1-flash-lite";
     private static final URI ENDPOINT = URI.create(
