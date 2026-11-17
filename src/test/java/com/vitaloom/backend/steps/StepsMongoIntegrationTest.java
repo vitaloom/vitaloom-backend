@@ -95,6 +95,100 @@ class StepsMongoIntegrationTest {
     }
 
     @Test
+    void unorderedBulkMapsExistingIdentityDuplicatesAndConflictsToTheirInputIndexes() throws Exception {
+        String accountId = account("bulk-existing");
+        String token = token(accountId);
+        mongo.insert(new StepMeasurement(accountId, "device", "already-there", 3,
+                Instant.parse("2026-11-10T00:00:00Z"), NOW));
+        String request = """
+                {"deviceId":"device","runId":"bulk-run","events":[
+                 {"eventId":"fresh","occurredAt":"2026-11-10T00:00:01Z","stepsDelta":2},
+                 {"eventId":"already-there","occurredAt":"2026-11-10T00:00:00.000Z","stepsDelta":3},
+                 {"eventId":"already-there","occurredAt":"2026-11-10T00:00:02Z","stepsDelta":4}]}
+                """;
+
+        mvc.perform(post("/api/steps/batch").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accepted").value(1))
+                .andExpect(jsonPath("$.duplicates").value(1))
+                .andExpect(jsonPath("$.rejected").value(1))
+                .andExpect(jsonPath("$.results[0].status").value("ACCEPTED"))
+                .andExpect(jsonPath("$.results[1].status").value("DUPLICATE"))
+                .andExpect(jsonPath("$.results[2].error.code").value("EVENT_ID_CONFLICT"));
+        assertEquals(2, count(accountId));
+    }
+
+    @Test
+    void intervalEventsEnforceBoundariesAndKeepMixedStatisticsAnchoredAtStart() throws Exception {
+        String accountId = account("intervals");
+        String token = token(accountId);
+        String request = """
+                {"deviceId":"device","runId":"interval-run","events":[
+                 {"eventId":"legacy","occurredAt":"2026-11-10T00:30:00Z","stepsDelta":2},
+                 {"eventId":"boundary","startAt":"2026-11-09T23:59:00Z","endAt":"2026-11-10T00:00:00Z","stepsDelta":300},
+                 {"eventId":"max-duration","startAt":"2026-11-09T23:00:00Z","endAt":"2026-11-10T00:00:00Z","stepsDelta":18000},
+                 {"eventId":"cross-hour","startAt":"2026-11-09T23:59:00Z","endAt":"2026-11-10T00:00:01Z","stepsDelta":305},
+                 {"eventId":"too-long","startAt":"2026-11-09T22:00:00Z","endAt":"2026-11-09T23:00:01Z","stepsDelta":18005},
+                 {"eventId":"partial","startAt":"2026-11-10T00:30:00Z","stepsDelta":1},
+                 {"eventId":"mixed","occurredAt":"2026-11-10T00:30:00Z","startAt":"2026-11-10T00:30:00Z","endAt":"2026-11-10T00:30:10Z","stepsDelta":10},
+                 {"eventId":"over-limit","startAt":"2026-11-10T00:30:00Z","endAt":"2026-11-10T00:30:10Z","stepsDelta":51},
+                 {"eventId":"fractional","startAt":"2026-11-10T00:30:00Z","endAt":"2026-11-10T00:30:10Z","stepsDelta":1.5},
+                 {"eventId":"fractional-duration","startAt":"2026-11-10T00:30:00Z","endAt":"2026-11-10T00:30:10.500Z","stepsDelta":10},
+                 {"eventId":"future-end","startAt":"2026-11-10T00:59:01Z","endAt":"2026-11-10T01:00:01Z","stepsDelta":5}]}
+                """;
+
+        mvc.perform(post("/api/steps/batch").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accepted").value(3))
+                .andExpect(jsonPath("$.duplicates").value(0))
+                .andExpect(jsonPath("$.rejected").value(8))
+                .andExpect(jsonPath("$.results[1].status").value("ACCEPTED"))
+                .andExpect(jsonPath("$.results[2].status").value("ACCEPTED"))
+                .andExpect(jsonPath("$.results[3].error.code").value("INVALID_INTERVAL"))
+                .andExpect(jsonPath("$.results[4].error.code").value("INVALID_INTERVAL"))
+                .andExpect(jsonPath("$.results[5].error.code").value("INVALID_INTERVAL"))
+                .andExpect(jsonPath("$.results[6].error.code").value("INVALID_TIME_FORM"))
+                .andExpect(jsonPath("$.results[7].error.code").value("INVALID_STEPS_DELTA"))
+                .andExpect(jsonPath("$.results[8].error.code").value("INVALID_STEPS_DELTA"))
+                .andExpect(jsonPath("$.results[9].error.code").value("INVALID_INTERVAL"))
+                .andExpect(jsonPath("$.results[10].error.code").value("FUTURE_END_AT"));
+        assertEquals(3, count(accountId));
+
+        mvc.perform(get("/api/statistics/steps/daily").queryParam("date", "2026-11-10")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalSteps").value(18302))
+                .andExpect(jsonPath("$.buckets[6].steps").value(18300))
+                .andExpect(jsonPath("$.buckets[7].steps").value(2));
+    }
+
+    @Test
+    void normalizedIntervalPayloadsAreIdempotentAndDistinctFromLegacyPoints() throws Exception {
+        String accountId = account("interval-identity");
+        String token = token(accountId);
+        String request = """
+                {"deviceId":"device","runId":"identity-run","events":[
+                 {"eventId":"same","startAt":"2026-11-10T00:30:00.123900Z","endAt":"2026-11-10T00:30:10.123900Z","stepsDelta":10},
+                 {"eventId":"same","startAt":"2026-11-10T00:30:00.123100Z","endAt":"2026-11-10T00:30:10.123100Z","stepsDelta":10},
+                 {"eventId":"same","startAt":"2026-11-10T00:30:00.124Z","endAt":"2026-11-10T00:30:10.124Z","stepsDelta":10},
+                 {"eventId":"same","occurredAt":"2026-11-10T00:30:00.123Z","stepsDelta":2}]}
+                """;
+
+        mvc.perform(post("/api/steps/batch").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accepted").value(1))
+                .andExpect(jsonPath("$.duplicates").value(1))
+                .andExpect(jsonPath("$.rejected").value(2))
+                .andExpect(jsonPath("$.results[1].status").value("DUPLICATE"))
+                .andExpect(jsonPath("$.results[2].error.code").value("EVENT_ID_CONFLICT"))
+                .andExpect(jsonPath("$.results[3].error.code").value("EVENT_ID_CONFLICT"));
+        assertEquals(1, count(accountId));
+    }
+
+    @Test
     void invalidEnvelopesAreRejectedAndAuthenticationProtectsAllStepsRoutes() throws Exception {
         String empty = "{\"deviceId\":\"device\",\"runId\":\"run\",\"events\":[]}";
         String oversized = "{\"deviceId\":\"device\",\"runId\":\"run\",\"events\":["
