@@ -28,6 +28,12 @@ Request:
       "eventId": "demo-run-001-0002",
       "occurredAt": "2026-11-10T01:00:02.000Z",
       "stepsDelta": 2
+    },
+    {
+      "eventId": "demo-run-001-0003",
+      "startAt": "2026-11-10T01:00:03.000Z",
+      "endAt": "2026-11-10T01:00:13.000Z",
+      "stepsDelta": 20
     }
   ]
 }
@@ -41,19 +47,24 @@ Request:
 | `runId` | string | Yes | Producer-run diagnostic ID; non-blank and at most 128 characters. It is not part of event identity. |
 | `events` | array | Yes | Contains 1–500 events per request. |
 | `events[].eventId` | string | Yes | Stable event ID; non-blank and at most 128 characters. Reuse it for every retry of that event. |
-| `events[].occurredAt` | ISO 8601 instant | Yes | Time when the increment is completed and recorded. Producer should send UTC with `Z`. |
-| `events[].stepsDelta` | integer | Yes | Must be from **1 through 5 inclusive** for the MVP Producer's one-second measurement interval. |
+| `events[].occurredAt` | ISO 8601 instant | One time form required | Legacy point form: time when the increment is completed and recorded. Producer should send UTC with `Z`. |
+| `events[].startAt` | ISO 8601 instant | Interval form only | Inclusive beginning of the observed interval. |
+| `events[].endAt` | ISO 8601 instant | Interval form only | Exclusive end of the observed interval. |
+| `events[].stepsDelta` | integer | Yes | Positive. Point form is limited to 1–5; interval form is limited to 5 times its whole duration in seconds. |
 
 Additional rules:
 
-- `stepsDelta` is an increment, not a cumulative counter snapshot. The entire increment is assigned to the bucket and local date containing `occurredAt`.
+- `stepsDelta` is an increment, not a cumulative counter snapshot. Supply exactly one time form per event: legacy `occurredAt`, or both `startAt` and `endAt`. Do not mix the forms or provide a partial interval.
+- Legacy point events keep their original 1–5 bound and assign the entire increment to the bucket and local date containing `occurredAt`.
+- Interval events describe `[startAt, endAt)`. Both instants are parsed and normalized to BSON millisecond precision. The normalized interval must be 1–3600 whole seconds, `endAt` cannot be later than batch receipt, and the interval must fit within one hourly bucket in `Asia/Ho_Chi_Minh`. An `endAt` exactly on the hour boundary is allowed. The entire increment is assigned to the bucket and local date containing `startAt`; it is not split across bucket boundaries.
+- For an interval event, `stepsDelta` must be an integer from 1 through `5 * durationSeconds`; fractional JSON values are rejected.
 - A valid Steps event must have `stepsDelta > 0`. Zero and negative values are rejected with item-level `INVALID_STEPS_DELTA`; do not persist zero-value events.
 - When the Producer observes no step increment, it must not create an event for that observation. If a flush has no events, skip the Steps HTTP request; an empty `events` array is an invalid batch envelope.
 - The inclusive upper bound of 5 is an MVP input-sanity boundary calibrated to the current Producer's one-second measurement interval. It is not a universal physiological limit. Changing the measurement interval or introducing a real wearable/source requires revisiting this boundary and the event semantics before integration.
-- `occurredAt` is a point-in-time timestamp for the completed increment. It does not describe an interval start/end and does not prove continuous observation or data coverage. Do not split an increment across buckets or midnight.
-- Backend captures one batch receipt instant as `receivedAt`. Any event whose `occurredAt` is strictly later than that instant is rejected with `FUTURE_OCCURRED_AT`; no clock-skew grace period is applied.
+- `occurredAt` remains a point-in-time timestamp for the completed increment. It does not prove continuous observation or data coverage. Interval form preserves the producer's explicit observation window but does not establish broader data coverage.
+- Backend captures one batch receipt instant as `receivedAt`. A legacy event whose `occurredAt`, or an interval event whose `endAt`, is strictly later than that instant is rejected (`FUTURE_OCCURRED_AT` or `FUTURE_END_AT`); no clock-skew grace period is applied.
 - Out-of-order delivery is allowed. Multiple events may have the same `occurredAt`; timestamp is not a unique key.
-- Normalize timestamps to MongoDB BSON Date millisecond precision before persistence and before comparing duplicate payloads.
+- Normalize timestamps to MongoDB BSON Date millisecond precision before persistence and before comparing duplicate payloads. For interval events, both normalized boundaries and `stepsDelta` define the immutable payload; a point event and interval event with the same `eventId` conflict.
 - `deviceId` identifies the source stream but is not an authentication credential. It is copied into each accepted raw measurement.
 - Cross-device overlap detection/reconciliation is out of MVP scope. The current Producer scenario should send one canonical Steps stream per account. Backend does not infer that events from different device IDs are duplicates; Statistics sums all accepted events in the requested account/time range.
 - Backend creates `receivedAt`; clients cannot set or override it.
@@ -107,8 +118,8 @@ Response rules:
 - The invariant is `received = accepted + duplicates + rejected`.
 - `results` preserves request order. `index` is zero-based and allows the Producer to correlate a rejected item.
 - Each result has exactly one status: `ACCEPTED`, `DUPLICATE` or `REJECTED`.
-- A repeated identity with the same normalized `occurredAt` and `stepsDelta` is `DUPLICATE`. Reusing the same identity with different measurement content is `REJECTED` with `EVENT_ID_CONFLICT`.
-- Item-level validation codes include `INVALID_EVENT_ID`, `INVALID_OCCURRED_AT`, `FUTURE_OCCURRED_AT`, `INVALID_STEPS_DELTA` and `EVENT_ID_CONFLICT`.
+- A repeated identity with the same normalized timestamp form and `stepsDelta` is `DUPLICATE`. Reusing the same identity with different measurement content is `REJECTED` with `EVENT_ID_CONFLICT`.
+- Item-level validation codes include `INVALID_EVENT_ID`, `INVALID_OCCURRED_AT`, `INVALID_START_AT`, `INVALID_END_AT`, `INVALID_TIME_FORM`, `INVALID_INTERVAL`, `FUTURE_OCCURRED_AT`, `FUTURE_END_AT`, `INVALID_STEPS_DELTA` and `EVENT_ID_CONFLICT`.
 - A transient infrastructure/database failure returns a server error. The batch may have partially persisted before the failure; retry the same event IDs. MongoDB's unique index makes already persisted events safe to resend.
 - The endpoint processes synchronously and returns item outcomes; it does not use `202 Accepted`.
 - A separate HTTP `Idempotency-Key` header and batch-response replay store are deferred. Stable event IDs and the MongoDB unique index provide retry-safe persistence for the MVP.
@@ -225,10 +236,10 @@ Both goal routes require a Bearer access JWT. Account ownership comes only from 
 
 - [ ] Steps batch ingestion requires Bearer authentication and derives account ownership from the JWT subject.
 - [ ] The batch envelope requires one stable `deviceId`, one `runId` and 1–500 events.
-- [ ] Every accepted event has a stable event ID, a valid non-future `occurredAt` and integer `stepsDelta` from 1 through 5.
+- [ ] Every accepted event has a stable event ID, exactly one valid time form, and a positive integer `stepsDelta` within that form's bound.
 - [ ] Zero/negative/over-limit increments are rejected and zero-value events are never persisted.
 - [ ] Identical retries are duplicates; conflicting reuse of an event ID is rejected; concurrent duplicates are prevented by a MongoDB unique index.
-- [ ] Out-of-order events are accepted and the full increment is assigned to the bucket containing `occurredAt`.
+- [ ] Out-of-order events are accepted; point increments use `occurredAt` and interval increments use `startAt` as the bucket anchor.
 - [ ] Batch responses provide per-item accepted, duplicate and rejected outcomes with consistent counters.
 - [ ] Daily returns 24 hourly buckets with `bucketSizeMinutes: 60`; Weekly returns 7 daily buckets; Custom returns one daily bucket per date and accepts ranges of 1–30 calendar days.
 - [ ] Weekly starts on Monday; all calendar boundaries use `Asia/Ho_Chi_Minh`.

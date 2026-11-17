@@ -1,0 +1,70 @@
+name: vitaloom-observability
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.149.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      OBS_MONGODB_USER: ${OBS_MONGODB_USER:-vitaloom_monitor}
+      OBS_MONGODB_PASSWORD: ${OBS_MONGODB_PASSWORD:-}
+    depends_on:
+      cadvisor:
+        condition: service_started
+        restart: true
+    ports:
+      - "127.0.0.1:${OBS_OTLP_PORT:-4318}:4318"
+    volumes:
+      - ./observability/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - nginx-monitoring-logs:/var/log/vitaloom:ro
+      - nginx-monitoring-offsets:/var/lib/vitaloom-collector
+    networks:
+      - default
+      - vitaloom-network
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    cgroup: host
+    pid: host
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command:
+      - --enable_metrics=cpu,memory,network
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.project,com.docker.compose.service
+    volumes:
+      - /sys:/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
+
+
+  prometheus:
+    image: prom/prometheus:v3.11.1
+    ports:
+      - "127.0.0.1:${OBS_PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:12.4
+    ports:
+      - "127.0.0.1:${OBS_GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
+networks:
+  vitaloom-network:
+    external: true
+    name: vitaloom-network
+
+volumes:
+  nginx-monitoring-logs:
+    external: true
+    name: vitaloom-nginx-monitoring-logs
+  nginx-monitoring-offsets:
+    external: true
+    name: vitaloom-nginx-monitoring-offsets
+  prometheus-data:
+  grafana-data:

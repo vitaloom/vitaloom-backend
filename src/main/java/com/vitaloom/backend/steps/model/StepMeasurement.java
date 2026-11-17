@@ -23,15 +23,22 @@ public class StepMeasurement extends BaseDocument {
     @Field("event_id") private String eventId;
     @Field("steps_delta") private int stepsDelta;
     @Field("occurred_at") private Instant occurredAt;
+    @Field("end_at") private Instant endAt;
     @Field("received_at") private Instant receivedAt;
 
     public StepMeasurement(String accountId, String deviceId, String eventId, int stepsDelta,
                            Instant occurredAt, Instant receivedAt) {
+        this(accountId, deviceId, eventId, stepsDelta, occurredAt, null, receivedAt);
+    }
+
+    public StepMeasurement(String accountId, String deviceId, String eventId, int stepsDelta,
+                           Instant occurredAt, Instant endAt, Instant receivedAt) {
         this.accountId = accountId;
         this.deviceId = deviceId;
         this.eventId = eventId;
         this.stepsDelta = stepsDelta;
         this.occurredAt = occurredAt;
+        this.endAt = endAt;
         this.receivedAt = receivedAt;
     }
 }

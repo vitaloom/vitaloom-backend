@@ -10,16 +10,16 @@ This design is specific to Steps. Do not generalize it into a shared Heart Rate 
 ## 1. Confirmed event semantics and validation
 
 - A Steps event carries an increment (`stepsDelta`), not a cumulative counter snapshot.
-- For the MVP Producer's one-second measurement interval, accepted `stepsDelta` is an integer from **1 through 5 inclusive**.
+- Legacy point events keep the MVP Producer's one-second measurement interval rule: `stepsDelta` is an integer from **1 through 5 inclusive**.
 - Zero and negative increments are invalid. Reject them item by item with `INVALID_STEPS_DELTA`; do not persist zero-value events. When no increment is observed, the Producer creates no event.
 - The upper bound of 5 is an input-sanity boundary calibrated to the current one-second simulator. It is not a universal physiological limit. A change to the measurement interval or introduction of a real wearable/source requires revisiting the boundary and event semantics before integration.
-- `occurredAt` is a point-in-time timestamp representing when an increment is completed and recorded.
-- The entire `stepsDelta` is assigned to the time bucket and local calendar date containing `occurredAt`.
-- The model does not claim to know the per-step distribution inside an increment interval. An increment that crosses midnight is assigned wholly to the bucket containing its `occurredAt`.
+- Legacy events use `occurredAt`, a point-in-time timestamp representing when an increment is completed and recorded. Interval events use `[startAt, endAt)` and assign the entire `stepsDelta` to the bucket containing `startAt`.
+- Interval events require a 1–3600 whole-second duration, a non-future `endAt`, and must fit within one hourly bucket in `Asia/Ho_Chi_Minh`; an end exactly at the bucket boundary is valid. Their step count is a positive integer no greater than five times the duration in seconds.
+- The model does not claim to know the per-step distribution inside an increment interval. Intervals are never split across buckets or midnight.
 - Backend creates `receivedAt` using one receipt instant captured for the batch; the Producer cannot supply it.
-- An event whose `occurredAt` is strictly later than the batch receipt instant is rejected with `FUTURE_OCCURRED_AT`; no clock-skew grace period is applied.
+- An event whose legacy `occurredAt` or interval `endAt` is strictly later than the batch receipt instant is rejected; no clock-skew grace period is applied.
 - Out-of-order delivery is accepted. Multiple events may share an `occurredAt`; timestamps are not unique identities.
-- Normalize `occurredAt` to BSON Date millisecond precision before persistence and duplicate-payload comparison.
+- Normalize point timestamps and both interval boundaries to BSON Date millisecond precision before persistence and duplicate-payload comparison.
 - Daily calendar boundaries use `Asia/Ho_Chi_Minh`.
 - Accepted raw events remain the source of truth. Statistics calculates derived totals on read for the current MVP.
 
@@ -48,8 +48,10 @@ Each event requires:
 | Field | BSON / Java type | Rule |
 |---|---|---|
 | `eventId` | String | Required, non-blank, maximum 128 characters; stable across retries |
-| `stepsDelta` | Int32 / Java `int` | Integer from 1 through 5 inclusive under the MVP one-second Producer contract |
-| `occurredAt` | BSON Date / Java `Instant` | Valid absolute instant; persisted at millisecond precision |
+| `stepsDelta` | Int32 / Java `int` | Positive integer; point form 1–5, interval form up to five times duration seconds |
+| `occurredAt` | BSON Date / Java `Instant` | Legacy point form only; valid absolute instant, persisted at millisecond precision |
+| `startAt` | BSON Date / Java `Instant` | Interval form only; valid absolute instant persisted as `occurred_at` at millisecond precision |
+| `endAt` | BSON Date / Java `Instant` | Interval form only; valid absolute instant persisted as `end_at` at millisecond precision |
 
 Collection: `step_measurements`.
 
@@ -75,8 +77,9 @@ The BSON field names use snake_case; Java properties and API fields remain camel
 | `account_id` (`accountId`) | String account identifier matching the authenticated User ID / JWT subject |
 | `device_id` (`deviceId`) | Stable source identity copied from the batch envelope |
 | `event_id` (`eventId`) | Stable identity of one increment event, reused on retry |
-| `steps_delta` (`stepsDelta`) | Positive integer increment from 1 through 5 |
-| `occurred_at` (`occurredAt`) | Source event time; increment completion/recording instant |
+| `steps_delta` (`stepsDelta`) | Positive integer increment, limited by the submitted time form |
+| `occurred_at` (`occurredAt`) | Legacy point time, or normalized interval start used as Statistics anchor |
+| `end_at` (`endAt`) | Optional normalized interval end; absent on legacy point events |
 | `received_at` (`receivedAt`) | Backend batch receipt time; not supplied by Producer |
 
 `runId` remains batch diagnostic metadata. It is not copied into the measurement document and is not part of event identity. A separate Device collection, device-registration workflow or device-ownership verification is not introduced for the MVP.
@@ -104,8 +107,8 @@ db.step_measurements.createIndex(
 
 For an existing identity:
 
-- Same normalized `occurredAt` and same `stepsDelta`: classify as `DUPLICATE`.
-- Different `occurredAt` or `stepsDelta`: classify as `REJECTED` with `EVENT_ID_CONFLICT`.
+- Same normalized time form and `stepsDelta`: classify as `DUPLICATE`.
+- Different timestamp form, interval boundary or `stepsDelta`: classify as `REJECTED` with `EVENT_ID_CONFLICT`.
 - `receivedAt` and `runId` do not participate in immutable event payload identity.
 - The same `eventId` under a different `deviceId` is a different source identity; there is no cross-device deduplication.
 
@@ -126,7 +129,7 @@ Do not add speculative indexes on `receivedAt`, `deviceId` alone or extra sort c
 
 - Process each event independently after validating the overall envelope.
 - A valid event is inserted once. A duplicate identity with the same immutable payload returns `DUPLICATE`; conflicting payload reuse returns `REJECTED / EVENT_ID_CONFLICT`.
-- Other item-level validation failures return `REJECTED` with a metric-specific error code, including `INVALID_EVENT_ID`, `INVALID_OCCURRED_AT`, `FUTURE_OCCURRED_AT` and `INVALID_STEPS_DELTA`.
+- Other item-level validation failures return `REJECTED` with a metric-specific error code, including `INVALID_EVENT_ID`, `INVALID_OCCURRED_AT`, `INVALID_START_AT`, `INVALID_END_AT`, `INVALID_TIME_FORM`, `INVALID_INTERVAL`, `FUTURE_OCCURRED_AT`, `FUTURE_END_AT` and `INVALID_STEPS_DELTA`.
 - A structurally invalid envelope (missing/invalid `deviceId` or `runId`, or 0 or more than 500 events) returns request-level `400 Bad Request`.
 - A successfully processed batch returns `200 OK` with `received`, `accepted`, `duplicates`, `rejected` and ordered per-item results. The invariant is `received = accepted + duplicates + rejected`.
 - A transient database/server failure may occur after some events have persisted. The Producer retries the same event IDs; the unique index makes already persisted items safe to resend.
@@ -150,7 +153,7 @@ Cross-device duplicate detection/reconciliation is **out of MVP scope**:
 
 The Steps feature owns raw increment ingestion, validation, event identity, persistence and raw-data query capabilities. It exposes reads to Statistics through `steps.contract.StepsReadQuery`, with `StepSample` in `steps.contract.dto`; the ingestion controller continues to use `StepsService`. Statistics owns all derived Steps totals and time-bucket calculations.
 
-The Steps read contract exposes account-scoped raw events within a supplied half-open instant range `[startInclusive, endExclusive)`. Keep MongoDB query construction and persistence models inside Steps. Statistics must not inject `StepsRepository` or access the `step_measurements` collection directly.
+The Steps read contract exposes account-scoped raw events within a supplied half-open instant range `[startInclusive, endExclusive)`. For interval events the persisted `occurred_at` anchor is the normalized `startAt`, so existing range queries include the full increment in that bucket. Keep MongoDB query construction and persistence models inside Steps. Statistics must not inject `StepsRepository` or access the `step_measurements` collection directly.
 
 Statistics calculates on read for the MVP. Do not create precomputed daily/weekly aggregate collections, aggregate repositories/models, background jobs, scheduled refresh, cache or a cross-metric generic aggregation framework.
 

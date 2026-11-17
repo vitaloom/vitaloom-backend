@@ -4,7 +4,10 @@ import com.vitaloom.backend.steps.model.StepMeasurement;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.BulkOperationException;
+import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.index.Index;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -25,6 +28,22 @@ public class StepsRepository {
     }
 
     public void insert(StepMeasurement measurement) { mongo.insert(measurement); }
+
+    public Set<Integer> insertAll(List<StepMeasurement> measurements) {
+        BulkOperations bulk = mongo.bulkOps(BulkOperations.BulkMode.UNORDERED, StepMeasurement.class);
+        measurements.forEach(bulk::insert);
+        try {
+            bulk.execute();
+            return Set.of();
+        } catch (BulkOperationException exception) {
+            if (exception.getErrors().isEmpty()
+                    || exception.getErrors().stream().anyMatch(error -> error.getCode() != 11000)) {
+                throw exception;
+            }
+            return exception.getErrors().stream().map(error -> error.getIndex())
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        }
+    }
 
     public Optional<StepMeasurement> findIdentity(String accountId, String deviceId, String eventId) {
         Query query = Query.query(Criteria.where("account_id").is(accountId).and("device_id").is(deviceId)
