@@ -37,9 +37,12 @@ class AssistantVoiceController {
 
     @PostMapping(path = "/api/assistant/mvp/voice-turns", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     ResponseEntity<AssistantCourseController.View> send(Authentication authentication,
-            @RequestParam UUID turnId, @RequestParam String consentAccepted, @RequestPart MultipartFile audio)
+            @RequestParam UUID turnId, @RequestParam String consentAccepted,
+            @RequestParam(required = false) String consentVersion, @RequestPart MultipartFile audio)
             throws IOException {
-        if (!"true".equals(consentAccepted)) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+        if (!"true".equals(consentAccepted) || !"assemblyai-us-v1".equals(consentVersion)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+        }
         if (audio.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
         if (audio.getSize() > MAX_AUDIO_BYTES) throw new ResponseStatusException(HttpStatus.CONTENT_TOO_LARGE);
         String contentType = audio.getContentType();

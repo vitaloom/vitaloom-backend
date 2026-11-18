@@ -118,6 +118,9 @@ class AssistantVoiceFlowTest {
     @Test
     void refusesUnconsentedAndUnsupportedAudioBeforeRecognition() throws Exception {
         mvc.perform(recording("false", "audio/mp4", AUDIO)).andExpect(status().isForbidden());
+        mvc.perform(multipart(PATH).file(new MockMultipartFile("audio", "voice.m4a", "audio/mp4", AUDIO))
+                .param("turnId", turnId.toString()).param("consentAccepted", "true")
+                .principal(new TestingAuthenticationToken(OWNER, ""))).andExpect(status().isForbidden());
         mvc.perform(recording("true", "text/plain", AUDIO)).andExpect(status().isUnsupportedMediaType());
         mvc.perform(recording("true", "audio/mp4", new byte[0])).andExpect(status().isBadRequest());
         assertThat(claims).isEmpty();
@@ -128,6 +131,7 @@ class AssistantVoiceFlowTest {
         return (MockMultipartHttpServletRequestBuilder) multipart(PATH)
                 .file(new MockMultipartFile("audio", "voice.m4a", contentType, bytes))
                 .param("turnId", turnId.toString()).param("consentAccepted", consent)
+                .param("consentVersion", "assemblyai-us-v1")
                 .principal(new TestingAuthenticationToken(OWNER, ""));
     }
 }

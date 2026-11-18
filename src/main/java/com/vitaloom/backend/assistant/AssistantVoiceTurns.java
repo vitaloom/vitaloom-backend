@@ -56,7 +56,7 @@ final class AssistantVoiceTurns {
         String transcript;
         try {
             transcript = stt.transcribe(audio);
-        } catch (LocalAssistantSpeechToText.SpeechTranscriptionException failure) {
+        } catch (AssistantSpeechToText.SpeechTranscriptionException failure) {
             // The metric writes have not started. A later attempt may safely reuse this ID.
             mongo.remove(claim);
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Speech transcription is unavailable.");

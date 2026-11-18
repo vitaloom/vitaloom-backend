@@ -2,6 +2,7 @@ package com.vitaloom.backend.assistant;
 
 import com.vitaloom.backend.sleep.service.SleepJournalService;
 import com.vitaloom.backend.water.service.WaterService;
+import java.net.URI;
 import java.time.Clock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -16,10 +17,8 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 class AssistantVoiceConfiguration {
     @Bean
     AssistantSpeechToText assistantSpeechToText(
-            @Value("${ASSISTANT_VOICE_STT_FFMPEG:ffmpeg}") String ffmpeg,
-            @Value("${ASSISTANT_VOICE_STT_EXECUTABLE:whisper-cli}") String whisper,
-            @Value("${ASSISTANT_VOICE_STT_MODEL}") String sttModel) {
-        return new LocalAssistantSpeechToText(ffmpeg, whisper, sttModel);
+            @Value("${ASSEMBLYAI_API_KEY}") String apiKey) {
+        return new AssemblyAiAssistantSpeechToText(apiKey, URI.create("https://api.assemblyai.com"));
     }
 
     @Bean

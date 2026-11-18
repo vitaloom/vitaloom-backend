@@ -31,7 +31,7 @@ import org.springframework.test.web.servlet.request.MockMultipartHttpServletRequ
     "ASSISTANT_GEMINI_API_KEY=fixture-only-fake-key",
     "ASSISTANT_VECTOR_MONGO_URI=",
     "ASSISTANT_VOICE_ENABLED=true",
-    "ASSISTANT_VOICE_STT_MODEL=fixture-model"
+    "ASSEMBLYAI_API_KEY=fixture-assembly-key"
 })
 @TestPropertySource("/mongo-integration-test.properties")
 @AutoConfigureMockMvc
@@ -90,7 +90,8 @@ class AssistantVoiceMongoIntegrationTest {
 
     private MockMultipartHttpServletRequestBuilder voice(UUID turnId, byte[] audio, boolean consent) {
         return multipart(PATH).file(new MockMultipartFile("audio", "voice.m4a", "audio/mp4", audio))
-                .param("turnId", turnId.toString()).param("consentAccepted", Boolean.toString(consent));
+                .param("turnId", turnId.toString()).param("consentAccepted", Boolean.toString(consent))
+                .param("consentVersion", "assemblyai-us-v1");
     }
 
     private MockHttpServletRequestBuilder waterSummary(String day, String owner) {
