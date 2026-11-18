@@ -48,6 +48,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/sleep/goal").authenticated()
                         .requestMatchers("/api/sleep/ai/consent", "/api/sleep/ai/explanations", "/api/sleep/recent/story").authenticated()
                         .requestMatchers("/api/sleep/v2/**").authenticated()
+                        .requestMatchers("/api/assistant/**").authenticated()
                         .requestMatchers("/api/**").permitAll()
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.decoder(accessJwtDecoder))
