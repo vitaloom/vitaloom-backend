@@ -3,7 +3,15 @@ package com.vitaloom.backend.assistant;
 import com.google.genai.types.EmbedContentConfig;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.MongoClient;
+import java.net.SocketTimeoutException;
+import java.net.http.HttpTimeoutException;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.TimeoutException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import org.bson.Document;
@@ -13,6 +21,9 @@ final class AssistantFixtureSearch implements AutoCloseable {
     private static final String COLLECTION = "assistant_sandbox_faq";
     private static final String INDEX = "assistant_fixture_v1";
     private static final int DIMENSIONS = 768;
+    private static final int FAQ_CANDIDATE_LIMIT = 3;
+    private static final double FAQ_SCORE_THRESHOLD = 0.75;
+    private static final Logger LOG = LoggerFactory.getLogger(AssistantFixtureSearch.class);
 
     static final AssistantCourseAnswers.Source SOURCE = new AssistantCourseAnswers.Source(
             "app-help-sleep-journal", 1, "Nhật ký giấc ngủ", "/sleep/journal", null, null);
@@ -99,41 +110,114 @@ final class AssistantFixtureSearch implements AutoCloseable {
                         : provider.confirmsFixture(question, active.getString("answer"))) && current.getAsBoolean();
     }
 
-    AssistantCourseAnswers.Answer answerReadyFaq(String question) {
-        if (!model.equals("gemini-embedding-2")) {
-            throw new IllegalStateException("READY FAQ vector index requires gemini-embedding-2");
+    AssistantCourseAnswers.Answer answerReadyFaq(String question, UUID requestId) {
+        long started = System.nanoTime();
+        int calls = 0;
+        String stage = "embedding";
+        String outcome = "dependency_error";
+        try {
+            if (!model.equals("gemini-embedding-2")) {
+                throw new IllegalStateException("READY FAQ vector index requires gemini-embedding-2");
+            }
+            var query = embed("", question, false);
+            stage = "vector_search";
+            var collection = mongo.getCollection("assistant_ready_faq");
+            var search = new Document("index", "assistant_ready_faq_v1").append("path", "embedding")
+                    .append("queryVector", query).append("exact", true).append("limit", FAQ_CANDIDATE_LIMIT)
+                    .append("filter", new Document("active", true));
+            var candidates = collection.aggregate(List.of(new Document("$vectorSearch", search),
+                    new Document("$project", new Document("version", 1).append("contentHash", 1)
+                            .append("score", new Document("$meta", "vectorSearchScore")))))
+                    .maxTime(3, TimeUnit.SECONDS);
+            String today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).toString();
+            outcome = "empty_results";
+            try (var cursor = candidates.iterator()) {
+                int rank = 0;
+                while (rank < FAQ_CANDIDATE_LIMIT && cursor.hasNext()) {
+                    var candidate = cursor.next();
+                    rank++;
+                    double score = candidate.getDouble("score");
+                    if (score < FAQ_SCORE_THRESHOLD) {
+                        logCandidate(requestId, candidate, rank, "not_checked", "below_threshold");
+                        if (calls == 0) outcome = "below_threshold";
+                        break;
+                    }
+                    stage = "metadata_check";
+                    var filter = new Document("_id", candidate.getString("_id"))
+                            .append("active", true).append("status", "APPROVED").append("releaseGate", "READY")
+                            .append("version", candidate.getInteger("version"))
+                            .append("contentHash", candidate.getString("contentHash"))
+                            .append("supersededBy", null).append("model", model)
+                            .append("effectiveAt", new Document("$lte", today))
+                            .append("approvedBy", new Document("$regex", "\\S"))
+                            .append("reviewedAt", new Document("$regex", "^\\d{4}-\\d{2}-\\d{2}$"));
+                    var faq = collection.find(filter).first();
+                    if (faq == null) {
+                        logCandidate(requestId, candidate, rank, "rejected", "not_called");
+                        if (calls == 0) outcome = "metadata_rejected";
+                        continue;
+                    }
+                    stage = "generation";
+                    calls++;
+                    String reply;
+                    try {
+                        reply = provider.answerFaq(question, faq.getString("question"), faq.getString("answer"));
+                    } catch (RuntimeException failure) {
+                        logCandidate(requestId, candidate, rank, "accepted", failureReason(failure));
+                        throw failure;
+                    }
+                    if (reply == null) {
+                        logCandidate(requestId, candidate, rank, "accepted", "no_match");
+                        outcome = "no_match";
+                        continue;
+                    }
+                    stage = "metadata_recheck";
+                    if (collection.find(filter).first() == null) {
+                        logCandidate(requestId, candidate, rank, "revoked", "match");
+                        outcome = "metadata_revoked";
+                        continue;
+                    }
+                    logCandidate(requestId, candidate, rank, "accepted", "match");
+                    outcome = "answered";
+                    var source = new AssistantCourseAnswers.Source(faq.getString("_id"), faq.getInteger("version"),
+                            faq.getString("title"), "", null, null);
+                    return new AssistantCourseAnswers.Answer("ANSWERED",
+                            List.of(new AssistantCourseAnswers.Part("ANSWERED", reply, source)), null);
+                }
+            }
+            return new AssistantCourseAnswers.Answer("INSUFFICIENT_EVIDENCE",
+                    List.of(new AssistantCourseAnswers.Part("INSUFFICIENT_EVIDENCE",
+                            "Không tìm thấy FAQ phù hợp. No matching FAQ was found.", null)), null);
+        } catch (RuntimeException failure) {
+            outcome = failureReason(failure);
+            throw failure;
+        } finally {
+            LOG.atDebug().addKeyValue("request_id", requestId).addKeyValue("embedding_model", model)
+                    .addKeyValue("embedding_dimensions", DIMENSIONS).addKeyValue("stage", stage)
+                    .addKeyValue("outcome", outcome).addKeyValue("generation_calls", calls)
+                    .addKeyValue("latency_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started))
+                    .log("Assistant FAQ retrieval");
         }
-        var query = embed("", question, false);
-        var collection = mongo.getCollection("assistant_ready_faq");
-        var search = new Document("index", "assistant_ready_faq_v1").append("path", "embedding")
-                .append("queryVector", query).append("exact", true).append("limit", 3)
-                .append("filter", new Document("active", true));
-        var candidates = collection.aggregate(List.of(new Document("$vectorSearch", search),
-                new Document("$project", new Document("version", 1).append("contentHash", 1)
-                        .append("score", new Document("$meta", "vectorSearchScore")))))
-                .maxTime(3, TimeUnit.SECONDS);
-        String today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toString();
-        for (var candidate : candidates) {
-            if (candidate.getDouble("score") < 0.75) break;
-            var filter = new Document("_id", candidate.getString("_id"))
-                    .append("active", true).append("status", "APPROVED").append("releaseGate", "READY")
-                    .append("version", candidate.getInteger("version"))
-                    .append("contentHash", candidate.getString("contentHash"))
-                    .append("supersededBy", null).append("model", model)
-                    .append("effectiveAt", new Document("$lte", today));
-            var faq = collection.find(filter).first();
-            if (faq == null) continue;
-            String reply = provider.answerFaq(question, faq.getString("question"), faq.getString("answer"));
-            if (reply == null) break;
-            if (collection.find(filter).first() == null) break;
-            var source = new AssistantCourseAnswers.Source(faq.getString("_id"), faq.getInteger("version"),
-                    faq.getString("title"), "", null, null);
-            return new AssistantCourseAnswers.Answer("ANSWERED",
-                    List.of(new AssistantCourseAnswers.Part("ANSWERED", reply, source)), null);
+    }
+
+    private static void logCandidate(UUID requestId, Document candidate, int rank, String metadata, String decision) {
+        LOG.atDebug().addKeyValue("request_id", requestId).addKeyValue("faq_id", candidate.getString("_id"))
+                .addKeyValue("rank", rank).addKeyValue("vector_score", candidate.getDouble("score"))
+                .addKeyValue("metric", "cosine").addKeyValue("threshold", FAQ_SCORE_THRESHOLD)
+                .addKeyValue("metadata", metadata).addKeyValue("decision", decision)
+                .log("Assistant FAQ candidate");
+    }
+
+    private static String failureReason(RuntimeException failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof GeminiAssistantProvider.InvalidFaqResponse) return "invalid_model_response";
+            if (cause instanceof HttpTimeoutException || cause instanceof SocketTimeoutException
+                    || cause instanceof TimeoutException || cause instanceof com.mongodb.MongoTimeoutException) {
+                return "timeout";
+            }
+            if (cause instanceof com.google.genai.errors.ApiException) return "gemini_api_error";
         }
-        return new AssistantCourseAnswers.Answer("INSUFFICIENT_EVIDENCE",
-                List.of(new AssistantCourseAnswers.Part("INSUFFICIENT_EVIDENCE",
-                        "Không tìm thấy FAQ phù hợp. No matching FAQ was found.", null)), null);
+        return "dependency_error";
     }
 
     private List<Float> embed(String title, String text, boolean document) {

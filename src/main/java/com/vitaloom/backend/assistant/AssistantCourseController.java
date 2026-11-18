@@ -145,7 +145,7 @@ class AssistantCourseController {
             answer = answers.answer(owner, text, false, context);
             if (!answer.outcome().equals("SAFETY")) {
                 try {
-                    answer = search.answerReadyFaq(text);
+                    answer = search.answerReadyFaq(text, request.turnId());
                 } catch (RuntimeException failure) {
                     answer = new AssistantCourseAnswers.Answer("DEPENDENCY_UNAVAILABLE",
                             List.of(new AssistantCourseAnswers.Part("DEPENDENCY_UNAVAILABLE",
