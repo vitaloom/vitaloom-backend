@@ -87,8 +87,7 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
                         + "return a JSON object with decision NO_MATCH and no other fields. Otherwise return a JSON object "
                         + "with decision MATCH and a nonempty string answer. Return only JSON. "
                         + "Do not diagnose, prescribe, invent citations or request personal data."),
-                new org.springframework.ai.chat.messages.UserMessage(evidence)), GoogleGenAiChatOptions.builder()
-                        .responseMimeType("application/json").build())));
+                new org.springframework.ai.chat.messages.UserMessage(evidence)), faqReplyOptions(chatModel, 128))));
         var result = response.getResult();
         String text = result == null || result.getOutput() == null ? null : result.getOutput().getText();
         return parseFaqReply(text);
@@ -115,11 +114,15 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
                         + "{\"decision\":\"NO_MATCH\"}, or {\"decision\":\"MATCH\",\"parts\":[{"
                         + "\"faqId\":\"source id\",\"answer\":\"grounded answer\"}]} with one to three parts "
                         + "and distinct faqId values."),
-                new org.springframework.ai.chat.messages.UserMessage(data)), GoogleGenAiChatOptions.builder()
-                        .responseMimeType("application/json").maxOutputTokens(384).build())));
+                new org.springframework.ai.chat.messages.UserMessage(data)), faqReplyOptions(chatModel, 384))));
         var result = response.getResult();
         String text = result == null || result.getOutput() == null ? null : result.getOutput().getText();
         return parseFaqContextReply(text);
+    }
+
+    static GoogleGenAiChatOptions faqReplyOptions(String chatModel, int maxOutputTokens) {
+        return GoogleGenAiChatOptions.builder().model(chatModel).responseMimeType("application/json")
+                .maxOutputTokens(maxOutputTokens).googleSearchRetrieval(false).build();
     }
 
     static List<FaqPart> parseFaqContextReply(String text) {

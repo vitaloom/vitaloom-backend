@@ -8,6 +8,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AssistantMultiFaqProviderTest {
     @Test
+    void preservesTheConfiguredChatModelInJsonRequests() {
+        var options = GeminiAssistantProvider.faqReplyOptions("gemini-3.1-flash-lite", 384);
+        assertThat(options.getModel()).isEqualTo("gemini-3.1-flash-lite");
+        assertThat(options.getResponseMimeType()).isEqualTo("application/json");
+        assertThat(options.getMaxOutputTokens()).isEqualTo(384);
+    }
+
+    @Test
     void parsesOneToThreeDistinctGroundedParts() {
         assertThat(GeminiAssistantProvider.parseFaqContextReply(
                 "{\"decision\":\"MATCH\",\"parts\":[{\"faqId\":\"faq-1\",\"answer\":\"First\"}] }"))
