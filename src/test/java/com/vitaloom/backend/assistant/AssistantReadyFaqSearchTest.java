@@ -1,7 +1,5 @@
 package com.vitaloom.backend.assistant;
 
-import com.google.genai.types.ContentEmbedding;
-import com.google.genai.types.EmbedContentResponse;
 import com.mongodb.client.AggregateIterable;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
@@ -25,7 +23,7 @@ import static org.mockito.Mockito.*;
 
 class AssistantReadyFaqSearchTest {
     private static final String QUESTION = "Synthetic FAQ query";
-    private final GeminiAssistantProvider provider = mock(GeminiAssistantProvider.class);
+    private final AssistantProvider provider = mock(AssistantProvider.class);
     private final MongoTemplate mongo = mock(MongoTemplate.class);
     @SuppressWarnings("unchecked")
     private final MongoCollection<Document> collection = mock(MongoCollection.class);
@@ -36,9 +34,8 @@ class AssistantReadyFaqSearchTest {
     @BeforeEach
     void setup() {
         when(mongo.getCollection("assistant_ready_faq")).thenReturn(collection);
-        when(provider.embed(eq("gemini-embedding-2"), anyString(), any())).thenReturn(
-                EmbedContentResponse.builder().embeddings(List.of(ContentEmbedding.builder()
-                        .values(Collections.nCopies(768, 1f)).build())).build());
+        when(provider.embed(eq("gemini-embedding-2"), nullable(String.class), anyString(), anyBoolean(), eq(768)))
+                .thenReturn(Collections.nCopies(768, 1f));
         when(collection.find(any(Bson.class))).thenReturn(documents);
     }
 
@@ -96,7 +93,7 @@ class AssistantReadyFaqSearchTest {
     static Stream<RuntimeException> failures() {
         return Stream.of(new IllegalStateException("API error"),
                 new IllegalStateException(new SocketTimeoutException("Timeout")),
-                new GeminiAssistantProvider.InvalidFaqResponse());
+                new AssistantProvider.InvalidFaqResponse());
     }
 
     @Test
@@ -109,7 +106,7 @@ class AssistantReadyFaqSearchTest {
                 "{\"decision\":\"NO_MATCH\"} trailing prose", "{\"decision\":\"NO_MATCH\"} {}",
                 "{\"decision\":\"MATCH\",\"decision\":\"NO_MATCH\"}")) {
             assertThatThrownBy(() -> GeminiAssistantProvider.parseFaqReply(invalid), "invalid reply %s", invalid)
-                    .isInstanceOf(GeminiAssistantProvider.InvalidFaqResponse.class);
+                    .isInstanceOf(AssistantProvider.InvalidFaqResponse.class);
         }
     }
 

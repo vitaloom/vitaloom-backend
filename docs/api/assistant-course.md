@@ -17,9 +17,11 @@ Các đường dẫn dưới đây tương đối với `/api/assistant/mvp/conv
 
 `POST /` và `GET /{id}` trả `{id, updatedAt, personalAllowed, turns}`. `personalAllowed` phản ánh quyền tài khoản ở thời điểm đọc. Mỗi lượt có `{turnId, text, outcome, parts}`. Mỗi phần có `{status, text, source}`, với nguồn dạng `{id, version, title, route, from, to}`. Ngày ISO theo phạm vi của dữ liệu. Nguồn app-help không có ngày. Văn bản phản hồi là tiếng Việt.
 
+Lượt hỏi tiếp có thể kế thừa chủ đề, phạm vi ngày và mục đích phân tích từ lượt cá nhân gần nhất đã xác định được ngữ cảnh trong 30 phút. Backend đọc lại dữ liệu theo phạm vi đã xác định và kiểm tra lại quyền đọc của tài khoản ở mỗi lượt. Các hội thoại cũ chỉ có intent vẫn dùng được. Với câu hỏi về tuần này, Assistant lấy các ngày từ thứ Hai đến hôm nay trong Recent Sleep Report đã xác minh. Assistant nêu độ đầy đủ và thay đổi đã quan sát, không áp dụng ngưỡng bất thường.
+
 401 cho JWT thiếu hoặc không hợp lệ, 403 cho tài khoản ngoài allowlist hoặc khi chưa chấp nhận lưu, 404 cho hội thoại ngoại lai/hết hạn, 409 cho UUID bị tái dùng với nội dung khác, đạt 50 lượt hoặc ghi đồng thời, 503 cho lỗi lưu trữ Assistant. Một lỗi đọc dữ liệu cá nhân trong hội thoại có trạng thái `DEPENDENCY_UNAVAILABLE` và phần hướng dẫn có sẵn vẫn được trả về. Các trạng thái còn lại gồm `ANSWERED`, `PARTIAL`, `PERMISSION_REQUIRED`, `NO_DATA`, `UNVERIFIED_DATA`, `INSUFFICIENT_EVIDENCE` và `SAFETY`.
 
-MongoDB áp dụng TTL 7 ngày từ lúc tạo. API chặn ngay khi hết hạn, còn MongoDB xóa bản ghi theo lịch TTL của nó. Ghi theo revision để lượt đang xử lý không ghi đè thao tác xóa hoặc thay đổi quyền đã ghi thành công. Ngữ cảnh hỏi tiếp chỉ dùng loại dữ liệu của lượt ngay trước trong vòng 30 phút, rồi truy vấn lại. Lịch sử và dữ liệu cá nhân lưu và xử lý trên Backend local.
+MongoDB áp dụng TTL 7 ngày từ lúc tạo. API chặn ngay khi hết hạn, còn MongoDB xóa bản ghi theo lịch TTL của nó. Ghi theo revision để lượt đang xử lý không ghi đè thao tác xóa hoặc thay đổi quyền đã ghi thành công. Lịch sử và dữ liệu đã đọc từ Sleep/Water được xử lý tại Backend.
 
 ## Phạm vi dữ liệu
 

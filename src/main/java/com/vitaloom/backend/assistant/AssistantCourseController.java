@@ -134,9 +134,10 @@ class AssistantCourseController {
         }
         if (row.turns().size() >= MAX_TURNS) throw new ResponseStatusException(HttpStatus.CONFLICT);
         var now = clock.instant();
-        var previous = row.turns().isEmpty() ? null : row.turns().getLast();
-        var context = previous != null && previous.at().plus(Duration.ofMinutes(30)).isAfter(now)
-                ? previous.reply().context() : null;
+        var latestContext = row.turns().stream().filter(turn -> turn.reply().context() != null
+                        && turn.at().plus(Duration.ofMinutes(30)).isAfter(now))
+                .map(turn -> turn.reply().context()).reduce((first, second) -> second).orElse(null);
+        var context = latestContext == null || latestContext.intent() == null ? null : latestContext;
         boolean personalQuestion = AssistantCourseAnswers.isPersonalDataQuestion(text);
         var search = Boolean.TRUE.equals(request.geminiAccepted()) ? readyFaqSearch.getIfAvailable() : null;
         AssistantCourseAnswers.Answer answer;
@@ -147,6 +148,10 @@ class AssistantCourseController {
             } else {
                 answer = answers.readyFaqLocalRoute(owner, text, personalAllowed, context,
                         () -> accountSettings.isCurrent(owner, preference));
+                if (answer != null && personalAllowed && answers.needsSleepGuidance(text, answer)) {
+                    if (!accountSettings.isCurrent(owner, preference)) throw new AccountSettingChangedException();
+                    answer = addSleepGuidance(search, request.turnId(), answer);
+                }
                 if (answer == null && personalQuestion) {
                     answer = personalAnswer(owner, id, row, text, context, search, preference);
                 } else if (answer == null) {
@@ -172,6 +177,17 @@ class AssistantCourseController {
         return view(mongo.save(row.change(now, personalAllowed, List.copyOf(history))), preference);
     }
 
+    private AssistantCourseAnswers.Answer addSleepGuidance(AssistantFixtureSearch search, UUID turnId,
+            AssistantCourseAnswers.Answer personal) {
+        try {
+            return answers.combineSleepGuidance(personal, search.answerReadySleepGuidance(turnId));
+        } catch (RuntimeException unavailable) {
+            return answers.combineSleepGuidance(personal, new AssistantCourseAnswers.Answer(
+                    "DEPENDENCY_UNAVAILABLE", List.of(new AssistantCourseAnswers.Part("DEPENDENCY_UNAVAILABLE",
+                            "Chưa thể tải hướng dẫn sức khỏe giấc ngủ đã duyệt.", null)), null));
+        }
+    }
+
     private AssistantCourseAnswers.Answer personalAnswer(String owner, UUID id, AssistantConversation row,
             String text, AssistantCourseAnswers.Context context, AssistantFixtureSearch search,
             AssistantAccountSettings.Preference preference) {
@@ -183,6 +199,8 @@ class AssistantCourseController {
                 var answer = search.answerPersonalData(answers.personalToolQuestion(text),
                         answers.personalTools(owner, text, current), current);
                 if (answer != null) return answer;
+            } catch (AssistantPersonalDataTools.PersonalDataAccessDeniedException changed) {
+                throw changed;
             } catch (RuntimeException unavailable) {
                 // The local route can still answer from the owning services.
             }

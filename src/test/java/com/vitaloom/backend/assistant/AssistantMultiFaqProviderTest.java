@@ -19,14 +19,14 @@ class AssistantMultiFaqProviderTest {
     void parsesOneToThreeDistinctGroundedParts() {
         assertThat(GeminiAssistantProvider.parseFaqContextReply(
                 "{\"decision\":\"MATCH\",\"parts\":[{\"faqId\":\"faq-1\",\"answer\":\"First\"}] }"))
-                .containsExactly(new GeminiAssistantProvider.FaqPart("faq-1", "First"));
+                .containsExactly(new AssistantProvider.FaqPart("faq-1", "First"));
         assertThat(GeminiAssistantProvider.parseFaqContextReply(
                 "{\"decision\":\"MATCH\",\"parts\":[{\"faqId\":\"faq-1\",\"answer\":\"First\"},"
                         + "{\"faqId\":\"faq-2\",\"answer\":\"Second\"},"
                         + "{\"faqId\":\"faq-3\",\"answer\":\"Third\"}]}"))
-                .containsExactly(new GeminiAssistantProvider.FaqPart("faq-1", "First"),
-                        new GeminiAssistantProvider.FaqPart("faq-2", "Second"),
-                        new GeminiAssistantProvider.FaqPart("faq-3", "Third"));
+                .containsExactly(new AssistantProvider.FaqPart("faq-1", "First"),
+                        new AssistantProvider.FaqPart("faq-2", "Second"),
+                        new AssistantProvider.FaqPart("faq-3", "Third"));
     }
 
     @Test
@@ -50,7 +50,7 @@ class AssistantMultiFaqProviderTest {
                 "{\"decision\":\"MATCH\",\"parts\":[{\"faqId\":\"x\",\"answer\":\"ok\"}],\"extra\":true}",
                 "{\"decision\":\"MATCH\",\"parts\":[{\"faqId\":\"x\",\"answer\":\"ok\"}]} trailing")) {
             assertThatThrownBy(() -> GeminiAssistantProvider.parseFaqContextReply(invalid))
-                    .isInstanceOf(GeminiAssistantProvider.InvalidFaqResponse.class);
+                    .isInstanceOf(AssistantProvider.InvalidFaqResponse.class);
         }
     }
 }

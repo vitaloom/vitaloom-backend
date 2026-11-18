@@ -1,8 +1,5 @@
 package com.vitaloom.backend.assistant;
 
-import com.google.genai.types.ContentEmbedding;
-import com.google.genai.types.EmbedContentConfig;
-import com.google.genai.types.EmbedContentResponse;
 import com.mongodb.client.MongoClients;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -25,13 +22,12 @@ class AssistantFixtureSearchIntegrationTest {
         try (var client = MongoClients.create(System.getenv("ASSISTANT_ATLAS_TEST_URI"))) {
             String database = "assistant_atlas_test_" + UUID.randomUUID().toString().replace("-", "");
             var mongo = new MongoTemplate(client, database);
-            var provider = mock(GeminiAssistantProvider.class);
+            var provider = mock(AssistantProvider.class);
             var vector = new ArrayList<>(Collections.nCopies(768, 0.0f));
             vector.set(0, 1.0f);
-            when(provider.embed(eq("gemini-embedding-2"), anyString(), any(EmbedContentConfig.class)))
-                    .thenReturn(EmbedContentResponse.builder()
-                            .embeddings(List.of(ContentEmbedding.builder().values(vector).build())).build());
-            when(provider.confirmsFixture(AssistantFixture.ANSWER)).thenReturn(true);
+            when(provider.embed(eq("gemini-embedding-2"), nullable(String.class), anyString(), anyBoolean(), eq(768)))
+                    .thenReturn(vector);
+            when(provider.confirmsFixture(AssistantFixture.QUESTION, AssistantFixture.ANSWER)).thenReturn(true);
             var search = new AssistantFixtureSearch(mongo, provider);
             try {
                 search.ingest();
@@ -63,9 +59,8 @@ class AssistantFixtureSearchIntegrationTest {
                 collection.updateOne(key, new Document("$set", new Document("status", "RETIRED")));
                 search.ingest();
                 assertThat(search.answer(() -> true)).isFalse();
-                verify(provider, times(3)).embed(eq("gemini-embedding-2"), startsWith("title:"),
-                        any(EmbedContentConfig.class));
-                verify(provider, times(1)).confirmsFixture(AssistantFixture.ANSWER);
+                verify(provider, times(3)).embed(eq("gemini-embedding-2"), anyString(), anyString(), eq(true), eq(768));
+                verify(provider, times(1)).confirmsFixture(AssistantFixture.QUESTION, AssistantFixture.ANSWER);
             } finally {
                 mongo.getDb().drop();
             }

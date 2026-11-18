@@ -1,7 +1,5 @@
 package com.vitaloom.backend.assistant;
 
-import com.google.genai.types.ContentEmbedding;
-import com.google.genai.types.EmbedContentResponse;
 import com.mongodb.client.AggregateIterable;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
@@ -21,7 +19,7 @@ import static org.mockito.Mockito.*;
 
 class AssistantMultiFaqSearchTest {
     private static final String QUESTION = "Synthetic FAQ query";
-    private final GeminiAssistantProvider provider = mock(GeminiAssistantProvider.class);
+    private final AssistantProvider provider = mock(AssistantProvider.class);
     private final MongoTemplate mongo = mock(MongoTemplate.class);
     @SuppressWarnings("unchecked")
     private final MongoCollection<Document> collection = mock(MongoCollection.class);
@@ -32,9 +30,8 @@ class AssistantMultiFaqSearchTest {
     @BeforeEach
     void setup() {
         when(mongo.getCollection("assistant_ready_faq")).thenReturn(collection);
-        when(provider.embed(eq("gemini-embedding-2"), anyString(), any())).thenReturn(
-                EmbedContentResponse.builder().embeddings(List.of(ContentEmbedding.builder()
-                        .values(Collections.nCopies(768, 1f)).build())).build());
+        when(provider.embed(eq("gemini-embedding-2"), nullable(String.class), anyString(), anyBoolean(), eq(768)))
+                .thenReturn(Collections.nCopies(768, 1f));
         when(collection.find(any(Bson.class))).thenReturn(documents);
     }
 
@@ -43,8 +40,8 @@ class AssistantMultiFaqSearchTest {
         candidates(5, row("source-b", .92), row("rejected", .91), row("source-a", .89));
         when(documents.first()).thenReturn(faq("source-b"), null, faq("source-a"), faq("source-b"), faq("source-a"));
         when(provider.answerFaqContext(eq(QUESTION), anyList())).thenReturn(List.of(
-                new GeminiAssistantProvider.FaqPart("source-a", "Answer A"),
-                new GeminiAssistantProvider.FaqPart("source-b", "Answer B")));
+                new AssistantProvider.FaqPart("source-a", "Answer A"),
+                new AssistantProvider.FaqPart("source-b", "Answer B")));
 
         var result = search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 5);
 
@@ -54,7 +51,7 @@ class AssistantMultiFaqSearchTest {
         assertThat(result.parts()).extracting(part -> part.source().id()).containsExactly("source-a", "source-b");
         var evidence = org.mockito.ArgumentCaptor.forClass(List.class);
         verify(provider, times(1)).answerFaqContext(eq(QUESTION), evidence.capture());
-        assertThat(evidence.getValue()).extracting(item -> ((GeminiAssistantProvider.FaqEvidence) item).id())
+        assertThat(evidence.getValue()).extracting(item -> ((AssistantProvider.FaqEvidence) item).id())
                 .containsExactly("source-b", "source-a");
     }
 
@@ -66,14 +63,14 @@ class AssistantMultiFaqSearchTest {
                 faq("duplicate", "Cafe\u0301   ANSWER"), faq("fourth", "fourth"),
                 faq("one", "Café answer"), faq("two", "second"));
         when(provider.answerFaqContext(eq(QUESTION), anyList())).thenReturn(List.of(
-                new GeminiAssistantProvider.FaqPart("one", "one"),
-                new GeminiAssistantProvider.FaqPart("two", "two")));
+                new AssistantProvider.FaqPart("one", "one"),
+                new AssistantProvider.FaqPart("two", "two")));
 
         search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 10);
 
         var evidence = org.mockito.ArgumentCaptor.forClass(List.class);
         verify(provider).answerFaqContext(eq(QUESTION), evidence.capture());
-        assertThat(evidence.getValue()).extracting(item -> ((GeminiAssistantProvider.FaqEvidence) item).id())
+        assertThat(evidence.getValue()).extracting(item -> ((AssistantProvider.FaqEvidence) item).id())
                 .containsExactly("one", "two", "fourth");
     }
 
@@ -90,9 +87,9 @@ class AssistantMultiFaqSearchTest {
         candidates(5, row("selected", .90));
         when(documents.first()).thenReturn(faq("selected"));
         when(provider.answerFaqContext(eq(QUESTION), anyList())).thenReturn(
-                List.of(new GeminiAssistantProvider.FaqPart("invented", "answer")));
+                List.of(new AssistantProvider.FaqPart("invented", "answer")));
         assertThatThrownBy(() -> search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 5))
-                .isInstanceOf(GeminiAssistantProvider.InvalidFaqResponse.class);
+                .isInstanceOf(AssistantProvider.InvalidFaqResponse.class);
     }
 
     @Test
@@ -100,8 +97,8 @@ class AssistantMultiFaqSearchTest {
         candidates(5, row("one", .92), row("two", .90));
         when(documents.first()).thenReturn(faq("one"), faq("two"), faq("one"), null);
         when(provider.answerFaqContext(eq(QUESTION), anyList())).thenReturn(List.of(
-                new GeminiAssistantProvider.FaqPart("one", "one answer"),
-                new GeminiAssistantProvider.FaqPart("two", "two answer")));
+                new AssistantProvider.FaqPart("one", "one answer"),
+                new AssistantProvider.FaqPart("two", "two answer")));
         var result = search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 5);
         assertThat(result.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
         assertThat(result.parts()).hasSize(1);
@@ -123,6 +120,40 @@ class AssistantMultiFaqSearchTest {
         assertThatThrownBy(() -> search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 4))
                 .isInstanceOf(IllegalArgumentException.class);
         verifyNoInteractions(provider);
+    }
+
+    @Test
+    void mixedSleepGuidanceOffersOnlyReviewedPublicEvidenceAndReturnsApprovedText() {
+        String publicQuestion = "Người trưởng thành nên ngủ bao nhiêu tiếng?";
+        String sleepId = "READY-MANUAL-001";
+        candidates(10, row("water-faq", .97), row(sleepId, .95));
+        var approved = faq(sleepId, "Nội dung đã duyệt");
+        when(documents.first()).thenReturn(approved);
+        when(provider.answerFaqContext(eq(publicQuestion), anyList())).thenReturn(List.of(
+                new AssistantProvider.FaqPart(sleepId, "A model paraphrase")));
+
+        var result = search.answerReadySleepGuidance(UUID.randomUUID());
+
+        assertThat(result.parts()).extracting(AssistantCourseAnswers.Part::text).containsExactly("Nội dung đã duyệt");
+        verify(provider).answerFaqContext(publicQuestion, List.of(new AssistantProvider.FaqEvidence(
+                sleepId, sleepId + " question", "Nội dung đã duyệt")));
+        verify(collection, times(2)).find(argThat((Bson filter) -> filter instanceof Document doc
+                && "SLEEP".equals(doc.getString("domain"))));
+    }
+
+    @Test
+    void noMatchForSleepGuidanceDoesNotSubstituteWaterEvidence() {
+        String publicQuestion = "Người trưởng thành nên ngủ bao nhiêu tiếng?";
+        candidates(10, row("water-faq", .97), row("READY-MANUAL-001", .95));
+        when(documents.first()).thenReturn(faq("READY-MANUAL-001"));
+        when(provider.answerFaqContext(eq(publicQuestion), anyList())).thenReturn(List.of());
+
+        var result = search.answerReadySleepGuidance(UUID.randomUUID());
+
+        assertThat(result.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(result.parts()).hasSize(1);
+        assertThat(result.parts().getFirst().source()).isNull();
+        verify(provider).answerFaqContext(eq(publicQuestion), anyList());
     }
 
     @SuppressWarnings("unchecked")

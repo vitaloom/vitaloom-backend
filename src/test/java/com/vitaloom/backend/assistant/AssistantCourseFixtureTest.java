@@ -220,6 +220,115 @@ class AssistantCourseFixtureTest {
         verifyNoInteractions(search);
     }
 
+    @Test
+    void followsSleepTopicAndAnalysisThroughTimeChangeAndCorrectionWithoutCrossRouting() {
+        var journal = mock(SleepJournalService.class);
+        when(journal.list("synthetic-b", "2026-11-17", "2026-11-17")).thenReturn(List.of(
+                new com.vitaloom.backend.sleep.dto.response.SessionResponse("sample", NOW, "MAIN",
+                        "DURATION", null, "2026-11-17", 360, null, null, null, null, null, false)));
+        var sleep = mock(SleepRecentStatisticsService.class);
+        when(sleep.recent("synthetic-b")).thenReturn(new SleepRecentStatisticsService.Report(
+                new SleepRecentStatisticsService.Period(java.time.LocalDate.parse("2026-11-11"),
+                        java.time.LocalDate.parse("2026-11-17"), "Asia/Ho_Chi_Minh"),
+                "VERIFIED", List.of(
+                        new SleepRecentStatisticsService.Day(java.time.LocalDate.parse("2026-11-11"), "RECORDED", 360),
+                        new SleepRecentStatisticsService.Day(java.time.LocalDate.parse("2026-11-12"), "NOT_RECORDED", null),
+                        new SleepRecentStatisticsService.Day(java.time.LocalDate.parse("2026-11-13"), "RECORDED", 390),
+                        new SleepRecentStatisticsService.Day(java.time.LocalDate.parse("2026-11-14"), "RECORDED", 400),
+                        new SleepRecentStatisticsService.Day(java.time.LocalDate.parse("2026-11-15"), "RECORDED", 410),
+                        new SleepRecentStatisticsService.Day(java.time.LocalDate.parse("2026-11-16"), "RECORDED", 430),
+                        new SleepRecentStatisticsService.Day(java.time.LocalDate.parse("2026-11-17"), "RECORDED", 440)),
+                6, 7, 405, List.of(), List.of()));
+        var water = mock(WaterService.class);
+        var answers = new AssistantCourseAnswers(journal, sleep,
+                water, Clock.fixed(NOW, ZoneOffset.UTC));
+        var readyController = new AssistantCourseController(mongo, answers, Clock.fixed(NOW, ZoneOffset.UTC),
+                new org.springframework.beans.factory.support.StaticListableBeanFactory(
+                        java.util.Map.of("assistantReadyFaqSearch", search)).getBeanProvider(AssistantFixtureSearch.class));
+        var auth = new TestingAuthenticationToken("synthetic-b", "");
+        var history = new java.util.ArrayList<AssistantConversation.Turn>();
+        when(mongo.findById("synthetic-b", AssistantAccountSettings.Preference.class)).thenReturn(
+                new AssistantAccountSettings.Preference("synthetic-b", true, 1));
+        when(mongo.exists(any(Query.class), eq(AssistantAccountSettings.Preference.class))).thenReturn(true);
+        var prompts = List.of("Hôm nay tôi chỉ ngủ 6 tiếng, có tốt cho sức khoẻ không?",
+                "Thời lượng ngủ hôm nay của tôi nói lên điều gì?",
+                "Có bất thường gì trong thời lượng ngủ của tôi không?",
+                "Trong tuần này",
+                "Trong tuần này có bất thường không?",
+                "Tôi đang nói về ngủ, không phải uống nước",
+                "Giấc ngủ lẫn lượng nước tuần này có bất thường không?",
+                "Trong tuần này");
+        when(search.answerReadySleepGuidance(any(UUID.class))).thenReturn(
+                new AssistantCourseAnswers.Answer("ANSWERED", List.of(new AssistantCourseAnswers.Part(
+                        "ANSWERED", "Theo CDC, người lớn 18–60 tuổi thường được khuyến nghị ngủ ít nhất 7 giờ.",
+                        new AssistantCourseAnswers.Source(
+                                "READY-MANUAL-001", 1, "Ngủ bao lâu", "", null, null))), null));
+        when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> {
+            var persisted = call.<AssistantConversation>getArgument(0);
+            history.add(persisted.turns().getLast());
+            return persisted;
+        });
+        for (var prompt : prompts) {
+            var row = new AssistantConversation(conversation.toString(), "synthetic-b", 0L, NOW,
+                    NOW.plusSeconds(600), true, List.copyOf(history));
+            when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(row);
+            readyController.turn(auth, conversation,
+                    new AssistantCourseController.Send(UUID.randomUUID(), prompt, true));
+        }
+        assertThat(history.getFirst().reply().context().intent()).isEqualTo(AssistantCourseAnswers.Intent.SLEEP_DAY);
+        assertThat(history.getFirst().reply().parts()).extracting(part -> part.source().id())
+                .containsExactly("sleep-day", "READY-MANUAL-001");
+        assertThat(history.get(1).reply().parts().getFirst().text()).contains("360", "chất lượng");
+        assertThat(history.get(2).reply().parts().getFirst().text()).contains("360", "bất thường");
+        assertThat(history.get(3).reply().context().intent()).isEqualTo(AssistantCourseAnswers.Intent.SLEEP_RECENT);
+        assertThat(history.get(3).reply().context().window()).isEqualTo(AssistantCourseAnswers.Window.WEEK_TO_DATE);
+        assertThat(history.get(4).reply().parts().getFirst().source().id()).isEqualTo("sleep-week-to-date");
+        assertThat(history.get(4).reply().parts().getFirst().text()).contains("2026-11-16", "2026-11-17")
+                .doesNotContain("2026-11-11");
+        assertThat(history.get(5).reply().context().intent()).isEqualTo(AssistantCourseAnswers.Intent.SLEEP_RECENT);
+        assertThat(history.get(5).reply().context().window()).isEqualTo(AssistantCourseAnswers.Window.WEEK_TO_DATE);
+        assertThat(history.get(5).reply().context().analysis()).isEqualTo(AssistantCourseAnswers.Analysis.ANOMALY);
+        assertThat(history.get(5).reply().parts().getFirst().source().id()).isEqualTo("sleep-week-to-date");
+        assertThat(history.get(6).reply().outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(history.get(7).reply().parts().getFirst().source()).isNull();
+        verify(sleep, times(3)).recent("synthetic-b");
+        verify(search).answerReadySleepGuidance(any(UUID.class));
+        verifyNoMoreInteractions(search);
+        verifyNoInteractions(water);
+    }
+
+    @Test
+    void retainsContextWhenTheAuthorizedPersonalReadIsUnavailable() {
+        var journal = mock(SleepJournalService.class);
+        when(journal.list("synthetic-b", "2026-11-17", "2026-11-17"))
+                .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("synthetic read failure"));
+        var answers = new AssistantCourseAnswers(journal, mock(SleepRecentStatisticsService.class),
+                mock(WaterService.class), Clock.fixed(NOW, ZoneOffset.UTC));
+        var unavailable = answers.readyFaqLocalRoute("synthetic-b",
+                "Thời lượng ngủ hôm nay của tôi nói lên điều gì?", true, null);
+        assertThat(unavailable.outcome()).isEqualTo("DEPENDENCY_UNAVAILABLE");
+        assertThat(unavailable.context().analysis()).isEqualTo(AssistantCourseAnswers.Analysis.MEANING);
+        assertThat(unavailable.parts().getFirst().source()).isNull();
+        assertThat(answers.readyFaqLocalRoute("synthetic-b", "Nên uống bao nhiêu nước mỗi ngày?", true,
+                unavailable.context())).isNull();
+        assertThat(answers.readyFaqLocalRoute("synthetic-b", "Tôi nên ngủ bao nhiêu tiếng?", true,
+                unavailable.context())).isNull();
+        assertThat(answers.readyFaqLocalRoute("synthetic-b", "Should I sleep 8 hours?", true,
+                unavailable.context())).isNull();
+    }
+
+    @Test
+    void generalSleepDurationGuidanceDoesNotRequestAccountData() {
+        var journal = mock(SleepJournalService.class);
+        var sleep = mock(SleepRecentStatisticsService.class);
+        var water = mock(WaterService.class);
+        var answers = new AssistantCourseAnswers(journal, sleep, water, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThat(answers.readyFaqLocalRoute("synthetic-b", "Should I sleep 8 hours?", false, null)).isNull();
+        assertThat(answers.readyFaqLocalRoute("synthetic-b", "Tôi nên ngủ bao nhiêu tiếng?", false, null)).isNull();
+        verifyNoInteractions(journal, sleep, water);
+    }
+
     private void assertLocal(String owner, String text, Boolean accepted) {
         when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(
                 new AssistantConversation(conversation.toString(), owner, 0L, NOW,

@@ -3,25 +3,23 @@ package com.vitaloom.backend.assistant;
 import com.google.genai.Client;
 import com.google.genai.errors.ApiException;
 import com.google.genai.types.EmbedContentConfig;
-import com.google.genai.types.EmbedContentResponse;
 import com.google.genai.types.HttpOptions;
 import com.google.genai.types.HttpRetryOptions;
-import com.google.genai.types.Content;
-import com.google.genai.types.FunctionCallingConfig;
-import com.google.genai.types.FunctionDeclaration;
-import com.google.genai.types.FunctionResponse;
-import com.google.genai.types.GenerateContentConfig;
-import com.google.genai.types.Part;
-import com.google.genai.types.Tool;
-import com.google.genai.types.ToolConfig;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage.ToolCall;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.google.genai.GoogleGenAiChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.google.genai.GoogleGenAiChatOptions.ToolChoice;
+import org.springframework.ai.support.ToolCallbacks;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.core.retry.RetryPolicy;
 import org.springframework.core.retry.RetryTemplate;
 import tools.jackson.core.JacksonException;
@@ -42,14 +40,18 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
     private final String chatModel;
 
     GeminiAssistantProvider(String key, String chatModel) {
-        this.chatModel = chatModel;
-        client = Client.builder().vertexAI(false).apiKey(key)
+        this(Client.builder().vertexAI(false).apiKey(key)
                 .httpOptions(HttpOptions.builder()
                         .baseUrl("https://generativelanguage.googleapis.com")
                         .timeout(10_000)
                         .retryOptions(HttpRetryOptions.builder().attempts(1))
                         .build())
-                .build();
+                .build(), chatModel);
+    }
+
+    GeminiAssistantProvider(Client client, String chatModel) {
+        this.client = client;
+        this.chatModel = chatModel;
         model = GoogleGenAiChatModel.builder()
                 .genAiClient(client)
                 .options(GoogleGenAiChatOptions.builder()
@@ -63,25 +65,24 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
 
     @Override
     public boolean confirmsFixture() {
-        return confirmsFixture(AssistantFixture.ANSWER);
+        return confirmsFixture(AssistantFixture.QUESTION, AssistantFixture.ANSWER);
     }
 
-    boolean confirmsFixture(String evidence) {
-        return confirmsFixture(AssistantFixture.QUESTION, evidence);
-    }
-
-    boolean confirmsFixture(String question, String evidence) {
+    @Override
+    public boolean confirmsFixture(String question, String evidence) {
         var response = call(() -> model.call(new Prompt(AssistantFixture.prompt(question, evidence))));
         var result = response.getResult();
         return result != null && result.getOutput() != null
                 && AssistantFixture.matchesAnswer(evidence, result.getOutput().getText());
     }
 
-    org.springframework.ai.chat.messages.AssistantMessage.ToolCall selectVoiceTool(String transcript) {
+    @Override
+    public ToolCall selectVoiceTool(String transcript) {
         return call(() -> AssistantVoiceTools.select(model, chatModel, transcript));
     }
 
-    void selectPersonalTool(String question, AssistantPersonalDataTools tools, BooleanSupplier current) {
+    @Override
+    public void selectPersonalTool(String question, AssistantPersonalDataTools tools, BooleanSupplier current) {
         var callbacks = java.util.Arrays.stream(org.springframework.ai.support.ToolCallbacks.from(tools))
                 .filter(callback -> callback.getToolDefinition().name().equals("getRecentMainSleepTiming")
                         == (tools.timingToolName() != null))
@@ -109,7 +110,8 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
         }
     }
 
-    String answerFaq(String question, String faqQuestion, String faqAnswer) {
+    @Override
+    public String answerFaq(String question, String faqQuestion, String faqAnswer) {
         String evidence = new org.bson.Document("question", faqQuestion).append("answer", faqAnswer)
                 .append("userQuestion", question).toJson();
         var response = call(() -> model.call(new Prompt(List.of(
@@ -125,11 +127,8 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
         return parseFaqReply(text);
     }
 
-    record FaqEvidence(String id, String question, String answer) {}
-
-    record FaqPart(String faqId, String answer) {}
-
-    List<FaqPart> answerFaqContext(String question, List<FaqEvidence> evidence) {
+    @Override
+    public List<FaqPart> answerFaqContext(String question, List<FaqEvidence> evidence) {
         String data = new org.bson.Document("userQuestion", question)
                 .append("evidence", evidence.stream().map(item -> new org.bson.Document("id", item.id())
                         .append("question", item.question()).append("answer", item.answer())).toList())
@@ -206,55 +205,77 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
         throw new InvalidFaqResponse();
     }
 
-    static final class InvalidFaqResponse extends RuntimeException {
-        InvalidFaqResponse() {
-            super("Gemini returned no usable FAQ output");
+    @Override
+    public List<Float> embed(String modelName, String title, String text, boolean document, int dimensions) {
+        var config = EmbedContentConfig.builder().outputDimensionality(dimensions);
+        String input;
+        if ("gemini-embedding-001".equals(modelName)) {
+            config.taskType(document ? "RETRIEVAL_DOCUMENT" : "QUESTION_ANSWERING");
+            if (document) config.title(title);
+            input = text;
+        } else {
+            input = (document ? "title: " + title + " | text: " : "task: question answering | query: ") + text;
         }
+        var embeddings = call(() -> client.models.embedContent(modelName, input, config.build()))
+                .embeddings().orElseThrow();
+        if (embeddings.size() != 1) throw new IllegalStateException("Unexpected embedding count");
+        return embeddings.getFirst().values().orElseThrow();
     }
 
-    EmbedContentResponse embed(String modelName, String input, EmbedContentConfig config) {
-        return call(() -> client.models.embedContent(modelName, input, config));
-    }
-
-    boolean confirmsSyntheticSleep(String day, BooleanSupplier current, BooleanSupplier verifyRecord) {
-        String function = "getSleepRecords";
-        var date = Map.of("type", "string", "enum", List.of(day));
-        var schema = Map.of("type", "object", "properties", Map.of("from", date, "to", date),
-                "required", List.of("from", "to"), "additionalProperties", false);
-        var declaration = FunctionDeclaration.builder().name(function)
-                .description("Reads a synthetic test Sleep Journal MAIN record for the requested inclusive date range.")
-                .parametersJsonSchema(schema).build();
-        var tool = Tool.builder().functionDeclarations(List.of(declaration)).build();
-        var input = Content.builder().role("user").parts(Part.builder().text(
-                AssistantFixture.SLEEP_QUESTION + "\nNgày hôm nay là " + day
-                        + ". Dùng tool. Sau khi có kết quả, chỉ in durationMinutes dưới dạng số nguyên.").build()).build();
+    @Override
+    public boolean confirmsSyntheticSleep(String day, BooleanSupplier current, BooleanSupplier verifyRecord) {
+        var input = new UserMessage(AssistantFixture.SLEEP_QUESTION + "\nNgày hôm nay là " + day
+                + ". Dùng tool. Sau khi có kết quả, chỉ in durationMinutes dưới dạng số nguyên.");
+        var tool = new SyntheticSleepTool();
+        var callbacks = ToolCallbacks.from(tool);
         if (!current.getAsBoolean()) return false;
-        var first = call(() -> client.models.generateContent(chatModel, List.of(input),
-                toolOptions(tool, FunctionCallingConfig.builder().mode("ANY").allowedFunctionNames(function).build())));
-        var selection = first.candidates().orElse(List.of());
-        if (selection.size() != 1 || selection.getFirst().content().isEmpty()) return false;
-        var modelTurn = selection.getFirst().content().orElseThrow();
-        var calls = modelTurn.parts().orElse(List.of()).stream()
-                .flatMap(part -> part.functionCall().stream()).toList();
-        if (calls.size() != 1 || !calls.getFirst().name().filter(function::equals).isPresent()
-                || !calls.getFirst().args().filter(Map.of("from", day, "to", day)::equals).isPresent()
+        var firstOptions = GoogleGenAiChatOptions.builder().toolCallbacks(callbacks)
+                .toolChoice(new ToolChoice(ToolChoice.Mode.ANY, List.of(SyntheticSleepTool.NAME))).build();
+        var first = call(() -> model.call(new Prompt(List.of(input), firstOptions)));
+        if (first.getResults().size() != 1 || first.getResult().getOutput() == null) return false;
+        var modelTurn = first.getResult().getOutput();
+        var calls = modelTurn.getToolCalls();
+        if (calls.size() != 1) return false;
+        var selected = calls.getFirst();
+        if (!SyntheticSleepTool.NAME.equals(selected.name()) || !matchesToolDates(selected.arguments(), day)
                 || !current.getAsBoolean() || !verifyRecord.getAsBoolean() || !current.getAsBoolean()) return false;
 
-        var callback = FunctionResponse.builder().name(function)
-                .response(Map.of("date", day, "sleepType", "MAIN", "method", "DURATION",
-                        "durationMinutes", AssistantFixture.SLEEP_MINUTES));
-        calls.getFirst().id().ifPresent(callback::id);
-        var result = Content.builder().role("user")
-                .parts(Part.builder().functionResponse(callback.build()).build()).build();
-        var second = call(() -> client.models.generateContent(chatModel, List.of(input, modelTurn, result),
-                toolOptions(tool, FunctionCallingConfig.builder().mode("NONE").build())));
-        return AssistantFixture.matchesAnswer(Integer.toString(AssistantFixture.SLEEP_MINUTES), second.text())
+        var response = new ToolResponseMessage.ToolResponse(selected.id(), selected.name(),
+                new ObjectMapper().writeValueAsString(tool.getSleepRecords(day, day)));
+        var result = ToolResponseMessage.builder().responses(List.of(response)).build();
+        var secondOptions = GoogleGenAiChatOptions.builder().toolCallbacks(callbacks)
+                .toolChoice(new ToolChoice(ToolChoice.Mode.NONE, List.of())).build();
+        // Keep the original assistant message because Gemini 3 requires its thought signature on the next turn.
+        var second = call(() -> model.call(new Prompt(List.of(input, modelTurn, result), secondOptions)));
+        var output = second.getResult();
+        return output != null && output.getOutput() != null && output.getOutput().getToolCalls().isEmpty()
+                && AssistantFixture.matchesAnswer(Integer.toString(AssistantFixture.SLEEP_MINUTES),
+                        output.getOutput().getText())
                 && current.getAsBoolean() && verifyRecord.getAsBoolean() && current.getAsBoolean();
     }
 
-    private static GenerateContentConfig toolOptions(Tool tool, FunctionCallingConfig calling) {
-        return GenerateContentConfig.builder().tools(List.of(tool)).maxOutputTokens(128)
-                .toolConfig(ToolConfig.builder().functionCallingConfig(calling).build()).build();
+    private static boolean matchesToolDates(String arguments, String day) {
+        if (arguments == null || arguments.isBlank()) return false;
+        try {
+            JsonNode dates = FAQ_REPLY_READER.readTree(arguments);
+            return dates.isObject() && dates.size() == 2
+                    && day.equals(dates.path("from").stringValue())
+                    && day.equals(dates.path("to").stringValue());
+        } catch (JacksonException failure) {
+            return false;
+        }
+    }
+
+    private static final class SyntheticSleepTool {
+        static final String NAME = "getSleepRecords";
+
+        @Tool(name = NAME, description = "Reads a synthetic test Sleep Journal MAIN record for the requested inclusive date range.")
+        public Map<String, Object> getSleepRecords(
+                @ToolParam(description = "Start date (YYYY-MM-DD) supplied in the question.") String from,
+                @ToolParam(description = "End date (YYYY-MM-DD) supplied in the question.") String to) {
+            return Map.of("date", from, "sleepType", "MAIN", "method", "DURATION",
+                    "durationMinutes", AssistantFixture.SLEEP_MINUTES);
+        }
     }
 
     private static <T> T call(Supplier<T> request) {

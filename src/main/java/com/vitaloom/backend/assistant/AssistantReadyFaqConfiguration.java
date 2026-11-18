@@ -13,7 +13,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 class AssistantReadyFaqConfiguration {
     @Bean("assistantReadyFaqSearch")
     @Conditional(AssistantActivation.VectorMongo.class)
-    AssistantFixtureSearch assistantReadyFaqSearch(GeminiAssistantProvider provider,
+    AssistantFixtureSearch assistantReadyFaqSearch(AssistantProvider provider,
             @Value("${ASSISTANT_VECTOR_MONGO_URI}") String vectorUri,
             @Value("${ASSISTANT_GEMINI_EMBEDDING_MODEL:gemini-embedding-2}") String embeddingModel) {
         var connection = new ConnectionString(vectorUri.strip());

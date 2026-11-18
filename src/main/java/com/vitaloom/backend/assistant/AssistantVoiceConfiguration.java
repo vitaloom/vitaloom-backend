@@ -22,10 +22,10 @@ class AssistantVoiceConfiguration {
     }
 
     @Bean
-    AssistantVoiceTurns assistantVoiceTurns(MongoTemplate mongo, Clock clock, GeminiAssistantProvider gemini,
+    AssistantVoiceTurns assistantVoiceTurns(MongoTemplate mongo, Clock clock, AssistantProvider provider,
             WaterService water, SleepJournalService sleep, AssistantSpeechToText stt,
             AssistantAccountSettings accountSettings) {
-        return new AssistantVoiceTurns(mongo, clock, stt, gemini::selectVoiceTool,
+        return new AssistantVoiceTurns(mongo, clock, stt, provider::selectVoiceTool,
                 new AssistantVoiceActions(water, sleep), accountSettings);
     }
 }

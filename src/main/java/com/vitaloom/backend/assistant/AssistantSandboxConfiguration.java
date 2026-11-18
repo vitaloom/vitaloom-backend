@@ -32,7 +32,7 @@ class AssistantSandboxConfiguration {
     @Bean("assistantFixtureSearch")
     @Profile("!prod & !production")
     @ConditionalOnProperty(name = "ASSISTANT_RAG_SANDBOX_ENABLED", havingValue = "true")
-    AssistantFixtureSearch assistantFixtureSearch(MongoTemplate mongo, GeminiAssistantProvider provider,
+    AssistantFixtureSearch assistantFixtureSearch(MongoTemplate mongo, AssistantProvider provider,
             @Value("${ASSISTANT_VECTOR_MONGO_URI:}") String vectorUri,
             @Value("${ASSISTANT_GEMINI_EMBEDDING_MODEL:gemini-embedding-2}") String embeddingModel) {
         if (vectorUri.isBlank()) return new AssistantFixtureSearch(mongo, provider, null, embeddingModel.strip());

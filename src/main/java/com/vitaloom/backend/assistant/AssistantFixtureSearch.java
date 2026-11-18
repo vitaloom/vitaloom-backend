@@ -1,6 +1,5 @@
 package com.vitaloom.backend.assistant;
 
-import com.google.genai.types.EmbedContentConfig;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.AggregateIterable;
@@ -32,17 +31,17 @@ final class AssistantFixtureSearch implements AutoCloseable {
             "app-help-sleep-journal", 1, "Nhật ký giấc ngủ", "/sleep/journal", null, null);
 
     private final MongoTemplate mongo;
-    private final GeminiAssistantProvider provider;
+    private final AssistantProvider provider;
     private final MongoClient vectorClient;
     private final String model;
     private final boolean legacyModel;
     private final Document filter;
 
-    AssistantFixtureSearch(MongoTemplate mongo, GeminiAssistantProvider provider) {
+    AssistantFixtureSearch(MongoTemplate mongo, AssistantProvider provider) {
         this(mongo, provider, null, "gemini-embedding-2");
     }
 
-    AssistantFixtureSearch(MongoTemplate mongo, GeminiAssistantProvider provider, MongoClient vectorClient,
+    AssistantFixtureSearch(MongoTemplate mongo, AssistantProvider provider, MongoClient vectorClient,
             String model) {
         if (!List.of("gemini-embedding-2", "gemini-embedding-001").contains(model)) {
             throw new IllegalArgumentException("Unsupported Assistant embedding model");
@@ -114,9 +113,7 @@ final class AssistantFixtureSearch implements AutoCloseable {
         var active = mongo.getCollection(COLLECTION).find(new Document(filter).append("_id", key)
                 .append("answer", faq.answer())).first();
         return active != null && current.getAsBoolean()
-                && (faq == AssistantFixture.JOURNAL && question.equals(AssistantFixture.QUESTION)
-                        ? provider.confirmsFixture(active.getString("answer"))
-                        : provider.confirmsFixture(question, active.getString("answer"))) && current.getAsBoolean();
+                && provider.confirmsFixture(question, active.getString("answer")) && current.getAsBoolean();
     }
 
     AssistantCourseAnswers.Answer answerReadyFaq(String question, UUID requestId) {
@@ -195,6 +192,16 @@ final class AssistantFixtureSearch implements AutoCloseable {
     }
 
     AssistantCourseAnswers.Answer answerReadyFaqContext(String question, UUID requestId, int topK) {
+        return answerReadyFaqContext(question, requestId, topK, java.util.Set.of());
+    }
+
+    AssistantCourseAnswers.Answer answerReadySleepGuidance(UUID requestId) {
+        return answerReadyFaqContext("Người trưởng thành nên ngủ bao nhiêu tiếng?", requestId, 10,
+                java.util.Set.of("READY-MANUAL-001", "READY-MANUAL-002"));
+    }
+
+    private AssistantCourseAnswers.Answer answerReadyFaqContext(String question, UUID requestId, int topK,
+            java.util.Set<String> allowedIds) {
         if (topK != 5 && topK != 10) throw new IllegalArgumentException("Unsupported READY FAQ topK");
         long started = System.nanoTime();
         int calls = 0;
@@ -211,12 +218,17 @@ final class AssistantFixtureSearch implements AutoCloseable {
             String today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).toString();
             var selected = new java.util.LinkedHashMap<String, Document>();
             var canonicalAnswers = new java.util.HashSet<String>();
+            boolean sleepGuidance = !allowedIds.isEmpty();
             outcome = "empty_results";
             try (var cursor = candidates.iterator()) {
                 int rank = 0;
                 while (rank < topK && selected.size() < FAQ_CONTEXT_LIMIT && cursor.hasNext()) {
                     var candidate = cursor.next();
                     rank++;
+                    if (sleepGuidance && !allowedIds.contains(candidate.getString("_id"))) {
+                        logContextCandidate(requestId, candidate, rank, "not_checked", "domain_not_allowed", topK);
+                        continue;
+                    }
                     double score = candidate.getDouble("score");
                     if (score < FAQ_SCORE_THRESHOLD) {
                         logContextCandidate(requestId, candidate, rank, "not_checked", "below_threshold", topK);
@@ -225,6 +237,7 @@ final class AssistantFixtureSearch implements AutoCloseable {
                     }
                     stage = "metadata_check";
                     var eligibility = readyFaqFilter(candidate, today);
+                    if (sleepGuidance) constrainSleepGuidance(eligibility);
                     var faq = collection.find(eligibility).first();
                     if (faq == null || !nonblank(faq, "_id", "title", "question", "answer")) {
                         logContextCandidate(requestId, candidate, rank, "rejected", "metadata_rejected", topK);
@@ -249,24 +262,25 @@ final class AssistantFixtureSearch implements AutoCloseable {
             }
             stage = "generation";
             calls = 1;
-            var evidence = selected.values().stream().map(faq -> new GeminiAssistantProvider.FaqEvidence(
+            var evidence = selected.values().stream().map(faq -> new AssistantProvider.FaqEvidence(
                     faq.getString("_id"), faq.getString("question"), faq.getString("answer"))).toList();
             var reply = provider.answerFaqContext(question, evidence);
-            if (reply == null) throw new GeminiAssistantProvider.InvalidFaqResponse();
+            if (reply == null) throw new AssistantProvider.InvalidFaqResponse();
             if (reply.isEmpty()) {
                 outcome = "no_match";
                 return insufficientFaqAnswer();
             }
-            if (reply.size() > FAQ_CONTEXT_LIMIT) throw new GeminiAssistantProvider.InvalidFaqResponse();
+            if (reply.size() > FAQ_CONTEXT_LIMIT) throw new AssistantProvider.InvalidFaqResponse();
             var citedIds = new java.util.HashSet<String>();
             var answerParts = new java.util.ArrayList<AssistantCourseAnswers.Part>();
             for (var part : reply) {
                 if (part == null || part.faqId() == null || part.faqId().isBlank() || part.answer() == null
                         || part.answer().isBlank() || !citedIds.add(part.faqId()) || !selected.containsKey(part.faqId())) {
-                    throw new GeminiAssistantProvider.InvalidFaqResponse();
+                    throw new AssistantProvider.InvalidFaqResponse();
                 }
                 var faq = selected.get(part.faqId());
-                answerParts.add(new AssistantCourseAnswers.Part("ANSWERED", part.answer(),
+                answerParts.add(new AssistantCourseAnswers.Part("ANSWERED",
+                        sleepGuidance ? faq.getString("answer") : part.answer(),
                         new AssistantCourseAnswers.Source(faq.getString("_id"), faq.getInteger("version"),
                                 faq.getString("title"), "", null, null)));
             }
@@ -274,6 +288,7 @@ final class AssistantFixtureSearch implements AutoCloseable {
             for (String id : citedIds) {
                 var faq = selected.get(id);
                 var eligibility = readyFaqFilter(faq, today);
+                if (sleepGuidance) constrainSleepGuidance(eligibility);
                 if (collection.find(eligibility).first() == null) {
                     outcome = "metadata_revoked";
                     return insufficientFaqAnswer();
@@ -292,6 +307,10 @@ final class AssistantFixtureSearch implements AutoCloseable {
                     .addKeyValue("latency_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started))
                     .log("Assistant FAQ context retrieval");
         }
+    }
+
+    private static void constrainSleepGuidance(Document eligibility) {
+        eligibility.append("domain", "SLEEP").append("type", "HEALTH_EDUCATION").append("language", "vi");
     }
 
     private static AggregateIterable<Document> rankedReadyFaqs(
@@ -349,7 +368,7 @@ final class AssistantFixtureSearch implements AutoCloseable {
 
     private static String failureReason(RuntimeException failure) {
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-            if (cause instanceof GeminiAssistantProvider.InvalidFaqResponse) return "invalid_model_response";
+            if (cause instanceof AssistantProvider.InvalidFaqResponse) return "invalid_model_response";
             if (cause instanceof HttpTimeoutException || cause instanceof SocketTimeoutException
                     || cause instanceof TimeoutException || cause instanceof com.mongodb.MongoTimeoutException) {
                 return "timeout";
@@ -360,18 +379,7 @@ final class AssistantFixtureSearch implements AutoCloseable {
     }
 
     private List<Float> embed(String title, String text, boolean document) {
-        var config = EmbedContentConfig.builder().outputDimensionality(DIMENSIONS);
-        String input = text;
-        if (legacyModel) {
-            config.taskType(document ? "RETRIEVAL_DOCUMENT" : "QUESTION_ANSWERING");
-            if (document) config.title(title);
-        } else {
-            input = (document ? "title: " + title + " | text: " : "task: question answering | query: ") + text;
-        }
-        var response = provider.embed(model, input, config.build());
-        var embeddings = response.embeddings().orElseThrow();
-        if (embeddings.size() != 1) throw new IllegalStateException("Unexpected embedding count");
-        var vector = embeddings.getFirst().values().orElseThrow();
+        var vector = provider.embed(model, title, text, document, DIMENSIONS);
         if (vector.size() != DIMENSIONS || vector.stream().anyMatch(value -> !Float.isFinite(value))) {
             throw new IllegalStateException("Invalid FAQ embedding");
         }
