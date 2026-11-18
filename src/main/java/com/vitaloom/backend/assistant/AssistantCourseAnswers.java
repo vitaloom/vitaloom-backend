@@ -18,6 +18,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.dao.DataAccessException;
@@ -62,6 +63,11 @@ final class AssistantCourseAnswers {
     }
 
     Answer answer(String owner, String text, boolean personalAllowed, Context previous) {
+        return answer(owner, text, personalAllowed, previous, () -> true);
+    }
+
+    Answer answer(String owner, String text, boolean personalAllowed, Context previous,
+            BooleanSupplier authorized) {
         String query = normalize(text);
         if (has(query, "khong tho duoc", "dau nguc", "tu tu", "tu sat", "qua lieu",
                 "cap cuu", "chest pain", "can't breathe", "suicide", "overdose")) {
@@ -78,8 +84,9 @@ final class AssistantCourseAnswers {
                         "Hãy bật quyền đọc Sleep/Water cho hội thoại này.", null)), null);
             }
             if (insights == null) return sleepTimingUnavailable();
-            var tools = personalTools(owner, text, () -> true);
+            var tools = personalTools(owner, text, authorized);
             tools.getRecentMainSleepTiming();
+            if (!authorized.getAsBoolean()) throw new AssistantPersonalDataTools.PersonalDataAccessDeniedException();
             return tools.answer();
         }
 
@@ -119,9 +126,16 @@ final class AssistantCourseAnswers {
                 parts.add(new Part("PERMISSION_REQUIRED", "Hãy bật quyền đọc Sleep/Water cho hội thoại này.", null));
             } else {
                 try {
+                    if (!authorized.getAsBoolean()) {
+                        parts.add(new Part("PERMISSION_REQUIRED", "Hãy bật quyền đọc Sleep/Water trong Cài đặt.", null));
+                        return new Answer("PERMISSION_REQUIRED", List.copyOf(parts), null);
+                    }
                     LocalDate today = LocalDate.now(clock.withZone(ZONE));
                     LocalDate date = date(intentClause, today, intent);
                     parts.add(read(owner, intent, date, today));
+                    if (!authorized.getAsBoolean()) {
+                        throw new AssistantPersonalDataTools.PersonalDataAccessDeniedException();
+                    }
                     context = new Context(intent);
                 } catch (DateTimeException invalid) {
                     parts.add(new Part("INSUFFICIENT_EVIDENCE",
@@ -139,8 +153,13 @@ final class AssistantCourseAnswers {
     }
 
     Answer readyFaqLocalRoute(String owner, String text, boolean personalAllowed, Context previous) {
+        return readyFaqLocalRoute(owner, text, personalAllowed, previous, () -> true);
+    }
+
+    Answer readyFaqLocalRoute(String owner, String text, boolean personalAllowed, Context previous,
+            BooleanSupplier authorized) {
         String query = normalize(text);
-        var local = answer("", text, false, null);
+        var local = answer("", text, false, null, authorized);
         if ("SAFETY".equals(local.outcome())) return local;
         if (isPrescriptionQuery(query)) return prescriptionRefusal();
         if (isSleepTimingRequest(query)) {
@@ -151,7 +170,7 @@ final class AssistantCourseAnswers {
                     "Trợ lý không cung cấp giá cổ phiếu hoặc thông tin thị trường trực tiếp.", null)), null);
         }
         if (isPersonalRecentSleep(query) && !has(query, "trung binh", "average")) {
-            return answer(owner, text, personalAllowed, previous);
+            return answer(owner, text, personalAllowed, previous, authorized);
         }
         return null;
     }

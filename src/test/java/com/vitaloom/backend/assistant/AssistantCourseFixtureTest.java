@@ -42,7 +42,8 @@ class AssistantCourseFixtureTest {
                 NOW.plusSeconds(600), false, List.of());
         when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(declinedRow);
         when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> call.getArgument(0));
-        when(local.answer("synthetic-b", "Synthetic FAQ question", false, null))
+        when(local.answer(eq("synthetic-b"), eq("Synthetic FAQ question"), eq(false), eq(null),
+                any(java.util.function.BooleanSupplier.class)))
                 .thenReturn(new AssistantCourseAnswers.Answer("LOCAL", List.of(), null));
         var declined = controller.turn(new TestingAuthenticationToken("synthetic-b", ""), conversation,
                 new AssistantCourseController.Send(turn, "Synthetic FAQ question", false));
@@ -84,7 +85,8 @@ class AssistantCourseFixtureTest {
         when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(saved);
         assertThat(controller.turn(auth, conversation, request)).isEqualTo(reply);
         verify(search, times(1)).answerReadyFaqContext(AssistantFixture.QUESTION, turn, 10);
-        verify(local).readyFaqLocalRoute("synthetic-b", AssistantFixture.QUESTION, false, null);
+        verify(local).readyFaqLocalRoute(eq("synthetic-b"), eq(AssistantFixture.QUESTION), eq(false), eq(null),
+                any(java.util.function.BooleanSupplier.class));
         verifyNoMoreInteractions(local);
     }
 
@@ -94,7 +96,8 @@ class AssistantCourseFixtureTest {
                 NOW.plusSeconds(600), false, List.of());
         when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(row);
         when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> call.getArgument(0));
-        when(local.readyFaqLocalRoute("synthetic-b", "What is the stock price?", false, null)).thenReturn(
+        when(local.readyFaqLocalRoute(eq("synthetic-b"), eq("What is the stock price?"), eq(false), eq(null),
+                any(java.util.function.BooleanSupplier.class))).thenReturn(
                 new AssistantCourseAnswers.Answer("INSUFFICIENT_EVIDENCE", List.of(), null));
         var reply = controller.turn(new TestingAuthenticationToken("synthetic-b", ""), conversation,
                 new AssistantCourseController.Send(turn, "What is the stock price?", true));
@@ -132,6 +135,9 @@ class AssistantCourseFixtureTest {
         var readyController = new AssistantCourseController(mongo, answers, Clock.fixed(NOW, ZoneOffset.UTC),
                 new org.springframework.beans.factory.support.StaticListableBeanFactory(
                         java.util.Map.of("assistantReadyFaqSearch", search)).getBeanProvider(AssistantFixtureSearch.class));
+        when(mongo.findById("synthetic-b", AssistantAccountSettings.Preference.class))
+                .thenReturn(new AssistantAccountSettings.Preference("synthetic-b", true, 1));
+        when(mongo.exists(any(Query.class), eq(AssistantAccountSettings.Preference.class))).thenReturn(true);
         for (String question : List.of("lịch sử giấc ngủ gần đây của tôi",
                 "gần đây giấc ngủ của tôi diễn biến như thế nào")) {
             var id = UUID.randomUUID();
@@ -162,6 +168,10 @@ class AssistantCourseFixtureTest {
         var readyController = new AssistantCourseController(mongo, answers, Clock.fixed(NOW, ZoneOffset.UTC),
                 new org.springframework.beans.factory.support.StaticListableBeanFactory(
                         java.util.Map.of("assistantReadyFaqSearch", search)).getBeanProvider(AssistantFixtureSearch.class));
+        var disabled = new AssistantAccountSettings.Preference("synthetic-b", false, 0);
+        var enabled = new AssistantAccountSettings.Preference("synthetic-b", true, 1);
+        when(mongo.findById("synthetic-b", AssistantAccountSettings.Preference.class))
+                .thenReturn(disabled, disabled, enabled, enabled);
         var row = new AssistantConversation(conversation.toString(), "synthetic-b", 0L, NOW,
                 NOW.plusSeconds(600), false, List.of());
         when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(row);
@@ -194,6 +204,9 @@ class AssistantCourseFixtureTest {
         var readyController = new AssistantCourseController(mongo, answers, Clock.fixed(NOW, ZoneOffset.UTC),
                 new org.springframework.beans.factory.support.StaticListableBeanFactory(
                         java.util.Map.of("assistantReadyFaqSearch", search)).getBeanProvider(AssistantFixtureSearch.class));
+        when(mongo.findById("synthetic-b", AssistantAccountSettings.Preference.class))
+                .thenReturn(new AssistantAccountSettings.Preference("synthetic-b", true, 1));
+        when(mongo.exists(any(Query.class), eq(AssistantAccountSettings.Preference.class))).thenReturn(true);
         var row = new AssistantConversation(conversation.toString(), "synthetic-b", 0L, NOW,
                 NOW.plusSeconds(600), true, List.of());
         when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(row);
@@ -212,7 +225,7 @@ class AssistantCourseFixtureTest {
                 new AssistantConversation(conversation.toString(), owner, 0L, NOW,
                         NOW.plusSeconds(600), false, List.of()));
         when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> call.getArgument(0));
-        when(local.answer(owner, text, false, null))
+        when(local.answer(eq(owner), eq(text), eq(false), eq(null), any(java.util.function.BooleanSupplier.class)))
                 .thenReturn(new AssistantCourseAnswers.Answer("LOCAL", List.of(), null));
 
         var reply = controller.turn(new TestingAuthenticationToken(owner, ""), conversation,

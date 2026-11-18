@@ -4,16 +4,18 @@
 
 Các đường dẫn dưới đây tương đối với `/api/assistant/mvp/conversations`.
 
+`GET /api/assistant/mvp/settings` trả `{personalDataAllowed: boolean}`; `PUT /api/assistant/mvp/settings` nhận `{personalDataAllowed: boolean}`. Hai endpoint dùng Bearer subject hiện tại và một cài đặt theo tài khoản không có TTL. Tài khoản chưa có cài đặt được xem là `false`. Quyền này cho phép Assistant đọc dữ liệu cá nhân từ các dịch vụ Sleep và Water trên các hội thoại hiện tại và mới. Đổi quyền tăng generation và chặn xuất bản kết quả cá nhân đã được tính bằng quyền cũ. Quyền không cấp consent gửi câu hỏi tới Gemini, ghi dữ liệu từ voice hoặc thay đổi consent của từng hội thoại.
+
 | Method và đường dẫn | Request | Kết quả |
 | --- | --- | --- |
 | `GET ?page=0` | 20 hội thoại mỗi trang | `{items: [{id, updatedAt}], hasMore}` |
-| `POST /` | `{accepted: true}` | 201 và hội thoại mới. Quyền cá nhân mặc định tắt. |
+| `POST /` | `{accepted: true}` | 201 và hội thoại mới. |
 | `GET /{id}` | — | Hội thoại đang còn hạn. |
 | `POST /{id}/turns` | `{turnId, text, geminiAccepted?}`, UUID và chuỗi 1–300 ký tự | Hội thoại sau khi thêm lượt. Retry cùng UUID và nội dung trả lại hội thoại đã lưu. |
-| `PUT /{id}/permission` | `{allowed: boolean}` | Hội thoại sau cập nhật. Chuyển từ bật sang tắt xóa toàn bộ lượt trong hội thoại. |
+| `PUT /{id}/permission` | `{allowed: boolean}` | Trả hội thoại nếu giá trị trùng với quyền tài khoản hiện tại. `409 ASSISTANT_ACCOUNT_SETTING_REQUIRED` nếu cần đổi quyền. Không xóa lượt đã lưu. |
 | `DELETE /{id}` | — | 204. |
 
-Hội thoại trả `{id, updatedAt, personalAllowed, turns}`. Mỗi lượt có `{turnId, text, outcome, parts}`. Mỗi phần có `{status, text, source}`, với nguồn dạng `{id, version, title, route, from, to}`. Ngày ISO theo phạm vi của dữ liệu. Nguồn app-help không có ngày. Văn bản phản hồi là tiếng Việt.
+`POST /` và `GET /{id}` trả `{id, updatedAt, personalAllowed, turns}`. `personalAllowed` phản ánh quyền tài khoản ở thời điểm đọc. Mỗi lượt có `{turnId, text, outcome, parts}`. Mỗi phần có `{status, text, source}`, với nguồn dạng `{id, version, title, route, from, to}`. Ngày ISO theo phạm vi của dữ liệu. Nguồn app-help không có ngày. Văn bản phản hồi là tiếng Việt.
 
 401 cho JWT thiếu hoặc không hợp lệ, 403 cho tài khoản ngoài allowlist hoặc khi chưa chấp nhận lưu, 404 cho hội thoại ngoại lai/hết hạn, 409 cho UUID bị tái dùng với nội dung khác, đạt 50 lượt hoặc ghi đồng thời, 503 cho lỗi lưu trữ Assistant. Một lỗi đọc dữ liệu cá nhân trong hội thoại có trạng thái `DEPENDENCY_UNAVAILABLE` và phần hướng dẫn có sẵn vẫn được trả về. Các trạng thái còn lại gồm `ANSWERED`, `PARTIAL`, `PERMISSION_REQUIRED`, `NO_DATA`, `UNVERIFIED_DATA`, `INSUFFICIENT_EVIDENCE` và `SAFETY`.
 
@@ -55,7 +57,7 @@ Backend đọc `ASSISTANT_GEMINI_CHAT_MODEL` (mặc định `gemini-3.1-flash-li
 
 Sandbox nhận ba FAQ và câu diễn đạt lại đã duyệt trong [bản duyệt FAQ](../../../vitaloom-business-docs-and-tools/docs/development-workflow/tasks/assistant-v1-content-tool-review.md). Backend nhận diện câu cho phép trước, dùng câu chuẩn hoặc paraphrase thuộc bộ mẫu để truy vấn Atlas, rồi xác minh chunk và nguồn trên primary.
 
-Mẫu T01 nhận câu `Nhật ký ngủ tổng hợp hôm nay ghi bao nhiêu phút?`. Để chạy mẫu cần tài khoản sandbox, xác nhận từng lượt, quyền đọc trong hội thoại và một bản ghi MAIN DURATION 423 phút tổng hợp hôm nay theo giờ Việt Nam, với cảm nhận để trống. Backend chỉ chấp nhận một lần gọi `getSleepRecords` với hai đầu khoảng ngày bằng ngày mẫu. Backend xác minh bản ghi theo JWT rồi chỉ gửi projection tổng hợp cố định. Kết quả gồm nguồn `synthetic-sleep-journal@1`. Tài khoản khác và dữ liệu ngoài mẫu tiếp tục theo luồng nội bộ.
+Mẫu T01 nhận câu `Nhật ký ngủ tổng hợp hôm nay ghi bao nhiêu phút?`. Để chạy mẫu cần tài khoản sandbox, xác nhận từng lượt, quyền đọc Sleep/Nước trong cài đặt tài khoản và một bản ghi MAIN DURATION 423 phút tổng hợp hôm nay theo giờ Việt Nam, với cảm nhận để trống. Backend chỉ chấp nhận một lần gọi `getSleepRecords` với hai đầu khoảng ngày bằng ngày mẫu. Backend xác minh bản ghi theo JWT rồi chỉ gửi projection tổng hợp cố định. Kết quả gồm nguồn `synthetic-sleep-journal@1`. Tài khoản khác và dữ liệu ngoài mẫu tiếp tục theo luồng nội bộ.
 
 ## Local READY FAQ chat
 

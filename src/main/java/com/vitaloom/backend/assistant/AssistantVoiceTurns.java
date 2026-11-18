@@ -30,14 +30,22 @@ final class AssistantVoiceTurns {
     private final AssistantSpeechToText stt;
     private final AssistantVoiceTools.Selector selector;
     private final AssistantVoiceActions actions;
+    private final AssistantAccountSettings accountSettings;
 
     AssistantVoiceTurns(MongoTemplate mongo, Clock clock, AssistantSpeechToText stt,
             AssistantVoiceTools.Selector selector, AssistantVoiceActions actions) {
+        this(mongo, clock, stt, selector, actions, new AssistantAccountSettings(mongo));
+    }
+
+    AssistantVoiceTurns(MongoTemplate mongo, Clock clock, AssistantSpeechToText stt,
+            AssistantVoiceTools.Selector selector, AssistantVoiceActions actions,
+            AssistantAccountSettings accountSettings) {
         this.mongo = mongo;
         this.clock = clock;
         this.stt = stt;
         this.selector = selector;
         this.actions = actions;
+        this.accountSettings = accountSettings;
         AssistantCourseController.ensureConversationIndexes(mongo);
         mongo.indexOps(Claim.class).createIndex(new Index().named("assistantVoiceClaimExpiry")
                 .on("expiresAt", Sort.Direction.ASC).expire(Duration.ZERO));
@@ -69,7 +77,8 @@ final class AssistantVoiceTurns {
         var reply = process(owner, transcript, receivedAt);
         var message = new AssistantConversation.Turn(turnId.toString(), transcript, receivedAt, reply);
         return AssistantCourseController.view(mongo.insert(new AssistantConversation(
-                claim.conversationId(), owner, null, clock.instant(), claim.expiresAt(), false, List.of(message))));
+                claim.conversationId(), owner, null, clock.instant(), claim.expiresAt(), false, List.of(message))),
+                accountSettings.get(owner));
     }
 
     private AssistantCourseAnswers.Answer process(String owner, String transcript, Instant receivedAt) {
@@ -100,7 +109,7 @@ final class AssistantVoiceTurns {
         var row = mongo.findOne(Query.query(Criteria.where("id").is(claim.conversationId())
                 .and("owner").is(owner).and("expiresAt").gt(clock.instant())), AssistantConversation.class);
         if (row == null) throw new ResponseStatusException(HttpStatus.CONFLICT);
-        return AssistantCourseController.view(row);
+        return AssistantCourseController.view(row, accountSettings.get(owner));
     }
 
     private static String digest(byte[] audio) {
