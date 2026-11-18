@@ -3,6 +3,8 @@ package com.vitaloom.backend.assistant;
 import com.google.genai.types.EmbedContentConfig;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.MongoClient;
+import com.mongodb.client.AggregateIterable;
+import com.mongodb.client.MongoCollection;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpTimeoutException;
 import java.time.LocalDate;
@@ -22,6 +24,7 @@ final class AssistantFixtureSearch implements AutoCloseable {
     private static final String INDEX = "assistant_fixture_v1";
     private static final int DIMENSIONS = 768;
     private static final int FAQ_CANDIDATE_LIMIT = 3;
+    private static final int FAQ_CONTEXT_LIMIT = 3;
     private static final double FAQ_SCORE_THRESHOLD = 0.75;
     private static final Logger LOG = LoggerFactory.getLogger(AssistantFixtureSearch.class);
 
@@ -122,13 +125,7 @@ final class AssistantFixtureSearch implements AutoCloseable {
             var query = embed("", question, false);
             stage = "vector_search";
             var collection = mongo.getCollection("assistant_ready_faq");
-            var search = new Document("index", "assistant_ready_faq_v1").append("path", "embedding")
-                    .append("queryVector", query).append("exact", true).append("limit", FAQ_CANDIDATE_LIMIT)
-                    .append("filter", new Document("active", true));
-            var candidates = collection.aggregate(List.of(new Document("$vectorSearch", search),
-                    new Document("$project", new Document("version", 1).append("contentHash", 1)
-                            .append("score", new Document("$meta", "vectorSearchScore")))))
-                    .maxTime(3, TimeUnit.SECONDS);
+            var candidates = rankedReadyFaqs(collection, query, FAQ_CANDIDATE_LIMIT);
             String today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).toString();
             outcome = "empty_results";
             try (var cursor = candidates.iterator()) {
@@ -143,14 +140,7 @@ final class AssistantFixtureSearch implements AutoCloseable {
                         break;
                     }
                     stage = "metadata_check";
-                    var filter = new Document("_id", candidate.getString("_id"))
-                            .append("active", true).append("status", "APPROVED").append("releaseGate", "READY")
-                            .append("version", candidate.getInteger("version"))
-                            .append("contentHash", candidate.getString("contentHash"))
-                            .append("supersededBy", null).append("model", model)
-                            .append("effectiveAt", new Document("$lte", today))
-                            .append("approvedBy", new Document("$regex", "\\S"))
-                            .append("reviewedAt", new Document("$regex", "^\\d{4}-\\d{2}-\\d{2}$"));
+                    var filter = readyFaqFilter(candidate, today);
                     var faq = collection.find(filter).first();
                     if (faq == null) {
                         logCandidate(requestId, candidate, rank, "rejected", "not_called");
@@ -185,9 +175,7 @@ final class AssistantFixtureSearch implements AutoCloseable {
                             List.of(new AssistantCourseAnswers.Part("ANSWERED", reply, source)), null);
                 }
             }
-            return new AssistantCourseAnswers.Answer("INSUFFICIENT_EVIDENCE",
-                    List.of(new AssistantCourseAnswers.Part("INSUFFICIENT_EVIDENCE",
-                            "Không tìm thấy FAQ phù hợp. No matching FAQ was found.", null)), null);
+            return insufficientFaqAnswer();
         } catch (RuntimeException failure) {
             outcome = failureReason(failure);
             throw failure;
@@ -198,6 +186,150 @@ final class AssistantFixtureSearch implements AutoCloseable {
                     .addKeyValue("latency_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started))
                     .log("Assistant FAQ retrieval");
         }
+    }
+
+    AssistantCourseAnswers.Answer answerReadyFaqContext(String question, UUID requestId, int topK) {
+        if (topK != 5 && topK != 10) throw new IllegalArgumentException("Unsupported READY FAQ topK");
+        long started = System.nanoTime();
+        int calls = 0;
+        String stage = "embedding";
+        String outcome = "dependency_error";
+        try {
+            if (!model.equals("gemini-embedding-2")) {
+                throw new IllegalStateException("READY FAQ vector index requires gemini-embedding-2");
+            }
+            var query = embed("", question, false);
+            stage = "vector_search";
+            var collection = mongo.getCollection("assistant_ready_faq");
+            var candidates = rankedReadyFaqs(collection, query, topK);
+            String today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).toString();
+            var selected = new java.util.LinkedHashMap<String, Document>();
+            var canonicalAnswers = new java.util.HashSet<String>();
+            outcome = "empty_results";
+            try (var cursor = candidates.iterator()) {
+                int rank = 0;
+                while (rank < topK && selected.size() < FAQ_CONTEXT_LIMIT && cursor.hasNext()) {
+                    var candidate = cursor.next();
+                    rank++;
+                    double score = candidate.getDouble("score");
+                    if (score < FAQ_SCORE_THRESHOLD) {
+                        logContextCandidate(requestId, candidate, rank, "not_checked", "below_threshold", topK);
+                        if (selected.isEmpty()) outcome = "below_threshold";
+                        break;
+                    }
+                    stage = "metadata_check";
+                    var eligibility = readyFaqFilter(candidate, today);
+                    var faq = collection.find(eligibility).first();
+                    if (faq == null || !nonblank(faq, "_id", "title", "question", "answer")) {
+                        logContextCandidate(requestId, candidate, rank, "rejected", "metadata_rejected", topK);
+                        if (selected.isEmpty()) outcome = "metadata_rejected";
+                        continue;
+                    }
+                    String id = faq.getString("_id");
+                    String canonicalAnswer = java.text.Normalizer.normalize(faq.getString("answer"),
+                            java.text.Normalizer.Form.NFC).replaceAll("(?U)\\s+", " ").strip()
+                            .toLowerCase(java.util.Locale.ROOT);
+                    if (selected.containsKey(id) || !canonicalAnswers.add(canonicalAnswer)) {
+                        logContextCandidate(requestId, candidate, rank, "accepted", "duplicate", topK);
+                        continue;
+                    }
+                    selected.put(id, faq);
+                    logContextCandidate(requestId, candidate, rank, "accepted", "selected", topK);
+                    outcome = "selected";
+                }
+            }
+            if (selected.isEmpty()) {
+                return insufficientFaqAnswer();
+            }
+            stage = "generation";
+            calls = 1;
+            var evidence = selected.values().stream().map(faq -> new GeminiAssistantProvider.FaqEvidence(
+                    faq.getString("_id"), faq.getString("question"), faq.getString("answer"))).toList();
+            var reply = provider.answerFaqContext(question, evidence);
+            if (reply == null) throw new GeminiAssistantProvider.InvalidFaqResponse();
+            if (reply.isEmpty()) {
+                outcome = "no_match";
+                return insufficientFaqAnswer();
+            }
+            if (reply.size() > FAQ_CONTEXT_LIMIT) throw new GeminiAssistantProvider.InvalidFaqResponse();
+            var citedIds = new java.util.HashSet<String>();
+            var answerParts = new java.util.ArrayList<AssistantCourseAnswers.Part>();
+            for (var part : reply) {
+                if (part == null || part.faqId() == null || part.faqId().isBlank() || part.answer() == null
+                        || part.answer().isBlank() || !citedIds.add(part.faqId()) || !selected.containsKey(part.faqId())) {
+                    throw new GeminiAssistantProvider.InvalidFaqResponse();
+                }
+                var faq = selected.get(part.faqId());
+                answerParts.add(new AssistantCourseAnswers.Part("ANSWERED", part.answer(),
+                        new AssistantCourseAnswers.Source(faq.getString("_id"), faq.getInteger("version"),
+                                faq.getString("title"), "", null, null)));
+            }
+            stage = "metadata_recheck";
+            for (String id : citedIds) {
+                var faq = selected.get(id);
+                var eligibility = readyFaqFilter(faq, today);
+                if (collection.find(eligibility).first() == null) {
+                    outcome = "metadata_revoked";
+                    return insufficientFaqAnswer();
+                }
+            }
+            outcome = "answered";
+            return new AssistantCourseAnswers.Answer("ANSWERED", List.copyOf(answerParts), null);
+        } catch (RuntimeException failure) {
+            outcome = failureReason(failure);
+            throw failure;
+        } finally {
+            LOG.atDebug().addKeyValue("request_id", requestId).addKeyValue("embedding_model", model)
+                    .addKeyValue("embedding_dimensions", DIMENSIONS).addKeyValue("strategy", "multi_faq_context")
+                    .addKeyValue("top_k", topK).addKeyValue("stage", stage).addKeyValue("outcome", outcome)
+                    .addKeyValue("generation_calls", calls)
+                    .addKeyValue("latency_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started))
+                    .log("Assistant FAQ context retrieval");
+        }
+    }
+
+    private static AggregateIterable<Document> rankedReadyFaqs(
+            MongoCollection<Document> collection, List<Float> query, int limit) {
+        var search = new Document("index", "assistant_ready_faq_v1").append("path", "embedding")
+                .append("queryVector", query).append("exact", true).append("limit", limit)
+                .append("filter", new Document("active", true));
+        return collection.aggregate(List.of(new Document("$vectorSearch", search),
+                new Document("$project", new Document("version", 1).append("contentHash", 1)
+                        .append("score", new Document("$meta", "vectorSearchScore")))))
+                .maxTime(3, TimeUnit.SECONDS);
+    }
+
+    private Document readyFaqFilter(Document candidate, String today) {
+        return new Document("_id", candidate.getString("_id")).append("active", true).append("status", "APPROVED")
+                .append("releaseGate", "READY").append("version", candidate.getInteger("version"))
+                .append("contentHash", candidate.getString("contentHash")).append("supersededBy", null)
+                .append("model", model).append("effectiveAt", new Document("$lte", today))
+                .append("approvedBy", new Document("$regex", "\\S"))
+                .append("reviewedAt", new Document("$regex", "^\\d{4}-\\d{2}-\\d{2}$"));
+    }
+
+    private static boolean nonblank(Document document, String... fields) {
+        for (String field : fields) {
+            Object value = document.get(field);
+            if (!(value instanceof String text) || text.isBlank()) return false;
+        }
+        return true;
+    }
+
+    private static AssistantCourseAnswers.Answer insufficientFaqAnswer() {
+        return new AssistantCourseAnswers.Answer("INSUFFICIENT_EVIDENCE",
+                List.of(new AssistantCourseAnswers.Part("INSUFFICIENT_EVIDENCE",
+                        "Không tìm thấy FAQ phù hợp. No matching FAQ was found.", null)), null);
+    }
+
+    private static void logContextCandidate(UUID requestId, Document candidate, int rank, String metadata,
+            String decision, int topK) {
+        LOG.atDebug().addKeyValue("request_id", requestId).addKeyValue("faq_id", candidate.getString("_id"))
+                .addKeyValue("rank", rank).addKeyValue("vector_score", candidate.getDouble("score"))
+                .addKeyValue("metric", "cosine").addKeyValue("threshold", FAQ_SCORE_THRESHOLD)
+                .addKeyValue("strategy", "multi_faq_context").addKeyValue("top_k", topK)
+                .addKeyValue("metadata", metadata).addKeyValue("decision", decision)
+                .log("Assistant FAQ context candidate");
     }
 
     private static void logCandidate(UUID requestId, Document candidate, int rank, String metadata, String decision) {

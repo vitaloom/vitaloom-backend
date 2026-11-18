@@ -11,8 +11,10 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -37,6 +39,29 @@ class AssistantCourseFixtureTest {
         assertLocal("synthetic-b", AssistantFixture.QUESTION, true);
         assertLocal("synthetic-a", AssistantFixture.QUESTION + " 375 ml", true);
         verifyNoInteractions(search, claims);
+    }
+
+    @Test
+    void contextExperimentUsesExistingOwnerAndPerTurnConsentGates() {
+        ReflectionTestUtils.setField(controller, "readyFaqChat", true);
+        controller.setReadyFaqContextTopK(5);
+        assertLocal("synthetic-a", "Synthetic FAQ question", false);
+        assertLocal("synthetic-b", "Synthetic FAQ question", true);
+        verifyNoInteractions(search);
+
+        String question = "Synthetic FAQ question";
+        var row = new AssistantConversation(conversation.toString(), "synthetic-a", 0L, NOW,
+                NOW.plusSeconds(600), false, List.of());
+        when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(row);
+        when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> call.getArgument(0));
+        when(search.answerReadyFaqContext(question, turn, 5)).thenReturn(
+                new AssistantCourseAnswers.Answer("ANSWERED", List.of(), null));
+        var reply = controller.turn(new TestingAuthenticationToken("synthetic-a", ""), conversation,
+                new AssistantCourseController.Send(turn, question, true));
+        assertThat(reply.turns().getFirst().outcome()).isEqualTo("ANSWERED");
+        verify(search).answerReadyFaqContext(question, turn, 5);
+        verifyNoMoreInteractions(search);
+        assertThatThrownBy(() -> controller.setReadyFaqContextTopK(7)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

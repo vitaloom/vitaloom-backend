@@ -55,6 +55,15 @@ class AssistantCourseController {
     private final String sandboxAccount;
     @Value("${ASSISTANT_READY_FAQ_CHAT:true}")
     private boolean readyFaqChat;
+    private int readyFaqContextTopK;
+
+    @Value("${ASSISTANT_READY_FAQ_CONTEXT_TOP_K:0}")
+    void setReadyFaqContextTopK(int topK) {
+        if (topK != 0 && topK != 5 && topK != 10) {
+            throw new IllegalArgumentException("Assistant READY FAQ context topK must be 0, 5 or 10");
+        }
+        readyFaqContextTopK = topK;
+    }
 
     AssistantCourseController(MongoTemplate mongo, AssistantCourseAnswers answers, Clock clock,
             @Value("${ASSISTANT_COURSE_ACCOUNT_IDS:}") String allowedAccounts,
@@ -145,7 +154,9 @@ class AssistantCourseController {
             answer = answers.answer(owner, text, false, context);
             if (!answer.outcome().equals("SAFETY")) {
                 try {
-                    answer = search.answerReadyFaq(text, request.turnId());
+                    answer = readyFaqContextTopK == 0
+                            ? search.answerReadyFaq(text, request.turnId())
+                            : search.answerReadyFaqContext(text, request.turnId(), readyFaqContextTopK);
                 } catch (RuntimeException failure) {
                     answer = new AssistantCourseAnswers.Answer("DEPENDENCY_UNAVAILABLE",
                             List.of(new AssistantCourseAnswers.Part("DEPENDENCY_UNAVAILABLE",
