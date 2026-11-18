@@ -18,10 +18,13 @@ final class AssistantVoiceText {
     private static final Pattern NEGATED = word("đừng|không (?:cần |muốn )?(?:ghi|nhập|thêm|lưu)|hủy|chưa ghi|cách (?:ghi|nhập|thêm|lưu)");
     private static final Pattern WATER = word("nước|water");
     private static final Pattern SLEEP = word("ngủ|sleep");
+    private static final String UNIT_WORD = "(?:không|một|hai|ba|bốn|năm|sáu|bảy|tám|chín|mốt|tư|lăm)";
+    private static final String CLOCK_NUMBER = "(?:\\d{1,2}|mười(?:\\s+" + UNIT_WORD + ")?|"
+            + UNIT_WORD + "(?:\\s+mươi(?:\\s+" + UNIT_WORD + ")?)?)";
     private static final Pattern DATE = word("hôm nay|hôm qua|hôm kia|(\\d{4}-\\d{2}-\\d{2})"
-            + "|(\\d{1,2})(?:/|\\s+tháng\\s+)(\\d{1,2})(?:(?:/|\\s+năm\\s+)(\\d{4}))?");
-    private static final Pattern TIME = word("(\\d{1,2})\\s*(?:[:h]|giờ)(?:\\s*(\\d{1,2})(?:\\s*phút)?)?"
-            + "(?:\\s*(sáng|trưa|chiều|tối|đêm))?");
+            + "|(" + CLOCK_NUMBER + ")(?:/|\\s+tháng\\s+)(" + CLOCK_NUMBER + ")(?:(?:/|\\s+năm\\s+)(\\d{4}))?");
+    private static final Pattern TIME = word("(" + CLOCK_NUMBER + ")\\s*(?:[:h]|giờ)"
+            + "(?:\\s*(" + CLOCK_NUMBER + "|rưỡi)(?:\\s*phút)?)?(?:\\s*(sáng|trưa|chiều|tối|đêm))?");
     private static final Pattern NOW = word("bây giờ|hiện tại|vừa (?:mới )?uống|lúc này|ngay");
     private static final String NUMBER_WORD = "(?:không|một|hai|ba|bốn|năm|sáu|bảy|tám|chín|mười|mươi|mốt|tư|lăm|nghìn|trăm|linh|lẻ)";
     private static final Pattern AMOUNT = Pattern.compile("(?<![\\p{L}\\p{N}.,])"
@@ -95,7 +98,8 @@ final class AssistantVoiceText {
             require(!TIME.matcher(text).find() && !DATE.matcher(text).find());
             return receivedAt;
         }
-        require(!DATE.matcher(text).find() || DATE.matcher(phrase).find());
+        requireCompleteWhen(DATE, phrase);
+        requireCompleteWhen(TIME, phrase);
         if (!TIME.matcher(phrase).find()) {
             require(!TIME.matcher(text).find() && (DATE.matcher(phrase).find() ? date(phrase).equals(today)
                     : NOW.matcher(phrase).find()));
@@ -104,6 +108,13 @@ final class AssistantVoiceText {
         Instant time = dateTime(phrase, false).atZone(AssistantVoiceActions.ZONE).toInstant();
         require(!time.isAfter(receivedAt));
         return time;
+    }
+
+    private void requireCompleteWhen(Pattern pattern, String phrase) {
+        var spoken = pattern.matcher(text);
+        if (!spoken.find()) return;
+        var selected = pattern.matcher(phrase);
+        require(selected.find() && spoken.group().equals(selected.group()) && !spoken.find());
     }
 
     int minutes(String phrase) {
@@ -135,8 +146,8 @@ final class AssistantVoiceText {
             case "hôm kia" -> today.minusDays(2);
             default -> {
                 if (match.group(1) != null) yield LocalDate.parse(match.group(1));
-                int month = Integer.parseInt(match.group(3));
-                int day = Integer.parseInt(match.group(2));
+                int month = number(match.group(3));
+                int day = number(match.group(2));
                 if (match.group(4) != null) yield LocalDate.of(Integer.parseInt(match.group(4)), month, day);
                 yield LocalDate.of(today.getYear(), month, day);
             }
@@ -149,8 +160,9 @@ final class AssistantVoiceText {
         var match = TIME.matcher(phrase);
         require(match.find());
         LocalDate day = requireDay || DATE.matcher(phrase).find() ? date(phrase) : today;
-        int hour = Integer.parseInt(match.group(1));
-        int minute = match.group(2) == null ? 0 : Integer.parseInt(match.group(2));
+        int hour = number(match.group(1));
+        String minuteText = match.group(2);
+        int minute = minuteText == null ? 0 : minuteText.equals("rưỡi") ? 30 : number(minuteText);
         if (match.group(3) != null) {
             hour = switch (match.group(3)) {
                 case "sáng" -> hour == 12 ? 0 : hour;

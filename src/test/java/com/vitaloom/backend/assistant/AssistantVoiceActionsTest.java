@@ -61,6 +61,16 @@ class AssistantVoiceActionsTest {
     }
 
     @Test
+    void rejectsWhenToolOmitsTheSpokenPartOfDay() {
+        var answer = actions.apply("account-a", "Ghi 250 ml nước lúc 8h30 tối", NOW,
+                call("recordWater", """
+                        {"amount":"250 ml","when":"8h30"}
+                        """));
+        assertThat(answer.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        verifyNoInteractions(water, sleep);
+    }
+
+    @Test
     void createsDurationOnVietnameseDateAndMapsFeeling() {
         when(sleep.create(eq("account-b"), any())).thenReturn(sleepResult("2026-11-17", 480));
         var answer = actions.apply("account-b", "Nhập 8 tiếng ngủ cho ngày 17/11. Cảm giác bình thường", NOW,
@@ -90,6 +100,22 @@ class AssistantVoiceActionsTest {
         assertThat(write.getValue().start()).isEqualTo(new SessionWrite.CivilTime("2026-11-17", "23", "20", null));
         assertThat(write.getValue().end()).isEqualTo(new SessionWrite.CivilTime("2026-11-18", "06", "00", null));
         assertThat(write.getValue().feeling()).isEqualTo("COMFORTABLE");
+    }
+
+    @Test
+    void acceptsTranscriptWithSpelledOutClockTimesAndDate() {
+        when(sleep.create(eq("account-b"), any())).thenReturn(sleepResult("2026-11-18", 400));
+        var answer = actions.apply("account-b",
+                "Ghi giấc ngủ từ mười một giờ hai mươi tối ngày mười bảy tháng mười một đến sáu giờ sáng hôm nay, cảm giác tốt", NOW,
+                call("recordSleep", """
+                        {"start":"mười một giờ hai mươi tối ngày mười bảy tháng mười một",
+                         "end":"sáu giờ sáng hôm nay","feeling":"tốt"}
+                        """));
+        assertThat(answer.outcome()).isEqualTo("ANSWERED");
+        var write = ArgumentCaptor.forClass(SessionWrite.class);
+        verify(sleep).create(eq("account-b"), write.capture());
+        assertThat(write.getValue().start()).isEqualTo(new SessionWrite.CivilTime("2026-11-17", "23", "20", null));
+        assertThat(write.getValue().end()).isEqualTo(new SessionWrite.CivilTime("2026-11-18", "06", "00", null));
     }
 
     @Test
