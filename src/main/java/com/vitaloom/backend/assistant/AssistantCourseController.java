@@ -123,7 +123,9 @@ class AssistantCourseController {
             answer = answers.answer(owner, text, row.personalAllowed(), context);
         } else {
             answer = answers.readyFaqLocalRoute(owner, text, row.personalAllowed(), context);
-            if (answer == null) {
+            if (answer == null && AssistantCourseAnswers.isPersonalDataQuestion(text)) {
+                answer = personalAnswer(owner, id, row, text, context, search);
+            } else if (answer == null) {
                 try {
                     answer = search.answerReadyFaqContext(text, request.turnId(), 10);
                 } catch (RuntimeException failure) {
@@ -138,6 +140,23 @@ class AssistantCourseController {
         history.add(new AssistantConversation.Turn(request.turnId().toString(), text, now, answer));
         // Versioned save prevents recreation after deletion or publication with obsolete permission.
         return view(mongo.save(row.change(now, row.personalAllowed(), List.copyOf(history))));
+    }
+
+    private AssistantCourseAnswers.Answer personalAnswer(String owner, UUID id, AssistantConversation row,
+            String text, AssistantCourseAnswers.Context context, AssistantFixtureSearch search) {
+        if (row.personalAllowed()) {
+            java.util.function.BooleanSupplier current = () -> mongo.exists(owned(owner)
+                    .addCriteria(Criteria.where("id").is(id.toString()).and("personalAllowed").is(true)
+                            .and("revision").is(row.revision())), AssistantConversation.class);
+            try {
+                var answer = search.answerPersonalData(answers.personalToolQuestion(text),
+                        answers.personalTools(owner, text, current), current);
+                if (answer != null) return answer;
+            } catch (RuntimeException unavailable) {
+                // The local route can still answer from the owning services.
+            }
+        }
+        return answers.answer(owner, text, row.personalAllowed(), context);
     }
 
     @ExceptionHandler(OptimisticLockingFailureException.class)

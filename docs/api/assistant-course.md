@@ -38,6 +38,17 @@ Backend trả lượt đã lưu trước khi dispatch theo hội thoại và UUI
 
 Sau khi được duyệt dùng sandbox, chạy `tools/assistant-course-smoke.ps1 -GeminiRag -KeepRunning` với khóa từ môi trường riêng. Xem [runbook local](../../../vitaloom-business-docs-and-tools/docs/development-workflow/tasks/assistant-course-mvp.md).
 
+Để dùng Vector Search riêng với Mongo của ứng dụng, chạy:
+
+```powershell
+.\mvnw.cmd -DskipTests package
+.\tools\assistant-vector-bootstrap.ps1
+```
+
+Chạy lại bootstrap sau khi volume vector bị xóa. Script chuẩn bị mạng dùng chung, khởi động Compose VectorDB, chờ health check rồi khởi động Compose chính. Sau đó script tạo index nếu thiếu và dùng Backend với khóa Gemini trong môi trường hoặc `.env` để ingest. Script chỉ báo PASS sau khi cả ba FAQ đều có vector 768 chiều và tìm được qua index. Tiến trình Backend dùng để bootstrap tự dừng sau khi kiểm tra.
+
+Nếu chuyển từ Compose gộp, làm theo [hướng dẫn giữ volume cũ](../../README.md#2-start-local-infrastructure) trước khi chạy bootstrap. Reset volume Compose chính vẫn giữ dữ liệu vector.
+
 Khi chạy Backend để chat, đặt `ASSISTANT_VECTOR_MONGO_URI`, ví dụ `mongodb://127.0.0.1:27183/assistant_vector?directConnection=true&serverSelectionTimeoutMS=2000`, và dùng cùng model embedding với bootstrap. Tài khoản và quyền thử Gemini cấu hình theo phần sandbox ở trên.
 
 Backend đọc `ASSISTANT_GEMINI_CHAT_MODEL` (mặc định `gemini-3.1-flash-lite`) và `ASSISTANT_GEMINI_EMBEDDING_MODEL` (mặc định `gemini-embedding-2`). Nếu cần chọn `gemini-embedding-001`, đặt biến embedding và ingest lại. Backend dùng định dạng theo model và lọc generation riêng để chỉ tìm trong các vector tạo từ cùng model. Khi Google trả 429, đường chat trả fallback và lần chạy smoke dừng nếu không xác minh được Gemini. Backend không đổi model hay tier tự động.

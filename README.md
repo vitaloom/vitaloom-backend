@@ -50,12 +50,19 @@ For authentication, set `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` in the untr
 
 ## 2. Start local infrastructure
 
-```bash
-docker compose up -d
+```powershell
+docker network inspect vitaloom-assistant-vector --format '{{.Name}}' 2>$null
+if ($LASTEXITCODE -ne 0) { docker network create vitaloom-assistant-vector }
+docker compose -p vitaloom-vector -f docker-compose.assistant-vector.yaml up -d --wait
+docker compose up -d --wait
 docker compose ps
 ```
 
-The Compose stack starts:
+Create the network once. The main project uses it to check VectorDB readiness. Nginx starts when the probe can reach a writable Atlas Local primary and list search indexes. If an earlier start left the probe unhealthy, finish starting the vector project, wait for the probe to show `healthy` in `docker compose ps assistant-vector-health`, then retry the main startup.
+
+If upgrading from a combined stack, stop and remove the old `assistant-vector` container before starting the new project. To locate it, run `docker ps -a --filter label=com.docker.compose.service=assistant-vector` and select the container from the old app project. Run `docker stop <old-container>` if it is running, then `docker rm <old-container>` to release its name and port while keeping the named volumes. The new Compose reuses the three `vitaloom-backend_assistant_vector_*` volumes by default. For a previous custom project name, set `ASSISTANT_VECTOR_VOLUME_PREFIX` in `.env` to that name. Use [the Assistant bootstrap](./docs/api/assistant-course.md) to provision the search index and seed the FAQ fixture.
+
+The main Compose stack starts:
 
 - **MongoDB 8** as a single-node authenticated replica set named `vitaloom-rs`.
 - **Mongo Express** as a local administration UI at [http://localhost:8082](http://localhost:8082) (port 8082 avoids Expo/Metro's default 8081).
@@ -85,7 +92,7 @@ Windows:
 
 The application listens on port `8080` by default. Override it with `SERVER_PORT` in `.env`.
 
-After changing `SERVER_PORT`, restart Spring Boot and run `docker compose up -d --no-deps nginx` to apply the new upstream port. With the default gateway port, `GET http://localhost/api/health` checks connectivity through Nginx.
+After changing `SERVER_PORT`, restart Spring Boot and run `docker compose up -d nginx` to apply the new upstream port. With the default gateway port, `GET http://localhost/api/health` checks connectivity through Nginx.
 
 The auth feature provides `POST /api/auth/register`, `/login`, `/refresh` and protected `GET /api/auth/me`. The protected Water Tracking MVP provides daily and weekly reads plus log creation; see the [Water contract](./docs/features/water/api-contract.md). Heart Rate and Steps batch ingestion and statistics routes are listed in the [API contract index](./docs/api/api-contract.md).
 
@@ -105,7 +112,7 @@ Windows:
 
 - Initialization scripts run only when the MongoDB data volume is first created.
 - Changing credentials in `.env` does not update users in an already initialized volume.
-- To recreate the local database and apply new initialization credentials, run `docker compose down -v` and then `docker compose up -d`. **This deletes the local MongoDB data.**
+- To recreate the local database and apply new initialization credentials, run `docker compose down -v` and then `docker compose up -d`. **This deletes the app MongoDB data.** The VectorDB data, configuration and search index volumes belong to the separate `vitaloom-vector` project.
 - Do not use the sample credentials or expose this local development stack as a public database service.
 
 ## Security scope

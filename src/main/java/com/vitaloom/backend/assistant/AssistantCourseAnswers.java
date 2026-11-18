@@ -3,6 +3,7 @@ package com.vitaloom.backend.assistant;
 import com.vitaloom.backend.sleep.service.SleepJournalService;
 import com.vitaloom.backend.sleep.dto.response.SessionResponse;
 import com.vitaloom.backend.statistics.service.SleepRecentStatisticsService;
+import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService;
 import com.vitaloom.backend.water.service.WaterService;
 import java.text.Normalizer;
 import java.time.Clock;
@@ -43,13 +44,21 @@ final class AssistantCourseAnswers {
     private final SleepRecentStatisticsService sleep;
     private final WaterService water;
     private final Clock clock;
+    private final SleepInsightsStatisticsService insights;
 
     AssistantCourseAnswers(SleepJournalService journal, SleepRecentStatisticsService sleep,
             WaterService water, Clock clock) {
+        this(journal, sleep, water, clock, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    AssistantCourseAnswers(SleepJournalService journal, SleepRecentStatisticsService sleep,
+            WaterService water, Clock clock, SleepInsightsStatisticsService insights) {
         this.journal = journal;
         this.sleep = sleep;
         this.water = water;
         this.clock = clock;
+        this.insights = insights;
     }
 
     Answer answer(String owner, String text, boolean personalAllowed, Context previous) {
@@ -61,6 +70,17 @@ final class AssistantCourseAnswers {
         }
         if (isPrescriptionQuery(query)) {
             return prescriptionRefusal();
+        }
+        if (isSleepTimingRequest(query)) {
+            if (!personalAllowed) {
+                String status = "PERMISSION_REQUIRED";
+                return new Answer(status, List.of(new Part(status,
+                        "Hãy bật quyền đọc Sleep/Water cho hội thoại này.", null)), null);
+            }
+            if (insights == null) return sleepTimingUnavailable();
+            var tools = personalTools(owner, text, () -> true);
+            tools.getRecentMainSleepTiming();
+            return tools.answer();
         }
 
         var parts = new ArrayList<Part>();
@@ -123,11 +143,16 @@ final class AssistantCourseAnswers {
         var local = answer("", text, false, null);
         if ("SAFETY".equals(local.outcome())) return local;
         if (isPrescriptionQuery(query)) return prescriptionRefusal();
+        if (isSleepTimingRequest(query)) {
+            return personalAllowed ? null : local;
+        }
         if (has(query, "co phieu", "chung khoan", "stock", "share price", "shares", "ticker")) {
             return new Answer("INSUFFICIENT_EVIDENCE", List.of(new Part("INSUFFICIENT_EVIDENCE",
                     "Trợ lý không cung cấp giá cổ phiếu hoặc thông tin thị trường trực tiếp.", null)), null);
         }
-        if (isPersonalRecentSleep(query)) return answer(owner, text, personalAllowed, previous);
+        if (isPersonalRecentSleep(query) && !has(query, "trung binh", "average")) {
+            return answer(owner, text, personalAllowed, previous);
+        }
         return null;
     }
 
@@ -141,6 +166,36 @@ final class AssistantCourseAnswers {
                             " my recent sleep ", " i slept ", " i sleep ", " toi ngu ", " toi da ngu ",
                             " minh ngu ", " minh da ngu ");
                 });
+    }
+
+    static boolean isPersonalDataQuestion(String text) {
+        String query = normalize(text);
+        if (isSleepTimingRequest(query)) return true;
+        return intent(query) != null
+                && has(query, "cua toi", "cua minh", "toi ngu", "toi uong", "minh ngu", "minh uong",
+                        "my sleep", "my water", "i slept", "i drank")
+                && !has(query, "o dau", "cach ", "how to", "where", "mo ", "open ");
+    }
+
+    private static boolean isSleepTimingRequest(String query) {
+        return has(query, "nen ngu", "nen di ngu", "nen thuc", "nen day", "should i sleep",
+                "should i go to bed", "should i wake", "gio di ngu", "gio thuc day", "bedtime", "wake time")
+                || has(query, "luc may gio", "vao may gio") && has(query, "ngu", "thuc day");
+    }
+
+    private static Answer sleepTimingUnavailable() {
+        String status = "INSUFFICIENT_EVIDENCE";
+        return new Answer(status, List.of(new Part(status,
+                "Chưa thể lấy thống kê giờ ngủ và giờ thức.", null)), null);
+    }
+
+    AssistantPersonalDataTools personalTools(String owner, String text, java.util.function.BooleanSupplier current) {
+        return new AssistantPersonalDataTools(owner, new AssistantPersonalDataService(sleep, water, clock),
+                current, insights, isSleepTimingRequest(normalize(text)) ? ZONE : null);
+    }
+
+    String personalToolQuestion(String question) {
+        return "Local date (Asia/Ho_Chi_Minh): " + LocalDate.now(clock.withZone(ZONE)) + "\n" + question;
     }
 
     private static boolean isPrescriptionQuery(String query) {
@@ -271,7 +326,8 @@ final class AssistantCourseAnswers {
         boolean mentionsWater = has(words, " nuoc ", " water ");
         if (mentionsSleep && mentionsWater) return null;
         if (mentionsSleep) {
-            return has(query, "gan day", "7 ngay", "recent", "last 7 days") ? Intent.SLEEP_RECENT : Intent.SLEEP_DAY;
+            return has(query, "gan day", "7 ngay", "recent", "last 7 days", "tuan nay", "this week",
+                    "trung binh", "average") ? Intent.SLEEP_RECENT : Intent.SLEEP_DAY;
         }
         if (mentionsWater) {
             return has(query, "tuan", "week") ? Intent.WATER_WEEK : Intent.WATER_DAY;

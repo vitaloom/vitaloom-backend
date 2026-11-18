@@ -89,6 +89,12 @@ final class AssistantFixtureSearch implements AutoCloseable {
         return provider.confirmsSyntheticSleep(day, current, verifyRecord);
     }
 
+    AssistantCourseAnswers.Answer answerPersonalData(String question, AssistantPersonalDataTools tools,
+            BooleanSupplier current) {
+        provider.selectPersonalTool(question, tools, current);
+        return current.getAsBoolean() ? tools.answer() : null;
+    }
+
     boolean answer(AssistantFixture.Faq faq, String text, BooleanSupplier current) {
         if (!current.getAsBoolean()) return false;
         String question = text.strip().equalsIgnoreCase(faq.paraphrase()) ? faq.paraphrase() : faq.question();
