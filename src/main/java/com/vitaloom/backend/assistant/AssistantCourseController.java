@@ -8,15 +8,11 @@ import jakarta.validation.constraints.Size;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
-import java.util.Objects;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Conditional;
-import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Sort;
@@ -40,46 +36,22 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 @RestController
-@Profile("!prod & !production")
 @Conditional(AssistantActivation.Course.class)
 @RequestMapping("/api/assistant/mvp/conversations")
 class AssistantCourseController {
     private static final int MAX_TURNS = 50;
     private static final int PAGE_SIZE = 20;
-    private final Set<String> accounts;
     private final MongoTemplate mongo;
     private final AssistantCourseAnswers answers;
     private final Clock clock;
-    private final ObjectProvider<AssistantFixtureSearch> fixtureSearch;
-    private final ObjectProvider<AssistantChatService> chatService;
-    private final String sandboxAccount;
-    @Value("${ASSISTANT_READY_FAQ_CHAT:true}")
-    private boolean readyFaqChat;
-    private int readyFaqContextTopK;
-
-    @Value("${ASSISTANT_READY_FAQ_CONTEXT_TOP_K:0}")
-    void setReadyFaqContextTopK(int topK) {
-        if (topK != 0 && topK != 5 && topK != 10) {
-            throw new IllegalArgumentException("Assistant READY FAQ context topK must be 0, 5 or 10");
-        }
-        readyFaqContextTopK = topK;
-    }
+    private final ObjectProvider<AssistantFixtureSearch> readyFaqSearch;
 
     AssistantCourseController(MongoTemplate mongo, AssistantCourseAnswers answers, Clock clock,
-            @Value("${ASSISTANT_COURSE_ACCOUNT_IDS:}") String allowedAccounts,
-            ObjectProvider<AssistantFixtureSearch> fixtureSearch, ObjectProvider<AssistantChatService> chatService,
-            @Value("${ASSISTANT_SANDBOX_ACCOUNT_ID:}") String sandboxAccount) {
+            @Qualifier("assistantReadyFaqSearch") ObjectProvider<AssistantFixtureSearch> readyFaqSearch) {
         this.mongo = mongo;
         this.answers = answers;
         this.clock = clock;
-        this.fixtureSearch = fixtureSearch;
-        this.chatService = chatService;
-        this.sandboxAccount = sandboxAccount.strip();
-        var subjects = new HashSet<String>();
-        for (String account : allowedAccounts.split(",")) {
-            if (!account.isBlank()) subjects.add(account.strip());
-        }
-        accounts = Set.copyOf(subjects);
+        this.readyFaqSearch = readyFaqSearch;
     }
 
     @GetMapping
@@ -145,60 +117,27 @@ class AssistantCourseController {
         var previous = row.turns().isEmpty() ? null : row.turns().getLast();
         var context = previous != null && previous.at().plus(Duration.ofMinutes(30)).isAfter(now)
                 ? previous.reply().context() : null;
-        var search = Boolean.TRUE.equals(request.geminiAccepted()) && owner.equals(sandboxAccount)
-                ? fixtureSearch.getIfAvailable() : null;
+        var search = Boolean.TRUE.equals(request.geminiAccepted()) ? readyFaqSearch.getIfAvailable() : null;
         AssistantCourseAnswers.Answer answer;
         if (search == null) {
             answer = answers.answer(owner, text, row.personalAllowed(), context);
-        } else if (readyFaqChat) {
-            answer = answers.answer(owner, text, false, context);
-            if (!answer.outcome().equals("SAFETY")) {
+        } else {
+            answer = answers.readyFaqLocalRoute(text);
+            if (answer == null) {
                 try {
-                    answer = readyFaqContextTopK == 0
-                            ? search.answerReadyFaq(text, request.turnId())
-                            : search.answerReadyFaqContext(text, request.turnId(), readyFaqContextTopK);
+                    answer = search.answerReadyFaqContext(text, request.turnId(), 10);
                 } catch (RuntimeException failure) {
                     answer = new AssistantCourseAnswers.Answer("DEPENDENCY_UNAVAILABLE",
                             List.of(new AssistantCourseAnswers.Part("DEPENDENCY_UNAVAILABLE",
                                     "FAQ Assistant is temporarily unavailable.", null)), null);
                 }
             }
-        } else {
-            var faq = AssistantFixture.matchingFaq(text);
-            boolean syntheticSleep = AssistantFixture.SLEEP_QUESTION.equals(text) && row.personalAllowed();
-            answer = faq != null || syntheticSleep
-                    ? answerFixture(owner, id, request.turnId(), row, search, faq, text, syntheticSleep)
-                    : answers.answer(owner, text, row.personalAllowed(), context);
         }
         if (!row.expiresAt().isAfter(clock.instant())) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         var history = new java.util.ArrayList<>(row.turns());
         history.add(new AssistantConversation.Turn(request.turnId().toString(), text, now, answer));
         // Versioned save prevents recreation after deletion or publication with obsolete permission.
         return view(mongo.save(row.change(now, row.personalAllowed(), List.copyOf(history))));
-    }
-
-    private AssistantCourseAnswers.Answer answerFixture(String owner, UUID id, UUID turnId,
-            AssistantConversation row, AssistantFixtureSearch search, AssistantFixture.Faq faq, String text,
-            boolean syntheticSleep) {
-        java.util.function.BooleanSupplier current =
-                () -> Objects.equals(row.revision(), getOwned(owner, id).revision());
-        String day = java.time.LocalDate.now(clock.withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))).toString();
-        var result = chatService.getObject().answer(owner + ":" + id, turnId, syntheticSleep ? text + day : text,
-                () -> syntheticSleep ? search.answerSyntheticSleep(day, current, () -> answers.hasSyntheticSleepFixture(owner, day))
-                        : search.answer(faq, text, current));
-        if (result == AssistantTurn.Status.PENDING) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Assistant turn is pending");
-        }
-        String outcome = result.name();
-        var citation = syntheticSleep ? AssistantFixture.sleepSource(day) : faq.source();
-        String reply = syntheticSleep ? AssistantFixture.SLEEP_ANSWER : faq.answer();
-        if (result != AssistantTurn.Status.ANSWERED) {
-            reply = syntheticSleep ? "Gemini đang tạm thời không khả dụng."
-                    : "Gemini hoặc tìm kiếm đang tạm thời không khả dụng. " + reply;
-            if (syntheticSleep) citation = null;
-        }
-        return new AssistantCourseAnswers.Answer(outcome, List.of(new AssistantCourseAnswers.Part(
-                outcome, reply, citation)), null);
     }
 
     @ExceptionHandler(OptimisticLockingFailureException.class)
@@ -214,9 +153,7 @@ class AssistantCourseController {
     }
 
     private String subject(Authentication auth) {
-        String subject = auth.getName();
-        if (!accounts.isEmpty() && !accounts.contains(subject)) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
-        return subject;
+        return auth.getName();
     }
 
     private Query owned(String owner) {

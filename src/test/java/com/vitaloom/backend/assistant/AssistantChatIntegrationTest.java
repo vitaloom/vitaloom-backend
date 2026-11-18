@@ -28,6 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
     "vitaloom.test.mongodb.database=assistant_chat_test",
     "spring.mongodb.database=assistant_chat_test",
     "ASSISTANT_GEMINI_API_KEY=fixture-only-fake-key",
+    "ASSISTANT_VECTOR_MONGO_URI=",
     "vitaloom.assistant.sandbox.account-id=",
     "ASSISTANT_COURSE_ACCOUNT_IDS="
 })

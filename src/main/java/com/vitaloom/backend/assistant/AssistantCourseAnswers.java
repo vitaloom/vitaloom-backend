@@ -19,12 +19,10 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.context.annotation.Conditional;
-import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Component;
 
 @Component
-@Profile("!prod & !production")
 @Conditional(AssistantActivation.Course.class)
 final class AssistantCourseAnswers {
     private static final ZoneId ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
@@ -61,8 +59,8 @@ final class AssistantCourseAnswers {
             return new Answer("SAFETY", List.of(new Part("SAFETY",
                     "Nếu đang có nguy hiểm tức thời, hãy liên hệ dịch vụ cấp cứu địa phương ngay.", null)), null);
         }
-        if (has(query, "chan doan", "ke don", "lieu thuoc", "diagnose", "prescribe")) {
-            return unsupported();
+        if (isPrescriptionQuery(query)) {
+            return prescriptionRefusal();
         }
 
         var parts = new ArrayList<Part>();
@@ -118,6 +116,29 @@ final class AssistantCourseAnswers {
         String outcome = parts.getFirst().status();
         if (parts.stream().map(Part::status).distinct().count() > 1) outcome = "PARTIAL";
         return new Answer(outcome, List.copyOf(parts), context);
+    }
+
+    Answer readyFaqLocalRoute(String text) {
+        String query = normalize(text);
+        var local = answer("", text, false, null);
+        if ("SAFETY".equals(local.outcome())) return local;
+        if (isPrescriptionQuery(query)) return prescriptionRefusal();
+        if (has(query, "co phieu", "chung khoan", "stock", "share price", "shares", "ticker")) {
+            return new Answer("INSUFFICIENT_EVIDENCE", List.of(new Part("INSUFFICIENT_EVIDENCE",
+                    "Trợ lý không cung cấp giá cổ phiếu hoặc thông tin thị trường trực tiếp.", null)), null);
+        }
+        return null;
+    }
+
+    private static boolean isPrescriptionQuery(String query) {
+        return has(query, "chan doan", "ke don", "don thuoc", "lieu thuoc", "nen uong thuoc",
+                "can uong thuoc", "thuoc nao nen uong", "what medicine", "which medicine", "what medication",
+                "which medication", "diagnose", "prescribe", "prescription", "dosage", "what dose");
+    }
+
+    private static Answer prescriptionRefusal() {
+        return new Answer("SAFETY", List.of(new Part("SAFETY",
+                "Trợ lý không thể kê đơn hoặc hướng dẫn liều thuốc. Hãy hỏi chuyên gia y tế.", null)), null);
     }
 
     private Part read(String owner, Intent intent, LocalDate date, LocalDate today) {

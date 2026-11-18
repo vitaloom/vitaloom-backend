@@ -303,6 +303,7 @@ final class AssistantFixtureSearch implements AutoCloseable {
         return new Document("_id", candidate.getString("_id")).append("active", true).append("status", "APPROVED")
                 .append("releaseGate", "READY").append("version", candidate.getInteger("version"))
                 .append("contentHash", candidate.getString("contentHash")).append("supersededBy", null)
+                .append("routingOnly", new Document("$ne", true))
                 .append("model", model).append("effectiveAt", new Document("$lte", today))
                 .append("approvedBy", new Document("$regex", "\\S"))
                 .append("reviewedAt", new Document("$regex", "^\\d{4}-\\d{2}-\\d{2}$"));

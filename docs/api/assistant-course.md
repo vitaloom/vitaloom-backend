@@ -26,7 +26,9 @@ MongoDB áp dụng TTL 7 ngày từ lúc tạo. API chặn ngay khi hết hạn,
 - Water đọc ngày hoặc tuần từ dữ liệu đã lưu, dùng `Asia/Ho_Chi_Minh`. Ngày không có bản ghi được ghi rõ, các ngày tương lai không xuất hiện trong danh sách. Phần Water có dữ liệu mang `PARTIAL` vì ngày ghi gốc, đồng bộ đầy đủ và lịch sử mục tiêu chưa được xác minh.
 - [Assistant sandbox](assistant-sandbox.md) là đường chạy Gemini riêng với một fixture tổng hợp cố định.
 
-## Thử fixture Gemini từ composer
+## Thiết lập fixture cũ
+
+Phần dưới ghi lại cấu hình thử nghiệm cũ. Luồng hội thoại READY hiện dùng [cấu hình Gemini và VectorDB](assistant-ready-faq-live.md).
 
 Cờ boolean tùy chọn `geminiAccepted` xác nhận cho phép Gemini xử lý câu hỏi mẫu ở lượt hiện tại. Backend yêu cầu tài khoản sandbox đã cấu hình, cờ bật thử nghiệm và câu hỏi trùng khớp với fixture của máy chủ sau khi chuẩn hóa Unicode NFC, khoảng trắng hai đầu và chữ hoa/thường. Payload hiện có tiếp tục dùng luồng FAQ nội bộ và dịch vụ dữ liệu theo chủ sở hữu.
 
@@ -46,6 +48,4 @@ Mẫu T01 nhận câu `Nhật ký ngủ tổng hợp hôm nay ghi bao nhiêu ph�
 
 ## Local READY FAQ chat
 
-Set ASSISTANT_READY_FAQ_CHAT=true and ASSISTANT_RAG_SANDBOX_ENABLED=true. Set the existing ASSISTANT_SANDBOX_ACCOUNT_ID to the authenticated test account and ASSISTANT_VECTOR_MONGO_URI to the local assistant_vector database. Keep ASSISTANT_RAG_INGEST=false when using the existing corpus. The existing conversation turn endpoint uses the public FAQ path for a caller who consents to Gemini for that turn. It returns a server-attributed FAQ ID, title and version. The public query path does not read personal records. The legacy fixture path is still available in the original configuration for compatibility.
-
-The initial similarity threshold is 0.75. Calibrate on retrieval-evaluation.json before release beyond the sandbox.
+See [Assistant READY FAQ with Gemini](assistant-ready-faq-live.md) for the two Backend settings and current authentication, consent and retrieval behavior. The READY response includes server-attributed FAQ IDs, titles and versions. The similarity threshold remains 0.75.

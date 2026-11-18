@@ -5,16 +5,15 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
-import java.util.function.BooleanSupplier;
+import com.vitaloom.backend.sleep.service.SleepJournalService;
+import com.vitaloom.backend.statistics.service.SleepRecentStatisticsService;
+import com.vitaloom.backend.water.service.WaterService;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.security.authentication.TestingAuthenticationToken;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -23,71 +22,94 @@ class AssistantCourseFixtureTest {
     private final MongoTemplate mongo = mock(MongoTemplate.class);
     private final AssistantCourseAnswers local = mock(AssistantCourseAnswers.class);
     private final AssistantFixtureSearch search = mock(AssistantFixtureSearch.class);
-    private final AssistantChatService claims = mock(AssistantChatService.class);
     private final AssistantCourseController controller = new AssistantCourseController(mongo, local,
-            Clock.fixed(NOW, ZoneOffset.UTC), "", new ObjectProvider<>() {
-                @Override public AssistantFixtureSearch getIfAvailable() { return search; }
-            }, new ObjectProvider<>() {
-                @Override public AssistantChatService getObject() { return claims; }
-            }, "synthetic-a");
+            Clock.fixed(NOW, ZoneOffset.UTC), new org.springframework.beans.factory.support.StaticListableBeanFactory(
+                    java.util.Map.of("assistantReadyFaqSearch", search)).getBeanProvider(AssistantFixtureSearch.class));
     private final UUID conversation = UUID.randomUUID();
     private final UUID turn = UUID.randomUUID();
 
     @Test
-    void requiresExactFixtureExplicitAcknowledgementAndConfiguredOwner() {
+    void withoutConsentOrSearchUsesLocalAnswersForAuthenticatedOwners() {
         assertLocal("synthetic-a", AssistantFixture.QUESTION, null);
-        assertLocal("synthetic-b", AssistantFixture.QUESTION, true);
-        assertLocal("synthetic-a", AssistantFixture.QUESTION + " 375 ml", true);
-        verifyNoInteractions(search, claims);
+        assertLocal("synthetic-b", AssistantFixture.QUESTION, false);
+        assertLocal("synthetic-a", AssistantFixture.QUESTION + " 375 ml", false);
+        verifyNoInteractions(search);
     }
 
     @Test
-    void contextExperimentUsesExistingOwnerAndPerTurnConsentGates() {
-        ReflectionTestUtils.setField(controller, "readyFaqChat", true);
-        controller.setReadyFaqContextTopK(5);
-        assertLocal("synthetic-a", "Synthetic FAQ question", false);
-        assertLocal("synthetic-b", "Synthetic FAQ question", true);
+    void readyFaqUsesAnyAuthenticatedOwnerAndPerTurnConsentGate() {
+        var declinedRow = new AssistantConversation(conversation.toString(), "synthetic-b", 0L, NOW,
+                NOW.plusSeconds(600), false, List.of());
+        when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(declinedRow);
+        when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> call.getArgument(0));
+        when(local.answer("synthetic-b", "Synthetic FAQ question", false, null))
+                .thenReturn(new AssistantCourseAnswers.Answer("LOCAL", List.of(), null));
+        var declined = controller.turn(new TestingAuthenticationToken("synthetic-b", ""), conversation,
+                new AssistantCourseController.Send(turn, "Synthetic FAQ question", false));
+        assertThat(declined.turns().getFirst().outcome()).isEqualTo("LOCAL");
         verifyNoInteractions(search);
 
         String question = "Synthetic FAQ question";
-        var row = new AssistantConversation(conversation.toString(), "synthetic-a", 0L, NOW,
+        var row = new AssistantConversation(conversation.toString(), "synthetic-b", 0L, NOW,
                 NOW.plusSeconds(600), false, List.of());
         when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(row);
         when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> call.getArgument(0));
-        when(search.answerReadyFaqContext(question, turn, 5)).thenReturn(
+        when(search.answerReadyFaqContext(question, turn, 10)).thenReturn(
                 new AssistantCourseAnswers.Answer("ANSWERED", List.of(), null));
-        var reply = controller.turn(new TestingAuthenticationToken("synthetic-a", ""), conversation,
+        var reply = controller.turn(new TestingAuthenticationToken("synthetic-b", ""), conversation,
                 new AssistantCourseController.Send(turn, question, true));
         assertThat(reply.turns().getFirst().outcome()).isEqualTo("ANSWERED");
-        verify(search).answerReadyFaqContext(question, turn, 5);
+        verify(search).answerReadyFaqContext(question, turn, 10);
         verifyNoMoreInteractions(search);
-        assertThatThrownBy(() -> controller.setReadyFaqContextTopK(7)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
-    void returnsServerCitationAndDoesNotDispatchOnSavedReplay() {
-        var row = new AssistantConversation(conversation.toString(), "synthetic-a", 0L, NOW,
+    void returnsReadyCitationAndDoesNotDispatchOnSavedReplay() {
+        var row = new AssistantConversation(conversation.toString(), "synthetic-b", 0L, NOW,
                 NOW.plusSeconds(600), false, List.of());
         when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(row);
         when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> call.getArgument(0));
-        when(search.answer(eq(AssistantFixture.JOURNAL), eq(AssistantFixture.QUESTION),
-                any(BooleanSupplier.class))).thenAnswer(call -> call.<BooleanSupplier>getArgument(2).getAsBoolean());
-        when(claims.answer(eq("synthetic-a:" + conversation), eq(turn), eq(AssistantFixture.QUESTION), any(BooleanSupplier.class)))
-                .thenAnswer(call -> call.<BooleanSupplier>getArgument(3).getAsBoolean()
-                        ? AssistantTurn.Status.ANSWERED : AssistantTurn.Status.DEPENDENCY_UNAVAILABLE);
+        when(search.answerReadyFaqContext(AssistantFixture.QUESTION, turn, 10)).thenReturn(
+                new AssistantCourseAnswers.Answer("ANSWERED", List.of(new AssistantCourseAnswers.Part("ANSWERED",
+                        "Mở mục Giấc ngủ rồi chọn Nhật ký.", AssistantFixtureSearch.SOURCE)), null));
 
         var request = new AssistantCourseController.Send(turn, AssistantFixture.QUESTION, true);
-        var auth = new TestingAuthenticationToken("synthetic-a", "");
+        var auth = new TestingAuthenticationToken("synthetic-b", "");
         var reply = controller.turn(auth, conversation, request);
         assertThat(reply.turns().getFirst().outcome()).isEqualTo("ANSWERED");
         assertThat(reply.turns().getFirst().parts().getFirst().source()).isEqualTo(AssistantFixtureSearch.SOURCE);
         var saved = row.change(NOW, false, List.of(new AssistantConversation.Turn(turn.toString(),
-                AssistantFixture.QUESTION, NOW, new AssistantCourseAnswers.Answer(
-                        "ANSWERED", reply.turns().getFirst().parts(), null))));
+                AssistantFixture.QUESTION, NOW, new AssistantCourseAnswers.Answer("ANSWERED",
+                        reply.turns().getFirst().parts(), null))));
         when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(saved);
         assertThat(controller.turn(auth, conversation, request)).isEqualTo(reply);
-        verify(search, times(1)).answer(eq(AssistantFixture.JOURNAL), eq(AssistantFixture.QUESTION), any());
-        verifyNoInteractions(local);
+        verify(search, times(1)).answerReadyFaqContext(AssistantFixture.QUESTION, turn, 10);
+        verify(local).readyFaqLocalRoute(AssistantFixture.QUESTION);
+        verifyNoMoreInteractions(local);
+    }
+
+    @Test
+    void stockPriceQueryUsesLocalRouteBeforeReadyFaqDispatch() {
+        var row = new AssistantConversation(conversation.toString(), "synthetic-b", 0L, NOW,
+                NOW.plusSeconds(600), false, List.of());
+        when(mongo.findOne(any(Query.class), eq(AssistantConversation.class))).thenReturn(row);
+        when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> call.getArgument(0));
+        when(local.readyFaqLocalRoute("What is the stock price?")).thenReturn(
+                new AssistantCourseAnswers.Answer("INSUFFICIENT_EVIDENCE", List.of(), null));
+        var reply = controller.turn(new TestingAuthenticationToken("synthetic-b", ""), conversation,
+                new AssistantCourseController.Send(turn, "What is the stock price?", true));
+        assertThat(reply.turns().getFirst().outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        verifyNoInteractions(search);
+    }
+
+    @Test
+    void prescriptionStockAndUrgentSymptomsAreRoutedLocally() {
+        var answers = new AssistantCourseAnswers(mock(SleepJournalService.class),
+                mock(SleepRecentStatisticsService.class), mock(WaterService.class), Clock.fixed(NOW, ZoneOffset.UTC));
+        assertThat(answers.readyFaqLocalRoute("Tôi nên uống thuốc gì?").outcome()).isEqualTo("SAFETY");
+        assertThat(answers.readyFaqLocalRoute("Giá cổ phiếu Apple hôm nay?").outcome())
+                .isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(answers.readyFaqLocalRoute("Tôi bị đau ngực").outcome()).isEqualTo("SAFETY");
     }
 
     private void assertLocal(String owner, String text, Boolean accepted) {

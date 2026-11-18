@@ -25,4 +25,11 @@ final class AssistantActivation {
             return enabled != null ? enabled : StringUtils.hasText(environment.getProperty(KEY));
         }
     }
+
+    static final class VectorMongo implements Condition {
+        @Override
+        public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
+            return StringUtils.hasText(context.getEnvironment().getProperty("ASSISTANT_VECTOR_MONGO_URI"));
+        }
+    }
 }

@@ -17,7 +17,7 @@ This file is the navigation and shared-conventions entry point. Detailed endpoin
 | Steps | [Steps API](./metrics/steps.md) |
 | Sleep | [Sleep Journal F1](../features/sleep-journal/contract-reconciliation.md), [Sleep F2 Report and Insights](../features/sleep-report/api-contract.md), and [legacy daily contract](./metrics/sleep.md) |
 | Water | [Water Tracking API](../features/water/api-contract.md) |
-| Assistant | [Course MVP API](./assistant-course.md), [internal Gemini sandbox](./assistant-sandbox.md) |
+| Assistant | [Course API](./assistant-course.md), [READY FAQ with Gemini](./assistant-ready-faq-live.md), [legacy Gemini fixture](./assistant-sandbox.md) |
 
 ## 2. Shared conventions
 

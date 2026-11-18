@@ -4,6 +4,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -14,7 +15,6 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.data.mongodb.core.MongoTemplate;
 
 @Configuration(proxyBeanMethods = false)
-@Profile("!prod & !production")
 @Conditional(AssistantActivation.Gemini.class)
 class AssistantSandboxConfiguration {
     @Bean
@@ -24,11 +24,13 @@ class AssistantSandboxConfiguration {
     }
 
     @Bean
+    @Profile("!prod & !production")
     AssistantChatService assistantChatService(MongoTemplate mongo, AssistantProvider provider) {
         return new AssistantChatService(mongo, provider);
     }
 
-    @Bean
+    @Bean("assistantFixtureSearch")
+    @Profile("!prod & !production")
     @ConditionalOnProperty(name = "ASSISTANT_RAG_SANDBOX_ENABLED", havingValue = "true")
     AssistantFixtureSearch assistantFixtureSearch(MongoTemplate mongo, GeminiAssistantProvider provider,
             @Value("${ASSISTANT_VECTOR_MONGO_URI:}") String vectorUri,
@@ -49,8 +51,10 @@ class AssistantSandboxConfiguration {
     }
 
     @Bean
+    @Profile("!prod & !production")
     @ConditionalOnProperty(name = "ASSISTANT_RAG_INGEST", havingValue = "true")
-    ApplicationRunner assistantFixtureIngest(ObjectProvider<AssistantFixtureSearch> fixtureSearch) {
+    ApplicationRunner assistantFixtureIngest(
+            @Qualifier("assistantFixtureSearch") ObjectProvider<AssistantFixtureSearch> fixtureSearch) {
         return args -> {
             var logger = LoggerFactory.getLogger(AssistantSandboxConfiguration.class);
             var search = fixtureSearch.getIfAvailable();
