@@ -44,6 +44,23 @@ services:
         condition: service_healthy
     networks:
       - vitaloom-network
+
+  assistant-vector-health:
+    image: mongo:8.0.29-noble
+    entrypoint: ["bash", "-lc"]
+    command: ["sleep infinity"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "mongodb://assistant-vector:27017/admin?directConnection=true", "--file", "/opt/vitaloom-mongo/assistant-vector-ready.js"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+    volumes:
+      - ./tools/mongo/assistant-vector-ready.js:/opt/vitaloom-mongo/assistant-vector-ready.js:ro
+    networks:
+      - vitaloom-network
+      - assistant-vector-network
+
   nginx:
     image: nginx:1.31.4-alpine
     container_name: vitaloom_nginx_gateway
