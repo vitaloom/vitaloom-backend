@@ -105,8 +105,10 @@ class AssistantReadyFaqSearchTest {
         assertThat(GeminiAssistantProvider.parseFaqReply("{\"decision\":\"MATCH\",\"answer\":\"Grounded\"}"))
                 .isEqualTo("Grounded");
         for (String invalid : List.of("", "unstructured prose", "{\"answer\":\"missing decision\"}",
-                "{\"decision\":\"MATCH\",\"answer\":false}")) {
-            assertThatThrownBy(() -> GeminiAssistantProvider.parseFaqReply(invalid))
+                "{\"decision\":\"MATCH\",\"answer\":false}", "{decision:'NO_MATCH'}",
+                "{\"decision\":\"NO_MATCH\"} trailing prose", "{\"decision\":\"NO_MATCH\"} {}",
+                "{\"decision\":\"MATCH\",\"decision\":\"NO_MATCH\"}")) {
+            assertThatThrownBy(() -> GeminiAssistantProvider.parseFaqReply(invalid), "invalid reply %s", invalid)
                     .isInstanceOf(GeminiAssistantProvider.InvalidFaqResponse.class);
         }
     }

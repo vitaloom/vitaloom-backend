@@ -24,8 +24,19 @@ import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.core.retry.RetryPolicy;
 import org.springframework.core.retry.RetryTemplate;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.core.json.JsonFactory;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectReader;
 
 final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable {
+    private static final ObjectReader FAQ_REPLY_READER = new ObjectMapper(JsonFactory.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .build()).reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+
     private final Client client;
     private final GoogleGenAiChatModel model;
     private final String chatModel;
@@ -85,16 +96,20 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
 
     static String parseFaqReply(String text) {
         if (text == null || text.isBlank()) throw new InvalidFaqResponse();
-        org.bson.Document output;
+        JsonNode output;
         try {
-            output = org.bson.Document.parse(text);
-        } catch (org.bson.json.JsonParseException | org.bson.BsonInvalidOperationException failure) {
+            output = FAQ_REPLY_READER.readTree(text);
+        } catch (JacksonException failure) {
             throw new InvalidFaqResponse();
         }
-        if (output.size() == 1 && "NO_MATCH".equals(output.get("decision"))) return null;
-        if (output.size() == 2 && "MATCH".equals(output.get("decision"))
-                && output.get("answer") instanceof String answer && !answer.isBlank()) {
-            return answer.strip();
+        if (!output.isObject()) throw new InvalidFaqResponse();
+        var decision = output.path("decision");
+        if (!decision.isString()) throw new InvalidFaqResponse();
+        if (output.size() == 1 && "NO_MATCH".equals(decision.stringValue())) return null;
+        var answer = output.path("answer");
+        if (output.size() == 2 && "MATCH".equals(decision.stringValue())
+                && answer.isString() && !answer.stringValue().isBlank()) {
+            return answer.stringValue().strip();
         }
         throw new InvalidFaqResponse();
     }
