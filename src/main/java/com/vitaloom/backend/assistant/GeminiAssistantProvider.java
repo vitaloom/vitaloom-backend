@@ -77,6 +77,10 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
                 && AssistantFixture.matchesAnswer(evidence, result.getOutput().getText());
     }
 
+    org.springframework.ai.chat.messages.AssistantMessage.ToolCall selectVoiceTool(String transcript) {
+        return call(() -> AssistantVoiceTools.select(model, chatModel, transcript));
+    }
+
     void selectPersonalTool(String question, AssistantPersonalDataTools tools, BooleanSupplier current) {
         var callbacks = java.util.Arrays.stream(org.springframework.ai.support.ToolCallbacks.from(tools))
                 .filter(callback -> callback.getToolDefinition().name().equals("getRecentMainSleepTiming")

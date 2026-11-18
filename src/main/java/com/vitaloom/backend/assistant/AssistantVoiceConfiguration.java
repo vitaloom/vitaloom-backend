@@ -1,0 +1,31 @@
+package com.vitaloom.backend.assistant;
+
+import com.vitaloom.backend.sleep.service.SleepJournalService;
+import com.vitaloom.backend.water.service.WaterService;
+import java.time.Clock;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.mongodb.core.MongoTemplate;
+
+@Configuration(proxyBeanMethods = false)
+@Conditional({AssistantActivation.Course.class, AssistantActivation.Gemini.class})
+@ConditionalOnProperty(name = "ASSISTANT_VOICE_ENABLED", havingValue = "true")
+class AssistantVoiceConfiguration {
+    @Bean
+    AssistantSpeechToText assistantSpeechToText(
+            @Value("${ASSISTANT_VOICE_STT_FFMPEG:ffmpeg}") String ffmpeg,
+            @Value("${ASSISTANT_VOICE_STT_EXECUTABLE:whisper-cli}") String whisper,
+            @Value("${ASSISTANT_VOICE_STT_MODEL}") String sttModel) {
+        return new LocalAssistantSpeechToText(ffmpeg, whisper, sttModel);
+    }
+
+    @Bean
+    AssistantVoiceTurns assistantVoiceTurns(MongoTemplate mongo, Clock clock, GeminiAssistantProvider gemini,
+            WaterService water, SleepJournalService sleep, AssistantSpeechToText stt) {
+        return new AssistantVoiceTurns(mongo, clock, stt, gemini::selectVoiceTool,
+                new AssistantVoiceActions(water, sleep));
+    }
+}

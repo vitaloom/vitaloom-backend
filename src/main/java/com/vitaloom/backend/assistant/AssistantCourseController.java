@@ -69,14 +69,18 @@ class AssistantCourseController {
     ResponseEntity<View> create(Authentication auth, @Valid @RequestBody Acknowledgement request) {
         String owner = subject(auth);
         if (!request.accepted()) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
-        mongo.indexOps(AssistantConversation.class).createIndex(new Index().named("assistantCourseExpiry")
-                .on("expiresAt", Sort.Direction.ASC).expire(Duration.ZERO));
-        mongo.indexOps(AssistantConversation.class).createIndex(new Index().named("assistantCourseOwnerUpdated")
-                .on("owner", Sort.Direction.ASC).on("updatedAt", Sort.Direction.DESC));
+        ensureConversationIndexes(mongo);
         Instant now = clock.instant();
         var row = new AssistantConversation(UUID.randomUUID().toString(), owner, null, now,
                 now.plus(Duration.ofDays(7)), false, List.of());
         return ResponseEntity.status(HttpStatus.CREATED).body(view(mongo.insert(row)));
+    }
+
+    static void ensureConversationIndexes(MongoTemplate mongo) {
+        mongo.indexOps(AssistantConversation.class).createIndex(new Index().named("assistantCourseExpiry")
+                .on("expiresAt", Sort.Direction.ASC).expire(Duration.ZERO));
+        mongo.indexOps(AssistantConversation.class).createIndex(new Index().named("assistantCourseOwnerUpdated")
+                .on("owner", Sort.Direction.ASC).on("updatedAt", Sort.Direction.DESC));
     }
 
     @GetMapping("/{id}")
@@ -186,7 +190,7 @@ class AssistantCourseController {
         return row;
     }
 
-    private static View view(AssistantConversation row) {
+    static View view(AssistantConversation row) {
         return new View(row.id(), row.updatedAt(), row.personalAllowed(), row.turns().stream()
                 .map(turn -> new Message(turn.turnId(), turn.text(), turn.reply().outcome(), turn.reply().parts())).toList());
     }

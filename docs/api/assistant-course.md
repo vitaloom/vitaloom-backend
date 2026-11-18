@@ -60,3 +60,16 @@ Mẫu T01 nhận câu `Nhật ký ngủ tổng hợp hôm nay ghi bao nhiêu ph�
 ## Local READY FAQ chat
 
 See [Assistant READY FAQ with Gemini](assistant-ready-faq-live.md) for the two Backend settings and current authentication, consent and retrieval behavior. The READY response includes server-attributed FAQ IDs, titles and versions. The similarity threshold remains 0.75.
+
+## Ghi nhật ký bằng giọng nói
+
+`POST /api/assistant/mvp/voice-turns` nhận Bearer access JWT và multipart form gồm `audio`, `turnId` (UUID), `consentAccepted=true`. Audio tối đa 1 MiB và 20 giây. Hỗ trợ M4A/MP4, WebM và WAV. Mỗi lượt trả HTTP 200 và một hội thoại mới theo cấu trúc trên, với bản chép lời và kết quả ghi. Khi bản chép lời thiếu thông tin bắt buộc, hội thoại vẫn hiển thị yêu cầu và lý do chưa ghi. Audio rỗng hoặc kiểu không hỗ trợ trả 400 hoặc 415. Audio vượt giới hạn dung lượng trả 413. Lượt chưa đồng ý trả 403. Audio không có bản chép lời dùng được trả 422. STT hoặc kho hội thoại không khả dụng trả 503.
+
+Backend dùng JWT subject để tạo bản ghi qua Water và Sleep Journal v2. Sau khi STT cục bộ hoàn tất, Gemini chỉ nhận bản chép lời hiện tại và mô tả hai công cụ nội bộ. Backend xác minh tham số được trích từ lời nói và thực thi tối đa một công cụ tạo mới. Nội dung phản hồi xác nhận được tạo từ kết quả dịch vụ chủ quản. Audio là dữ liệu tạm để nhận dạng. Bản chép lời đi vào lịch sử hội thoại có thời hạn 7 ngày và có thể xóa từ Assistant.
+
+- `recordWater` nhận lượng nước có đơn vị và thời điểm nếu người dùng nêu rõ. Mặc định thời điểm nhận lượt và dùng `Asia/Ho_Chi_Minh` cho giờ địa phương. Ví dụ “Nhập lượng nước 250ml tại thời điểm hiện tại cho tôi”.
+- `recordSleep` cần cảm nhận Tốt, Bình thường hoặc Mệt mỏi. Nêu thời lượng và ngày thức dậy hoặc hai mốc giờ có ngày. Ví dụ “Nhập 8 tiếng ngủ cho ngày 17/11, cảm giác tốt” hoặc “Nhập cho tôi thời gian ngủ từ 11h20 tối hôm qua đến 6h sáng hôm nay, cảm giác tốt”. Ngày không có năm dùng năm hiện tại. Giới hạn tuần, trùng ngày, trùng khoảng giờ và các kiểm tra khác của Sleep Journal v2 tiếp tục áp dụng.
+
+Trong thời hạn 7 ngày, gửi lại cùng tài khoản, UUID và audio trả hội thoại đã lưu mà không gọi lại Gemini hoặc ghi thêm bản ghi. Khi lượt đang xử lý, hội thoại đã bị xóa hoặc UUID trùng với audio khác, Backend trả 409. Nếu kết quả ghi chưa xác định, ứng dụng cần kiểm tra nhật ký trước khi tạo lượt mới.
+
+Để bật trong môi trường thử nghiệm, đặt `ASSISTANT_VOICE_ENABLED=true`, `ASSISTANT_GEMINI_API_KEY` và `ASSISTANT_VOICE_STT_MODEL` trỏ tới mô hình whisper.cpp đa ngôn ngữ đã cài trên máy chạy Backend. Cài FFmpeg và `whisper-cli` trên máy đó. Có thể cấu hình đường dẫn chương trình qua `ASSISTANT_VOICE_STT_FFMPEG` và `ASSISTANT_VOICE_STT_EXECUTABLE`. Đặt `EXPO_PUBLIC_ASSISTANT_VOICE=true` khi build Mobile và dùng dev build có module ghi âm. Không cần VectorDB cho lượt giọng nói.
