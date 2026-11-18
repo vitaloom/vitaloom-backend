@@ -1,6 +1,6 @@
 # Assistant MVP cho đồ án
 
-Trong profile mặc định, đặt `ASSISTANT_GEMINI_API_KEY` để bật cả API hội thoại và [Gemini sandbox](assistant-sandbox.md). Để chạy hội thoại local với key trống, dùng thuộc tính `vitaloom.assistant.course.enabled=true`. Có thể đặt thuộc tính đó thành `false` để tắt riêng hội thoại. Profile `prod` hoặc `production` vô hiệu hóa API. Mỗi request cần Bearer access JWT. `ASSISTANT_COURSE_ACCOUNT_IDS` là danh sách JWT subject tùy chọn, phân cách bằng dấu phẩy.
+Đặt `ASSISTANT_GEMINI_API_KEY` và `ASSISTANT_VECTOR_MONGO_URI` để dùng [Gemini với corpus READY](assistant-ready-faq-live.md) trên mọi Spring profile. Mỗi request cần Bearer access JWT. Backend dùng JWT subject để xác định chủ hội thoại. Có thể bật hội thoại local với key trống bằng `vitaloom.assistant.course.enabled=true`, hoặc đặt thuộc tính đó thành `false` để tắt API hội thoại.
 
 Các đường dẫn dưới đây tương đối với `/api/assistant/mvp/conversations`.
 
