@@ -118,7 +118,7 @@ final class AssistantCourseAnswers {
         return new Answer(outcome, List.copyOf(parts), context);
     }
 
-    Answer readyFaqLocalRoute(String text) {
+    Answer readyFaqLocalRoute(String owner, String text, boolean personalAllowed, Context previous) {
         String query = normalize(text);
         var local = answer("", text, false, null);
         if ("SAFETY".equals(local.outcome())) return local;
@@ -127,7 +127,20 @@ final class AssistantCourseAnswers {
             return new Answer("INSUFFICIENT_EVIDENCE", List.of(new Part("INSUFFICIENT_EVIDENCE",
                     "Trợ lý không cung cấp giá cổ phiếu hoặc thông tin thị trường trực tiếp.", null)), null);
         }
+        if (isPersonalRecentSleep(query)) return answer(owner, text, personalAllowed, previous);
         return null;
+    }
+
+    private static boolean isPersonalRecentSleep(String query) {
+        return java.util.Arrays.stream(query.split("[;]|\\s+(?:va|and)\\s+"))
+                .anyMatch(clause -> {
+                    String words = clause.replaceAll("[^a-z0-9 ]", " ").replaceAll("\\s+", " ").strip();
+                    if (words.equals("giac ngu gan day")) return true;
+                    if (intent(clause) != Intent.SLEEP_RECENT) return false;
+                    return has(" " + words + " ", " cua toi ", " cua minh ", " my sleep ",
+                            " my recent sleep ", " i slept ", " i sleep ", " toi ngu ", " toi da ngu ",
+                            " minh ngu ", " minh da ngu ");
+                });
     }
 
     private static boolean isPrescriptionQuery(String query) {
@@ -151,8 +164,15 @@ final class AssistantCourseAnswers {
                 if (!"VERIFIED".equals(report.dataStatus())) {
                     yield absent(report.dataStatus(), source);
                 }
-                yield new Part("ANSWERED", "Có %d/%d ngày được ghi nhận, trung bình %d phút/ngày có bản ghi."
-                        .formatted(report.recordedDays(), report.coverageDenominator(), report.averageMinutesPerRecordedDay()), source);
+                String days = report.days().stream().sorted(java.util.Comparator.comparing(
+                                SleepRecentStatisticsService.Day::day))
+                        .map(day -> day.day() + ": " + ("RECORDED".equals(day.status()) && day.minutes() != null
+                                ? day.minutes() + " phút" : "NOT_RECORDED".equals(day.status())
+                                        ? "Chưa ghi nhận" : "Chưa thể xác minh"))
+                        .reduce((first, next) -> first + "\n" + next).orElse("");
+                yield new Part("ANSWERED", "Có %d/%d ngày được ghi nhận, trung bình %d phút/ngày có bản ghi.\n%s"
+                        .formatted(report.recordedDays(), report.coverageDenominator(),
+                                report.averageMinutesPerRecordedDay(), days), source);
             }
             case WATER_DAY -> {
                 var summary = water.dailySummary(owner, date.toString(), ZONE.getId());

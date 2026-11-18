@@ -122,7 +122,7 @@ class AssistantCourseController {
         if (search == null) {
             answer = answers.answer(owner, text, row.personalAllowed(), context);
         } else {
-            answer = answers.readyFaqLocalRoute(text);
+            answer = answers.readyFaqLocalRoute(owner, text, row.personalAllowed(), context);
             if (answer == null) {
                 try {
                     answer = search.answerReadyFaqContext(text, request.turnId(), 10);
