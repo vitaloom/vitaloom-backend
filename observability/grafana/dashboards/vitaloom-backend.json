@@ -1,0 +1,268 @@
+{
+  "uid": "vitaloom-backend",
+  "title": "VitaLoom Backend",
+  "schemaVersion": 39,
+  "refresh": "15s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Backend metrics arriving",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "vitaloom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "No recent metrics"
+                },
+                "1": {
+                  "text": "Receiving metrics"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max(up{job=\"otel-collector\"}) == bool 1) * ((count(process_uptime_milliseconds{application=\"vitaloom-backend\"}) > bool 0) or vector(0))",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "description": "A backend process series is present and the Collector is reachable. Undelivered backend metrics expire from the Collector after 45 seconds."
+    },
+    {
+      "id": 2,
+      "title": "Requests per second",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "vitaloom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_server_requests_milliseconds_count{application=\"vitaloom-backend\"}[2m]))"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "HTTP 5xx ratio",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "vitaloom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum(rate(http_server_requests_milliseconds_count{application=\"vitaloom-backend\",status=~\"5..\"}[2m])) or (0 * sum(rate(http_server_requests_milliseconds_count{application=\"vitaloom-backend\"}[2m])))) / (sum(rate(http_server_requests_milliseconds_count{application=\"vitaloom-backend\"}[2m])) > 0)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "HTTP latency",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "vitaloom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_server_requests_milliseconds_sum{application=\"vitaloom-backend\"}[2m])) / (sum(rate(http_server_requests_milliseconds_count{application=\"vitaloom-backend\"}[2m])) > 0)",
+          "legendFormat": "Mean"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_milliseconds_bucket{application=\"vitaloom-backend\"}[2m])))",
+          "legendFormat": "P95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_requests_milliseconds_bucket{application=\"vitaloom-backend\"}[2m])))",
+          "legendFormat": "P99"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "JVM memory used",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "vitaloom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (area) (jvm_memory_used_bytes{application=\"vitaloom-backend\"})"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "JVM GC pauses per second",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "vitaloom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(jvm_gc_pause_milliseconds_count{application=\"vitaloom-backend\"}[2m]))"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "JVM threads",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "vitaloom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jvm_threads_live{application=\"vitaloom-backend\"}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "MongoDB driver pool",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "vitaloom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "mongodb_driver_pool_size{application=\"vitaloom-backend\"}",
+          "legendFormat": "Pool size"
+        },
+        {
+          "refId": "B",
+          "expr": "mongodb_driver_pool_checkedout{application=\"vitaloom-backend\"}",
+          "legendFormat": "Checked out"
+        },
+        {
+          "refId": "C",
+          "expr": "mongodb_driver_pool_waitqueuesize{application=\"vitaloom-backend\"}",
+          "legendFormat": "Wait queue"
+        }
+      ]
+    }
+  ]
+}

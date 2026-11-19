@@ -94,6 +94,10 @@ The application listens on port `8080` by default. Override it with `SERVER_PORT
 
 After changing `SERVER_PORT`, restart Spring Boot and run `docker compose up -d nginx` to apply the new upstream port. With the default gateway port, `GET http://localhost/api/health` checks connectivity through Nginx.
 
+Nginx defines rate-limit zones in `nginx/rate-limit-zones.conf` and applies them in `nginx/rate-limit-routes.conf`. After changing either file, recreate the gateway with `docker compose up -d --no-deps --force-recreate nginx`.
+
+For an isolated backend benchmark with several simulated users on one IP, set `INGESTION_LIMIT_DRY_RUN=on` in the test Compose environment before recreating Nginx. The default is `off`, which enforces both ingestion limits.
+
 The auth feature provides `POST /api/auth/register`, `/login`, `/refresh` and protected `GET /api/auth/me`. The protected Water Tracking MVP provides daily and weekly reads plus log creation; see the [Water contract](./docs/features/water/api-contract.md). Heart Rate and Steps batch ingestion and statistics routes are listed in the [API contract index](./docs/api/api-contract.md).
 
 ## 4. Run tests
@@ -107,6 +111,71 @@ Windows:
 ```powershell
 .\mvnw.cmd test
 ```
+
+## Local observability
+
+On Windows, start the database and the separate monitoring stack, then run Spring Boot with the observability profile:
+
+```powershell
+docker compose up -d mongodb nginx
+docker compose -f docker-compose.obs.yml up -d
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=observability"
+```
+
+On macOS or Linux, use `./mvnw` in the last command. If the wrapper is unavailable on Windows, use `mvn.cmd spring-boot:run "-Dspring-boot.run.profiles=observability"` with an installed Maven. The regular backend launch leaves OTLP export disabled.
+
+Spring Boot pushes cumulative metrics every 15 seconds to the Collector on localhost port 4318. Prometheus scrapes the Collector over the Compose network. Local ports can be overridden with `OBS_OTLP_PORT`, `OBS_PROMETHEUS_PORT` and `OBS_GRAFANA_PORT`. If changing `OBS_OTLP_PORT`, set it in the environment of both Compose and Spring Boot.
+
+- Open Grafana at http://127.0.0.1:3000 and select the **VitaLoom Backend** dashboard. A fresh local Grafana volume uses the default `admin` login and prompts for a password change.
+- Open Prometheus at http://127.0.0.1:9090. Send requests to `GET /api/health` and check `http_server_requests_milliseconds_count{application="vitaloom-backend"}` and `http_server_requests_milliseconds_bucket{application="vitaloom-backend"}` after an export and scrape cycle. Rate and percentile panels need at least two samples.
+- `up{job="otel-collector"}` shows whether Prometheus can scrape the Collector. The dashboard also checks for a backend process metric, which expires after 45 seconds without updates, plus time for the next scrape to observe its absence.
+
+Stop the monitoring stack with `docker compose -f docker-compose.obs.yml down`. The Prometheus and Grafana volumes persist.
+
+### Docker container metrics
+
+The observability Compose stack starts cAdvisor automatically. Open **VitaLoom Infrastructure** in Grafana and select a container by name to see CPU, memory working set, and network receive and transmit rates. The Collector scrapes cAdvisor over the internal Compose network and keeps metrics for the `vitaloom-backend` and `vitaloom-observability` projects. Rate panels need at least two scrapes.
+
+Start the backend Compose stack first so it creates the `vitaloom-network` and the Nginx monitoring volumes used by the Collector. Open **VitaLoom Nginx** in Grafana to see HTTP request rate, current connections by state, rate-limit rejections, and accepted and handled connection rates. Nginx serves `stub_status` on an unpublished container port. The request counter includes the Collector's own status requests, including when there is no application traffic.
+
+Docker rotates the Nginx container logs at 10 MB per file and keeps up to three files. Recreate the Nginx container to apply logging changes to an existing container.
+
+The separate monitoring file records requests rejected by the Nginx rate limiter and a zero-value heartbeat for each internal status scrape. The Collector reads this volume with read-only access and publishes the rejection counter to Prometheus. The Nginx container checks the file size every five seconds, rotates at 10 MiB, and retains two rotated files. A burst can take the active file over the threshold between checks.
+
+The Collector stores its read position in a separate volume. Its in-memory rejection counter resets on restart, and an extended outage can miss entries if their files rotate out before collection. To compare gateway activity with backend traffic, run Spring Boot with the `observability` profile and view **VitaLoom Backend** over the same time range.
+
+### MongoDB service metrics
+
+On a new or existing MongoDB volume, create a dedicated monitoring account once. After MongoDB is healthy, open its shell as the local administrator:
+
+```powershell
+docker compose exec mongodb sh -c 'exec mongosh --username "$MONGO_INITDB_ROOT_USERNAME" --authenticationDatabase admin --password'
+```
+
+In `mongosh`, run the following and enter a new monitoring password when prompted:
+
+```javascript
+db.getSiblingDB("admin").createUser({
+  user: "vitaloom_monitor",
+  pwd: passwordPrompt(),
+  roles: [{ role: "clusterMonitor", db: "admin" }]
+})
+```
+
+Set `OBS_MONGODB_PASSWORD` to that password in your local `.env`. Set `OBS_MONGODB_USER` if you chose a different username. Restart the Collector with `docker compose -f docker-compose.obs.yml up -d --no-deps otel-collector` and open **VitaLoom MongoDB**. The Collector connects directly to the single local replica-set node over Docker and collects service metrics every 30 seconds. The dashboard shows current and available connections and operations per second by type. The operation counters apply to the MongoDB server and include traffic from clients other than VitaLoom Backend.
+
+### Windows host metrics
+
+Download the [windows_exporter executable](https://github.com/prometheus-community/windows_exporter/releases/tag/v0.32.1) and run it directly on Windows during measurement. For the x64 executable downloaded to the Downloads folder:
+
+```powershell
+& "$env:USERPROFILE\Downloads\windows_exporter-0.32.1-amd64.exe" --web.listen-address=127.0.0.1:9182 --collectors.enabled=cpu,memory,logical_disk,physical_disk,net
+```
+
+Leave the window open while measuring and press Ctrl+C to stop. The Collector reads metrics every 15 seconds through `host.docker.internal:9182`. Open **VitaLoom Windows Host** for host CPU, available RAM, free disk space, disk latency, and network throughput. Use the network adapter selector to focus on the interface carrying application traffic. If the exporter is stopped or unreachable, the dashboard shows that the Windows metrics source is down.
+
+On Docker Desktop with Linux containers, cAdvisor uses the Linux PID namespace, the Docker socket for container names, and the containerd socket for container metadata with the containerd image store. The sockets grant access to their respective APIs. Only cAdvisor mounts them, and its metrics port stays inside Compose.
+
 
 ## MongoDB lifecycle notes
 

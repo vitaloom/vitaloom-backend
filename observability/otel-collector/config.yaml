@@ -1,0 +1,114 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+  prometheus/cadvisor:
+    config:
+      scrape_configs:
+        - job_name: cadvisor
+          scrape_interval: 15s
+          static_configs:
+            - targets: [cadvisor:8080]
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: 'container_(cpu_usage_seconds_total|memory_working_set_bytes|network_(receive|transmit)_bytes_total)'
+              action: keep
+            - source_labels: [name, container_label_com_docker_compose_project]
+              regex: '.+;(vitaloom-backend|vitaloom-observability)'
+              action: keep
+            - source_labels: [name]
+              target_label: container_name
+
+  prometheus/windows:
+    config:
+      scrape_configs:
+        - job_name: windows-host
+          scrape_interval: 15s
+          static_configs:
+            - targets: [host.docker.internal:9182]
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: 'windows_(cpu_time_seconds_total|memory_available_bytes|logical_disk_(free|size)_bytes|physical_disk_(read_latency_seconds_total|write_latency_seconds_total|reads_total|writes_total)|net_bytes_(received|sent)_total)'
+              action: keep
+
+  nginx:
+    endpoint: http://nginx:8080/stub_status
+    collection_interval: 15s
+
+  mongodb:
+    hosts:
+      - endpoint: mongodb:27017
+    username: ${env:OBS_MONGODB_USER}
+    password: ${env:OBS_MONGODB_PASSWORD}
+    auth_source: admin
+    direct_connection: true
+    collection_interval: 30s
+    timeout: 5s
+    tls:
+      insecure: true
+
+  filelog/nginx_rate_limit:
+    include:
+      - /var/log/vitaloom/rate-limit.log
+      - '/var/log/vitaloom/rate-limit.log.[12]'
+    start_at: end
+    storage: file_storage
+    include_file_name: false
+    operators:
+      - type: regex_parser
+        regex: '^(?P<rejected>[01]) [0-9]+\.[0-9]+ [0-9]+$'
+
+extensions:
+  file_storage:
+    directory: /var/lib/vitaloom-collector
+
+connectors:
+  signal_to_metrics:
+    logs:
+      - name: nginx.rate_limit.rejected
+        description: Client requests rejected by the Nginx rate limiter
+        sum:
+          value: Int(attributes["rejected"])
+          monotonic: true
+
+processors:
+  deltatocumulative:
+  filter/mongodb:
+    error_mode: ignore
+    metrics:
+      metric:
+        - 'name != "mongodb.connection.count" and name != "mongodb.operation.count"'
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    metric_expiration: 45s
+
+service:
+  extensions: [file_storage]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+    metrics/cadvisor:
+      receivers: [prometheus/cadvisor]
+      exporters: [prometheus]
+    metrics/windows:
+      receivers: [prometheus/windows]
+      exporters: [prometheus]
+    metrics/nginx:
+      receivers: [nginx]
+      exporters: [prometheus]
+    metrics/mongodb:
+      receivers: [mongodb]
+      processors: [filter/mongodb]
+      exporters: [prometheus]
+    logs/nginx_rate_limit:
+      receivers: [filelog/nginx_rate_limit]
+      exporters: [signal_to_metrics]
+    metrics/nginx_rate_limit:
+      receivers: [signal_to_metrics]
+      processors: [deltatocumulative]
+      exporters: [prometheus]

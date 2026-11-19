@@ -23,11 +23,11 @@ This file is the navigation and shared-conventions entry point. Detailed endpoin
 
 - API paths use the `/api` prefix. The backend local-development Compose stack exposes MongoDB and Mongo Express; Spring Boot runs directly on the host. The former demo's Nginx gateway is not required by this contract.
 - Successful JSON request and response bodies use `Content-Type: application/json`. Request-level error responses use `application/problem+json` as described in [Generic error response](#generic-error-response).
-- `occurredAt` records when a measurement or user action happened. The backend adds `receivedAt` when it receives an ingestion batch; the same receipt instant is assigned to newly accepted measurements in that batch.
+- `occurredAt` records when a point measurement or user action happened. Steps also accepts an explicitly documented interval form; the backend adds `receivedAt` when it receives an ingestion batch and assigns the same receipt instant to newly accepted measurements in that batch.
 - Persist event instants as UTC. Java code uses `Instant`; MongoDB BSON Date stores millisecond precision.
 - Keep raw events/records as the source of truth. Spring Boot is responsible for validation, persistence and aggregation; clients and the producer must not calculate and submit authoritative daily totals.
 - A missing metric is represented by `null`, not zero. For Steps, an empty statistics bucket is `steps: null` and `eventCount: 0`; it does not prove zero activity or complete data coverage.
-- For the MVP, a day starts at 00:00 in `Asia/Ho_Chi_Minh`. The backend derives the local statistics date from the original `occurredAt`. Water Tracking reads use the requested `timeZone` as defined in the Water Tracking contract.
+- For the MVP, a day starts at 00:00 in `Asia/Ho_Chi_Minh`. The backend derives the local Steps statistics date from the event's statistics anchor: `occurredAt` for legacy point events and `startAt` for interval events. Water Tracking reads use the requested `timeZone` as defined in the Water Tracking contract.
 - Clients/producers create stable IDs for their own retryable write records and must reuse the same ID when retrying that record.
 - Spring Boot enforces uniqueness, backed by MongoDB unique indexes. An API gateway, if present, does not create business IDs or decide whether a record is a duplicate.
 - A retry with an already accepted ID must not create a second record or double-count a metric.

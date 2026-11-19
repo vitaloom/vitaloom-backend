@@ -38,3 +38,13 @@ vitaloom:
     server-selection-timeout-ms: ${MONGO_SERVER_SELECTION_TIMEOUT_MS:2000}
     transactions:
       enabled: ${MONGO_TRANSACTIONS_ENABLED:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        exclude: "*"
+  otlp:
+    metrics:
+      export:
+        enabled: false
