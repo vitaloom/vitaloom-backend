@@ -27,6 +27,20 @@ services:
     networks:
       - vitaloom-network
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - vitaloom-network
+
   mongo-express:
     image: mongo-express:1.0.2-18-alpine3.19
     container_name: vitaloom_mongo_express_ui
@@ -44,6 +58,23 @@ services:
         condition: service_healthy
     networks:
       - vitaloom-network
+
+  assistant-vector-health:
+    image: mongo:8.0.29-noble
+    entrypoint: ["bash", "-lc"]
+    command: ["sleep infinity"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "mongodb://assistant-vector:27017/admin?directConnection=true", "--file", "/opt/vitaloom-mongo/assistant-vector-ready.js"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+    volumes:
+      - ./tools/mongo/assistant-vector-ready.js:/opt/vitaloom-mongo/assistant-vector-ready.js:ro
+    networks:
+      - vitaloom-network
+      - assistant-vector-network
+
   nginx:
     image: nginx:1.31.4-alpine
     container_name: vitaloom_nginx_gateway
@@ -75,9 +106,9 @@ services:
       - ./nginx/rotate-rate-limit-log.sh:/etc/nginx/vitaloom/rotate-rate-limit-log.sh:ro
       - nginx-monitoring-logs:/var/log/vitaloom
       - nginx-monitoring-offsets:/var/lib/vitaloom-collector
-#    depends_on:
-#      server:
-#        condition: service_healthy
+    depends_on:
+      assistant-vector-health:
+        condition: service_healthy
     networks:
       - vitaloom-network
 
@@ -95,3 +126,6 @@ networks:
   vitaloom-network:
     name: vitaloom-network
     driver: bridge
+  assistant-vector-network:
+    name: vitaloom-assistant-vector
+    external: true

@@ -1,0 +1,64 @@
+[
+  {
+    "collection": "assistant_ready_faq",
+    "bsonHash": "505b9059df0c7805ad997fdccd8db489",
+    "count": 85,
+    "model": [
+      "gemini-embedding-2"
+    ],
+    "generation": [],
+    "name": "assistant_ready_faq_v1",
+    "type": "vectorSearch",
+    "definition": {
+      "fields": [
+        {
+          "type": "vector",
+          "path": "embedding",
+          "numDimensions": 768,
+          "similarity": "cosine"
+        },
+        {
+          "type": "filter",
+          "path": "active"
+        }
+      ]
+    }
+  },
+  {
+    "collection": "assistant_sandbox_faq",
+    "bsonHash": "120c42392d357265c5bc8ecbd92d89f3",
+    "count": 3,
+    "model": [],
+    "generation": [
+      "fixture-v1-gemini-embedding-2-768"
+    ],
+    "name": "assistant_fixture_v1",
+    "type": "vectorSearch",
+    "definition": {
+      "fields": [
+        {
+          "type": "vector",
+          "path": "embedding",
+          "numDimensions": 768,
+          "similarity": "cosine"
+        },
+        {
+          "type": "filter",
+          "path": "status"
+        },
+        {
+          "type": "filter",
+          "path": "language"
+        },
+        {
+          "type": "filter",
+          "path": "domain"
+        },
+        {
+          "type": "filter",
+          "path": "generation"
+        }
+      ]
+    }
+  }
+]

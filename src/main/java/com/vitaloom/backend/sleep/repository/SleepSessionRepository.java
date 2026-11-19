@@ -78,6 +78,14 @@ public class SleepSessionRepository {
                 SleepSession.class);
     }
 
+    public List<SleepSession> findMainByOwnerAndDayBetween(String owner, String fromInclusive, String toInclusive) {
+        Query query = Query.query(Criteria.where("owner").is(owner)
+                .and("sleep_type").is("MAIN")
+                .and("statistical_day").gte(fromInclusive).lte(toInclusive))
+                .with(Sort.by(Sort.Order.asc("statistical_day"), Sort.Order.asc("_id")));
+        return mongo.find(query, SleepSession.class);
+    }
+
     public boolean existsRangeOverlap(String owner, SleepSession candidate) {
         return mongo.exists(Query.query(Criteria.where("owner").is(owner)
                 .and("sleep_type").is("MAIN").and("_id").ne(candidate.getId())

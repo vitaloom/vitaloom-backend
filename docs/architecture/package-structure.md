@@ -51,11 +51,11 @@ Provider read contracts use `<provider>.contract` for the interface and `.contra
 | `heartrate` | Implemented | Raw Heart Rate ingestion, validation, persistence and raw-data queries | Live: Statistics uses `HeartRateReadQuery` |
 | `steps` | Implemented | Raw step ingestion, validation, persistence and raw-data queries | Live: Statistics uses `StepsReadQuery` |
 | `water` | Implemented | Water log input, validation, persistence and Water summaries | None; not yet composed by Statistics |
-| `sleep` | Implemented for F1 | Sleep Journal sessions and validation | No Statistics dependency |
-| `statistics` | Partially implemented | Aggregate calculations and read responses | Uses Heart Rate and Steps provider read contracts |
+| `sleep` | F1 Journal and F2 P1 report implemented | Sleep Journal records, raw read contract, and Recent Sleep Report HTTP API | Report adapter is wired to the Statistics calculator in application configuration |
+| `statistics` | Partially implemented | Aggregate calculations and Statistics API responses | Uses Heart Rate, Steps and Sleep provider read contracts |
 | `healthcheck` | Implemented | Application availability endpoint | None |
 
-The cross-metric daily dashboard and Statistics composition for Sleep and Water are planned. Water Tracking itself is implemented and documented under [Water](../features/water/README.md) and its [API contract](../features/water/api-contract.md). A documented endpoint or future package does not imply runtime implementation; check [API contract index](../api/api-contract.md) and source before relying on it.
+The cross-metric daily dashboard and Statistics composition for Sleep and Water remain planned. The implemented [Sleep F2 P1 report](../features/sleep-report/api-contract.md) serves the single-metric Sleep workflow. Water Tracking itself is implemented and documented under [Water](../features/water/README.md) and its [API contract](../features/water/api-contract.md). A documented endpoint or future package does not imply runtime implementation; check [API contract index](../api/api-contract.md) and source before relying on it.
 
 Statistics reaches Heart Rate and raw Steps through `HeartRateReadQuery` and `StepsReadQuery`, with exchanged sample types in each provider's `contract.dto`. It reads AHM-owned Step Goal history through the separate `steps.goal.contract.StepGoalReadQuery`; Statistics does not inject goal or metric repositories or query collections directly. Statistics owns derived values; Steps Journal owns raw records and the Steps goal subfeature owns goal snapshots. See [ADR-001](decisions/ADR-001-statistics-owns-aggregate-read-models.md).
 

@@ -3,6 +3,9 @@ package com.vitaloom.backend.sleep.controller.exceptionhandler;
 import com.vitaloom.backend.shared.web.ProblemDetailExceptionHandler;
 import com.vitaloom.backend.shared.web.ProblemDetails;
 import com.vitaloom.backend.sleep.controller.SleepJournalController;
+import com.vitaloom.backend.sleep.controller.SleepGoalController;
+import com.vitaloom.backend.sleep.controller.SleepReportInsightController;
+import com.vitaloom.backend.sleep.controller.SleepStoryController;
 import com.vitaloom.backend.sleep.exception.SleepFailure;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatusCode;
@@ -13,8 +16,10 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @Order(0)
-@RestControllerAdvice(assignableTypes = SleepJournalController.class)
-public class SleepJournalExceptionHandler extends ProblemDetailExceptionHandler {
+@RestControllerAdvice(assignableTypes = {
+        SleepJournalController.class, SleepReportInsightController.class, SleepStoryController.class,
+        SleepGoalController.class})
+public class SleepExceptionHandler extends ProblemDetailExceptionHandler {
     @Override
     protected String defaultClientErrorCode() {
         return "VALIDATION_ERROR";

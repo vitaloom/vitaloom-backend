@@ -20,7 +20,7 @@ The runtime and local MongoDB infrastructure are ready for feature implementatio
 
 The repository is the source of truth for new backend implementation and API-contract changes. Keep Mobile and Data Producer compatibility in mind when changing request/response shapes, statuses, identifiers, timestamps or aggregation behavior.
 
-The local Compose stack starts MongoDB and Mongo Express only. Spring Boot runs on the host. It does not start the demo Nginx gateway, Mobile app or Go Data Producer.
+Local Compose starts the infrastructure. Spring Boot, the Mobile app and the Go Data Producer run separately.
 
 ## Prerequisites
 
@@ -48,18 +48,49 @@ Change the sample passwords before starting the stack. The checked-in example va
 
 For authentication, set `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` in the untracked `.env`. Use two different random values of at least 32 bytes each. `JWT_ISSUER` is optional. The application refuses to start without usable signing secrets. Keep these values out of source control and out of the mobile `EXPO_PUBLIC_` configuration.
 
-## 2. Start local infrastructure
+To enable READY FAQ when you start Spring Boot in step 3, set `ASSISTANT_VECTOR_MONGO_URI=mongodb://127.0.0.1:27183/assistant_vector?directConnection=true&serverSelectionTimeoutMS=2000` and configure `ASSISTANT_GEMINI_API_KEY` in the local `.env`. If you set a custom `ASSISTANT_VECTOR_PORT`, use the same port in the URI. Keep `gemini-embedding-2` as the embedding model for this snapshot. See the [Assistant READY FAQ configuration](./docs/api/assistant-ready-faq-live.md) for account consent and provider requirements.
 
-```bash
-docker compose up -d
+## 2. Start local infrastructure and seed Assistant FAQ
+
+Run these PowerShell commands from the repository root. The Compose projects share the `vitaloom-assistant-vector` network.
+
+If upgrading from a combined stack, locate its old vector container with `docker ps -a --filter label=com.docker.compose.service=assistant-vector`. Select the container from the old app project, stop it with `docker stop <old-container>` if it is running, then remove that container with `docker rm <old-container>`. Start the new vector project after releasing the old container's port. The new Compose reuses the three `vitaloom-backend_assistant_vector_*` volumes by default. For a previous custom project name, set `ASSISTANT_VECTOR_VOLUME_PREFIX` in `.env` to that name.
+
+### Start the vector database
+
+```powershell
+docker network inspect vitaloom-assistant-vector --format '{{.Name}}' 2>$null
+if ($LASTEXITCODE -ne 0) { docker network create vitaloom-assistant-vector }
+docker compose -p vitaloom-vector -f docker-compose.assistant-vector.yaml up -d --wait
+```
+
+### Load and verify the Assistant FAQ snapshot
+
+```powershell
+.\tools\assistant-vector-seed\seed.ps1
+```
+
+The bundled v2 snapshot contains 85 READY FAQ documents and 3 sandbox FAQ documents with `gemini-embedding-2` embeddings (768 dimensions). The script restores empty collections, verifies the snapshot checksums and runs a vector query against each index. Seeding uses the bundled embeddings and requires no Gemini API call. A matching collection is reused. If existing data differs from the snapshot, the script stops before restoring either collection and preserves the existing data.
+
+Continue when both collections report `PASS`. For a custom vector Compose project, pass `-Project <name>` to the script. If the indexes need more time to become queryable, rerun with `-TimeoutSeconds 240`.
+
+### Start the main Compose project
+
+```powershell
+docker compose up -d --wait
 docker compose ps
 ```
 
-The Compose stack starts:
+Nginx starts after the main project's probe reaches a writable Atlas Local primary and can list search indexes. If an earlier start left the probe unhealthy, wait for `docker compose ps assistant-vector-health` to report `healthy`, then retry the main startup.
+
+The main Compose stack starts:
 
 - **MongoDB 8** as a single-node authenticated replica set named `vitaloom-rs`.
+- **Redis 7** for the Sleep AI cache, published only to `127.0.0.1` on `REDIS_PORT` (default `6379`). Cache data is not persisted.
 - **Mongo Express** as a local administration UI at [http://localhost:8082](http://localhost:8082) (port 8082 avoids Expo/Metro's default 8081).
 - **Nginx** as an API gateway on host port `80` by default. Set `NGINX_PORT` in `.env` to change the gateway port.
+
+The normal `docker compose up -d --wait` command starts Redis with the rest of the stack. To start only Redis, run `docker compose up -d --wait redis`. Spring Boot runs on the host and connects to `localhost:6379`; if you change `REDIS_PORT` in `.env`, restart Spring Boot so it reads the same value.
 
 The MongoDB root user is for administration. The backend connects with a separate `APP_USER` account that receives only `readWrite` on `APP_DB`.
 
@@ -85,7 +116,9 @@ Windows:
 
 The application listens on port `8080` by default. Override it with `SERVER_PORT` in `.env`.
 
-After changing `SERVER_PORT`, restart Spring Boot and run `docker compose up -d --no-deps nginx` to apply the new upstream port. With the default gateway port, `GET http://localhost/api/health` checks connectivity through Nginx.
+Sleep Recent Story and Explanation use Gemini on Spring's default profile. Add `GEMINI_API_KEY` to the untracked `.env`; `VITALOOM_SLEEP_GEMINI_ENABLED` defaults to `true` and can be set to `false` to disable the provider. Set `SPRING_PROFILES_ACTIVE=default` only when another profile is currently selected. The local Compose stack provides Redis on `REDIS_PORT` (default `6379`), which the host application uses for the AI cache.
+
+After changing `SERVER_PORT`, restart Spring Boot and run `docker compose up -d nginx` to apply the new upstream port. With the default gateway port, `GET http://localhost/api/health` checks connectivity through Nginx.
 
 Nginx defines rate-limit zones in `nginx/rate-limit-zones.conf` and applies them in `nginx/rate-limit-routes.conf`. After changing either file, recreate the gateway with `docker compose up -d --no-deps --force-recreate nginx`.
 
@@ -174,7 +207,7 @@ On Docker Desktop with Linux containers, cAdvisor uses the Linux PID namespace, 
 
 - Initialization scripts run only when the MongoDB data volume is first created.
 - Changing credentials in `.env` does not update users in an already initialized volume.
-- To recreate the local database and apply new initialization credentials, run `docker compose down -v` and then `docker compose up -d`. **This deletes the local MongoDB data.**
+- To recreate the local database and apply new initialization credentials, run `docker compose down -v` and then `docker compose up -d`. **This deletes the app MongoDB data.** The VectorDB data, configuration and search index volumes belong to the separate `vitaloom-vector` project.
 - Do not use the sample credentials or expose this local development stack as a public database service.
 
 ## Security scope

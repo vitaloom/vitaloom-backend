@@ -1,0 +1,29 @@
+name: vitaloom-vector
+
+services:
+  assistant-vector:
+    hostname: assistant-vector
+    image: mongodb/mongodb-atlas-local@sha256:8382b34264b08b0f18bc7a1d9528dae72681cee85b3dea12869d36e6bbdd6ebd
+    ports:
+      - "127.0.0.1:${ASSISTANT_VECTOR_PORT:-27183}:27017"
+    volumes:
+      - assistant_vector_data:/data/db
+      - assistant_vector_config:/data/configdb
+      - assistant_vector_search:/data/mongot
+      - ./tools/mongo/assistant-vector-index.js:/opt/vitaloom/assistant-vector-index.js:ro
+      - ./tools/mongo/assistant-vector-verify.js:/opt/vitaloom/assistant-vector-verify.js:ro
+    networks:
+      - assistant-vector-network
+
+volumes:
+  assistant_vector_data:
+    name: ${ASSISTANT_VECTOR_VOLUME_PREFIX:-vitaloom-backend}_assistant_vector_data
+  assistant_vector_config:
+    name: ${ASSISTANT_VECTOR_VOLUME_PREFIX:-vitaloom-backend}_assistant_vector_config
+  assistant_vector_search:
+    name: ${ASSISTANT_VECTOR_VOLUME_PREFIX:-vitaloom-backend}_assistant_vector_search
+
+networks:
+  assistant-vector-network:
+    name: vitaloom-assistant-vector
+    external: true
