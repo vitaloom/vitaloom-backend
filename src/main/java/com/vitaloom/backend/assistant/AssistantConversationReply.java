@@ -47,7 +47,7 @@ final class AssistantConversationReply {
                         || !citations.isArray() || citations.size() > MAX_CITATIONS) throw new InvalidReply();
                 boolean grounded = "GROUNDED".equals(kind.stringValue());
                 if (grounded == citations.isEmpty()) throw new InvalidReply();
-                if (!allowOpenConversation && "CONVERSATION".equals(kind.stringValue())) throw new InvalidReply();
+                if (!allowOpenConversation && "CONVERSATION".equals(kind.stringValue())) continue;
                 String status = switch (kind.stringValue()) {
                     case "GROUNDED", "CONVERSATION", "CLARIFICATION" -> "ANSWERED";
                     case "LIMITATION" -> "INSUFFICIENT_EVIDENCE";
@@ -71,6 +71,7 @@ final class AssistantConversationReply {
                     prose = "";
                 }
             }
+            if (result.isEmpty()) throw new InvalidReply();
             String outcome = result.stream().map(AssistantCourseAnswers.Part::status).distinct().count() > 1
                     ? "PARTIAL" : result.getFirst().status();
             return new AssistantCourseAnswers.Answer(outcome, List.copyOf(result), null);

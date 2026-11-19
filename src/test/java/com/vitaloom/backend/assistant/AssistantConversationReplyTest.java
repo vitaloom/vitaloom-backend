@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.tool.ToolCallback;
 
 class AssistantConversationReplyTest {
     private static final AssistantCourseAnswers.Source SOURCE = new AssistantCourseAnswers.Source(
@@ -88,6 +89,52 @@ class AssistantConversationReplyTest {
         assertThat(reply.parts().getFirst().text()).contains("thử lại sau", "cấp cứu")
                 .doesNotContain("internal detail", "DEPENDENCY_UNAVAILABLE");
         verifyNoInteractions(sleep, water, journal);
+    }
+
+    @Test
+    void faqKeepsVerifiedAnswerWhenGeminiAddsUncitedConversation() {
+        var provider = mock(AssistantProvider.class);
+        var search = mock(AssistantFixtureSearch.class);
+        var evidence = mock(AssistantFixtureSearch.ReadyEvidence.class);
+        var faq = new AssistantCourseAnswers.Source("HEALTH-FIXTURE-001", 1, "Synthetic FAQ", "", null, null);
+        when(evidence.evidence()).thenReturn(new AssistantProvider.FaqEvidence(
+                faq.id(), "Câu hỏi mô phỏng?", "Nội dung mô phỏng có nguồn."));
+        when(evidence.source()).thenReturn(faq);
+        when(evidence.healthEducation()).thenReturn(true);
+        when(evidence.current()).thenReturn(true);
+        when(search.retrieveReadyEvidence(any(), any())).thenReturn(List.of(evidence));
+        when(provider.converse(anyList(), anyList(), any())).thenAnswer(invocation -> {
+            var callbacks = invocation.<List<ToolCallback>>getArgument(1);
+            var tool = callbacks.stream()
+                    .filter(callback -> callback.getToolDefinition().name().equals("searchApprovedKnowledge"))
+                    .findFirst().orElseThrow();
+            assertThat(tool.call("""
+                    {"query":"Câu hỏi mô phỏng?","healthEducation":true}
+                    """)).contains("FOUND", "e1");
+            return new AssistantGeminiTurn.Result("""
+                    {"parts":[{"kind":"GROUNDED","text":"Nội dung mô phỏng có nguồn.","sources":["e1"]},
+                    {"kind":"CONVERSATION","text":"Chi tiết mô phỏng chưa xác minh.","sources":[]}]}
+                    """, AssistantGeminiTurn.Grounding.APPROVED_KNOWLEDGE);
+        });
+        var answers = new AssistantConversationalAnswers(provider, search, new AssistantCourseAnswers(
+                mock(SleepJournalService.class), mock(SleepRecentStatisticsService.class),
+                mock(WaterService.class), Clock.systemUTC()));
+
+        var reply = answers.answer("synthetic-owner", "Câu hỏi mô phỏng?", UUID.randomUUID(),
+                List.of(), true, () -> true, () -> true);
+
+        assertThat(reply.outcome()).isEqualTo("ANSWERED");
+        assertThat(reply.parts()).containsExactly(new AssistantCourseAnswers.Part(
+                "ANSWERED", "Nội dung mô phỏng có nguồn.", faq));
+    }
+
+    @Test
+    void restrictedReplyWithOnlyConversationRemainsInvalid() {
+        String json = """
+                {"parts":[{"kind":"CONVERSATION","text":"Chi tiết mô phỏng chưa xác minh.","sources":[]}]}
+                """;
+        assertThatThrownBy(() -> AssistantConversationReply.parse(json, Map.of(), false))
+                .isInstanceOf(AssistantConversationReply.InvalidReply.class);
     }
 
     @Test
