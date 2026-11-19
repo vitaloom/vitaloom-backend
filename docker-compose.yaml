@@ -27,6 +27,20 @@ services:
     networks:
       - vitaloom-network
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - vitaloom-network
+
   mongo-express:
     image: mongo-express:1.0.2-18-alpine3.19
     container_name: vitaloom_mongo_express_ui

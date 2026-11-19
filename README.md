@@ -65,8 +65,11 @@ If upgrading from a combined stack, stop and remove the old `assistant-vector` c
 The main Compose stack starts:
 
 - **MongoDB 8** as a single-node authenticated replica set named `vitaloom-rs`.
+- **Redis 7** for the Sleep AI cache, published only to `127.0.0.1` on `REDIS_PORT` (default `6379`). Cache data is not persisted.
 - **Mongo Express** as a local administration UI at [http://localhost:8082](http://localhost:8082) (port 8082 avoids Expo/Metro's default 8081).
 - **Nginx** as an API gateway on host port `80` by default. Set `NGINX_PORT` in `.env` to change the gateway port.
+
+The normal `docker compose up -d --wait` command starts Redis with the rest of the stack. To start only Redis, run `docker compose up -d --wait redis`. Spring Boot runs on the host and connects to `localhost:6379`; if you change `REDIS_PORT` in `.env`, restart Spring Boot so it reads the same value.
 
 The MongoDB root user is for administration. The backend connects with a separate `APP_USER` account that receives only `readWrite` on `APP_DB`.
 
