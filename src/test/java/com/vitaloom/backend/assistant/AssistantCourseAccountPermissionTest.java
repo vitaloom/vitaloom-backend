@@ -28,6 +28,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.index.IndexOperations;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
@@ -45,8 +46,7 @@ class AssistantCourseAccountPermissionTest {
     private final Authentication auth = mock(Authentication.class);
     private final AssistantAccountSettings.Preference grant = new AssistantAccountSettings.Preference(OWNER, true, 3, AssistantAccountSettings.CONSENT_VERSION);
     private final AtomicBoolean enabled = new AtomicBoolean(true);
-    private final AssistantCourseController controller = new AssistantCourseController(mongo, answers(), clock,
-            providerFor(null), settings, providerFor(model), new AssistantGeminiReadiness(true));
+    private final AssistantCourseController controller = controller(true);
 
     @BeforeEach
     void setUp() {
@@ -87,7 +87,10 @@ class AssistantCourseAccountPermissionTest {
         var previous = new AssistantCourseAnswers.Answer("ANSWERED",
                 List.of(new AssistantCourseAnswers.Part("ANSWERED", "Previous response", priorSource)), null);
         stubConversation(List.of(new AssistantConversation.Turn(UUID.randomUUID().toString(), "Previous raw prompt",
-                NOW.minus(Duration.ofMinutes(1)), previous)));
+                NOW.minus(Duration.ofMinutes(1)), previous, null, null)));
+        when(mongo.indexOps(AssistantConversationTurns.Receipt.class)).thenReturn(mock(IndexOperations.class));
+        when(mongo.updateFirst(any(Query.class), any(), eq(AssistantConversationTurns.Receipt.class)))
+                .thenReturn(com.mongodb.client.result.UpdateResult.acknowledged(1, 1L, null));
         when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> call.getArgument(0));
         when(model.converse(anyList(), anyList(), any())).thenAnswer(call -> {
             List<org.springframework.ai.chat.messages.Message> messages = call.getArgument(0);
@@ -125,8 +128,7 @@ class AssistantCourseAccountPermissionTest {
     @Test
     void providerConfigurationFailureDoesNotChangeConsentOrDispatch() {
         stubConversation(List.of());
-        var blocked = new AssistantCourseController(mongo, answers(), clock, providerFor(null), settings,
-                providerFor(model), new AssistantGeminiReadiness(false));
+        var blocked = controller(false);
         assertThatThrownBy(() -> blocked.turn(auth, conversationId,
                 new AssistantCourseController.Send(UUID.randomUUID(), "Xin chào", null)))
                 .isInstanceOfSatisfying(ResponseStatusException.class,
@@ -139,11 +141,11 @@ class AssistantCourseAccountPermissionTest {
     void replayIsReturnedWithoutANewProviderCallAfterRecheckingPermission() {
         var turnId = UUID.randomUUID();
         var saved = new AssistantConversation.Turn(turnId.toString(), "Xin chào", NOW,
-                new AssistantCourseAnswers.Answer("ANSWERED", List.of(), null));
+                new AssistantCourseAnswers.Answer("ANSWERED", List.of(), null), null, null);
         stubConversation(List.of(saved));
         assertThat(controller.turn(auth, conversationId,
                 new AssistantCourseController.Send(turnId, "Xin chào", null)).turns()).hasSize(1);
-        verify(settings).isCurrent(OWNER, grant);
+        verify(settings, org.mockito.Mockito.atLeastOnce()).isCurrent(OWNER, grant);
         verifyNoInteractions(model);
     }
 
@@ -157,6 +159,12 @@ class AssistantCourseAccountPermissionTest {
     private AssistantCourseAnswers answers() {
         return new AssistantCourseAnswers(mock(SleepJournalService.class), mock(SleepRecentStatisticsService.class),
                 mock(WaterService.class), clock);
+    }
+
+    private AssistantCourseController controller(boolean ready) {
+        var service = new AssistantConversationTurns(mongo, clock, answers(), providerFor(null), providerFor(model),
+                new AssistantGeminiReadiness(ready), settings, mock(WaterService.class), mock(SleepJournalService.class));
+        return new AssistantCourseController(mongo, clock, settings, service);
     }
 
     private static <T> ObjectProvider<T> providerFor(T available) {

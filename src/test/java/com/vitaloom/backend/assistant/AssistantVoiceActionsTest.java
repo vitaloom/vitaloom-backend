@@ -14,6 +14,7 @@ import com.vitaloom.backend.sleep.service.SleepJournalService;
 import com.vitaloom.backend.water.dto.response.WaterLogResponse;
 import com.vitaloom.backend.water.service.WaterService;
 import java.time.Instant;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage.ToolCall;
@@ -34,6 +35,33 @@ class AssistantVoiceActionsTest {
         assertThat(answer.outcome()).isEqualTo("ANSWERED");
         assertThat(answer.parts().getFirst().text()).contains("250 ml", "10:00");
         verifyNoInteractions(sleep);
+    }
+
+    @Test
+    void acceptsWaterIntentSelectedByGeminiWithoutVietnameseCommandKeywords() {
+        when(water.create("account-a", 250, NOW.toString())).thenReturn(new WaterLogResponse("water", 250, NOW));
+        var result = actions.apply("account-a", "Log giúp mình 250 ml", NOW,
+                call("recordWater", "{\"amount\":\"250 ml\"}"));
+        assertThat(result.outcome()).isEqualTo("ANSWERED");
+        verify(water).create("account-a", 250, NOW.toString());
+    }
+
+    @Test
+    void acceptsSleepDataFromUserClarificationWithoutRepeatingTheCommand() {
+        when(sleep.create(eq("account-a"), any())).thenReturn(sleepResult("2026-11-18", 420));
+        var result = actions.apply("account-a", List.of("7 tiếng hôm nay", "Bình thường"), NOW,
+                call("recordSleep", "{\"duration\":\"7 tiếng\",\"day\":\"hôm nay\",\"feeling\":\"bình thường\"}"));
+        assertThat(result.outcome()).isEqualTo("ANSWERED");
+        verify(sleep).create(eq("account-a"), any());
+    }
+
+    @Test
+    void usesTheVolumeSelectedByTheUsersClarification() {
+        when(water.create("account-a", 500, NOW.toString())).thenReturn(new WaterLogResponse("water", 500, NOW));
+        var result = actions.apply("account-a", List.of("Ghi 250 ml hay 500 ml nước", "500 ml"), NOW,
+                call("recordWater", "{\"amount\":\"500 ml\"}"));
+        assertThat(result.outcome()).isEqualTo("ANSWERED");
+        verify(water).create("account-a", 500, NOW.toString());
     }
 
     @Test

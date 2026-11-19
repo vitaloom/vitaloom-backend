@@ -3,9 +3,11 @@ package com.vitaloom.backend.assistant;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -100,27 +102,50 @@ class AssistantVoiceMongoIntegrationTest {
 
         String water = "Nhập lượng nước 250ml tại thời điểm hiện tại cho tôi";
         when(stt.transcribe(WATER_AUDIO)).thenReturn(water);
-        when(gemini.selectVoiceTool(water)).thenReturn(new ToolCall("w", "function", "recordWater",
+        when(gemini.converse(anyList(), anyList(), any())).thenReturn(action("recordWater",
                 "{\"amount\":\"250ml\",\"when\":\"tại thời điểm hiện tại\"}"));
+        String conversationId = null;
         for (int attempt = 0; attempt < 2; attempt++) {
-            mvc.perform(voice(waterTurn, WATER_AUDIO, true).header("Authorization", auth(owner)))
+            var result = mvc.perform(voice(waterTurn, WATER_AUDIO, true).header("Authorization", auth(owner)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.turns[0].text").value(water))
-                    .andExpect(jsonPath("$.turns[0].outcome").value("ANSWERED"));
+                    .andExpect(jsonPath("$.turns[0].outcome").value("ANSWERED")).andReturn();
+            conversationId = com.jayway.jsonpath.JsonPath.read(result.getResponse().getContentAsString(), "$.id");
         }
-        verify(gemini).selectVoiceTool(water);
+        verify(gemini).converse(anyList(), anyList(), any());
         mvc.perform(waterSummary(today, owner))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.totalMl").value(250));
         mvc.perform(waterSummary(today, "other-" + owner))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.totalMl").value(0));
 
-        String sleep = "Ghi 8 tiếng ngủ hôm nay, cảm giác tốt";
-        when(stt.transcribe(SLEEP_AUDIO)).thenReturn(sleep);
-        when(gemini.selectVoiceTool(sleep)).thenReturn(new ToolCall("s", "function", "recordSleep",
-                "{\"duration\":\"8 tiếng\",\"day\":\"hôm nay\",\"feeling\":\"tốt\"}"));
-        mvc.perform(voice(UUID.randomUUID(), SLEEP_AUDIO, true).header("Authorization", auth(owner)))
+        String other = "other-" + owner;
+        changePermission(other, true);
+        mvc.perform(voice(UUID.randomUUID(), SLEEP_AUDIO, true).param("conversationId", conversationId)
+                        .header("Authorization", auth(other))).andExpect(status().isNotFound());
+
+        when(gemini.converse(anyList(), anyList(), any())).thenReturn(new AssistantGeminiTurn.Result("""
+                {"parts":[{"kind":"WRITE_CLARIFICATION","text":"Khi thức dậy bạn cảm thấy thế nào?","sources":[]}]}
+                """, AssistantGeminiTurn.Grounding.OPEN));
+        mvc.perform(post("/api/assistant/mvp/conversations/" + conversationId + "/turns")
+                        .header("Authorization", auth(owner)).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"turnId\":\"" + UUID.randomUUID() + "\",\"text\":\"Ghi 8 tiếng ngủ hôm nay\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.turns[0].outcome").value("ANSWERED"));
+                .andExpect(jsonPath("$.turns[1].outcome").value("WRITE_CLARIFICATION"));
+        mvc.perform(get("/api/sleep/v2/sessions").header("Authorization", auth(owner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.sessions").isEmpty());
+
+        when(stt.transcribe(SLEEP_AUDIO)).thenReturn("Tốt");
+        when(gemini.converse(anyList(), anyList(), any())).thenReturn(action("recordSleep",
+                "{\"duration\":\"8 tiếng\",\"day\":\"hôm nay\",\"feeling\":\"tốt\"}"));
+        UUID sleepTurn = UUID.randomUUID();
+        for (int attempt = 0; attempt < 2; attempt++) {
+            mvc.perform(voice(sleepTurn, SLEEP_AUDIO, true).param("conversationId", conversationId)
+                            .header("Authorization", auth(owner)))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(conversationId))
+                    .andExpect(jsonPath("$.turns.length()").value(3))
+                    .andExpect(jsonPath("$.turns[2].outcome").value("ANSWERED"));
+        }
+        verify(gemini, times(3)).converse(anyList(), anyList(), any());
         mvc.perform(get("/api/sleep/v2/sessions").header("Authorization", auth(owner)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessions[0].day").value(today))
@@ -135,6 +160,47 @@ class AssistantVoiceMongoIntegrationTest {
                 .andExpect(jsonPath("$.totalMl").value(250));
         mvc.perform(get("/api/sleep/v2/sessions").header("Authorization", auth(owner)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.sessions[0].minutes").value(480));
+    }
+
+    @Test
+    void recordsBothJournalsFromTextAndScrubsRepliesWhenDeletingConversation() throws Exception {
+        String owner = "text-journal-" + UUID.randomUUID();
+        String conversations = "/api/assistant/mvp/conversations";
+        changePermission(owner, true);
+        var creation = mvc.perform(post(conversations).header("Authorization", auth(owner)))
+                .andExpect(status().isCreated()).andReturn();
+        String id = com.jayway.jsonpath.JsonPath.read(creation.getResponse().getContentAsString(), "$.id");
+        UUID waterTurn = UUID.randomUUID();
+        when(gemini.converse(anyList(), anyList(), any())).thenReturn(action("recordWater", "{\"amount\":\"300 ml\"}"),
+                action("recordSleep", "{\"duration\":\"7 tiếng\",\"day\":\"hôm nay\",\"feeling\":\"tốt\"}"));
+        var waterRequest = post(conversations + "/" + id + "/turns").header("Authorization", auth(owner))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"turnId\":\"" + waterTurn + "\",\"text\":\"Log giúp mình 300 ml\"}");
+        mvc.perform(waterRequest).andExpect(status().isOk()).andExpect(jsonPath("$.turns[0].outcome").value("ANSWERED"));
+        mvc.perform(waterRequest).andExpect(status().isOk()).andExpect(jsonPath("$.turns.length()").value(1));
+        mvc.perform(post(conversations + "/" + id + "/turns").header("Authorization", auth(owner))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"turnId\":\"" + UUID.randomUUID() + "\",\"text\":\"Ghi ngủ 7 tiếng hôm nay, thấy tốt\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.turns[1].outcome").value("ANSWERED"));
+
+        mvc.perform(delete(conversations + "/" + id).header("Authorization", auth(owner)))
+                .andExpect(status().isNoContent());
+        mvc.perform(get(conversations + "/" + id).header("Authorization", auth(owner)))
+                .andExpect(status().isNotFound());
+        var receipts = mongo.getCollection("assistant_turn_receipts");
+        org.assertj.core.api.Assertions.assertThat(receipts.countDocuments(new org.bson.Document("conversationId", id)
+                .append("answer", new org.bson.Document("$exists", true)))).isZero();
+        mvc.perform(waterSummary(LocalDate.now(AssistantVoiceActions.ZONE).toString(), owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalMl").value(300));
+        mvc.perform(get("/api/sleep/v2/sessions").header("Authorization", auth(owner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.sessions[0].minutes").value(420));
+        verify(gemini, times(2)).converse(anyList(), anyList(), any());
+        verifyNoInteractions(stt);
+    }
+
+    private static AssistantGeminiTurn.Result action(String name, String args) {
+        return new AssistantGeminiTurn.Result(null, AssistantGeminiTurn.Grounding.OPEN,
+                new ToolCall("log", "function", name, args));
     }
 
     private void changePermission(String owner, boolean enabled) throws Exception {

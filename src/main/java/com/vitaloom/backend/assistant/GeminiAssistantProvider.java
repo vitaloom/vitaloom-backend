@@ -10,7 +10,6 @@ import java.util.Map;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.AssistantMessage.ToolCall;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -76,11 +75,6 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
         var result = response.getResult();
         return result != null && result.getOutput() != null
                 && AssistantFixture.matchesAnswer(evidence, result.getOutput().getText());
-    }
-
-    @Override
-    public ToolCall selectVoiceTool(String transcript) {
-        return call(() -> AssistantVoiceTools.select(model, chatModel, transcript));
     }
 
     @Override

@@ -38,20 +38,21 @@ final class AssistantVoiceActions {
     }
 
     AssistantCourseAnswers.Answer apply(String owner, String transcript, Instant receivedAt, ToolCall call) {
-        var request = new AssistantVoiceText(transcript, receivedAt.atZone(ZONE).toLocalDate());
-        if (call == null || !request.isCreateRequest()) return insufficient(request);
+        return apply(owner, List.of(transcript), receivedAt, call);
+    }
+
+    AssistantCourseAnswers.Answer apply(String owner, List<String> utterances, Instant receivedAt, ToolCall call) {
+        var request = new AssistantVoiceText(utterances, receivedAt.atZone(ZONE).toLocalDate());
+        if (call == null) return insufficient(null);
         try {
             return switch (call.name()) {
-                case "recordWater" -> request.requestsWater() && !request.requestsSleep()
-                        ? recordWater(owner, request, receivedAt, arguments(call, Set.of("amount", "when")))
-                        : insufficient(request);
-                case "recordSleep" -> request.requestsSleep() && !request.requestsWater()
-                        ? recordSleep(owner, request, arguments(call, Set.of("duration", "day", "start", "end", "feeling")))
-                        : insufficient(request);
-                default -> insufficient(request);
+                case "recordWater" -> recordWater(owner, request, receivedAt, arguments(call, Set.of("amount", "when")));
+                case "recordSleep" ->
+                        recordSleep(owner, request, arguments(call, Set.of("duration", "day", "start", "end", "feeling")));
+                default -> insufficient(null);
             };
-        } catch (IllegalArgumentException | DateTimeException | JacksonException invalidArguments) {
-            return insufficient(request);
+        } catch (IllegalArgumentException | ArithmeticException | DateTimeException | JacksonException invalidArguments) {
+            return insufficient(call.name());
         } catch (WaterValidationException invalidWater) {
             return answer("INSUFFICIENT_EVIDENCE", "Chưa thể ghi lượng nước. Hãy kiểm tra số ml và thời điểm uống.");
         } catch (SleepFailure rejectedSleep) {
@@ -79,11 +80,10 @@ final class AssistantVoiceActions {
             write = new SessionWrite("MAIN", "DURATION", feeling, null, null, null,
                     request.date(day).toString(), IntNode.valueOf(request.minutes(duration)));
         } else if (start != null && end != null && duration == null && day == null) {
-            request.requireRange(start, end);
             write = new SessionWrite("MAIN", "RANGE", feeling, ZONE.getId(),
                     civilTime(request.dateTime(start, true)), civilTime(request.dateTime(end, true)), null, null);
         } else {
-            return insufficient(request);
+            return insufficient("recordSleep");
         }
         var saved = sleep.create(owner, write);
         return answer("ANSWERED", "Đã ghi %d phút ngủ cho ngày %s, cảm giác %s."
@@ -101,12 +101,12 @@ final class AssistantVoiceActions {
         return args;
     }
 
-    private static AssistantCourseAnswers.Answer insufficient(AssistantVoiceText request) {
-        if (request.requestsWater() && !request.requestsSleep()) {
+    private static AssistantCourseAnswers.Answer insufficient(String tool) {
+        if ("recordWater".equals(tool)) {
             return answer("INSUFFICIENT_EVIDENCE",
                     "Chưa thể ghi lượng nước. Hãy nói rõ lượng nước theo ml và thời điểm nếu không phải bây giờ.");
         }
-        if (request.requestsSleep() && !request.requestsWater()) {
+        if ("recordSleep".equals(tool)) {
             return answer("INSUFFICIENT_EVIDENCE",
                     "Chưa thể ghi giấc ngủ. Hãy nói rõ ngày và thời lượng, hoặc giờ bắt đầu và kết thúc, cùng cảm nhận.");
         }

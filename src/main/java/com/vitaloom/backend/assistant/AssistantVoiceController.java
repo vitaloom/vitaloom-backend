@@ -8,6 +8,7 @@ import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -31,34 +32,42 @@ class AssistantVoiceController {
             "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/webm", "audio/wav", "audio/x-wav");
     private final AssistantVoiceTurns turns;
     private final AssistantAccountSettings accountSettings;
-    private final AssistantGeminiReadiness readiness;
-
-    AssistantVoiceController(AssistantVoiceTurns turns, AssistantAccountSettings accountSettings,
-            AssistantGeminiReadiness readiness) {
+    AssistantVoiceController(AssistantVoiceTurns turns, AssistantAccountSettings accountSettings) {
         this.turns = turns;
         this.accountSettings = accountSettings;
-        this.readiness = readiness;
     }
 
     @PostMapping(path = "/api/assistant/mvp/voice-turns", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     ResponseEntity<AssistantCourseController.View> send(Authentication authentication,
             @RequestParam UUID turnId, @RequestParam String consentAccepted,
-            @RequestParam(required = false) String consentVersion, @RequestPart MultipartFile audio)
+            @RequestParam(required = false) String consentVersion, @RequestParam(required = false) UUID conversationId,
+            @RequestPart MultipartFile audio)
             throws IOException {
         if (!"true".equals(consentAccepted) || !"assemblyai-us-v1".equals(consentVersion)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN);
         }
         String owner = authentication.getName();
         var preference = accountSettings.requireEnabled(owner);
-        readiness.requireReady();
         if (audio.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
         if (audio.getSize() > MAX_AUDIO_BYTES) throw new ResponseStatusException(HttpStatus.CONTENT_TOO_LARGE);
         String contentType = audio.getContentType();
         if (contentType == null || !MEDIA_TYPES.contains(contentType.split(";", 2)[0].strip().toLowerCase(Locale.ROOT))) {
             throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE);
         }
-        var conversation = turns.send(owner, turnId, audio.getBytes(), preference);
+        var conversation = turns.send(authentication, conversationId, turnId, audio.getBytes(), preference);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(conversation);
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    ResponseEntity<ProblemDetail> concurrentWrite() {
+        return ProblemDetails.response(HttpStatus.CONFLICT, "ASSISTANT_CONVERSATION_CHANGED",
+                "The conversation changed. Reload or retry the same turn.");
+    }
+
+    @ExceptionHandler(AssistantCourseController.AccountSettingChangedException.class)
+    ResponseEntity<ProblemDetail> accountSettingChanged() {
+        return ProblemDetails.response(HttpStatus.CONFLICT, "ASSISTANT_ACCOUNT_SETTING_CHANGED",
+                "Assistant personal-data access changed while the turn was processing.");
     }
 
     @ExceptionHandler(DataAccessException.class)

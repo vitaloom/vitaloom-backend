@@ -1,7 +1,5 @@
 package com.vitaloom.backend.assistant;
 
-import com.vitaloom.backend.sleep.service.SleepJournalService;
-import com.vitaloom.backend.water.service.WaterService;
 import java.net.URI;
 import java.time.Clock;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,10 +20,8 @@ class AssistantVoiceConfiguration {
     }
 
     @Bean
-    AssistantVoiceTurns assistantVoiceTurns(MongoTemplate mongo, Clock clock, AssistantProvider provider,
-            WaterService water, SleepJournalService sleep, AssistantSpeechToText stt,
-            AssistantAccountSettings accountSettings, AssistantGeminiReadiness readiness) {
-        return new AssistantVoiceTurns(mongo, clock, stt, provider::selectVoiceTool,
-                new AssistantVoiceActions(water, sleep), accountSettings, readiness);
+    AssistantVoiceTurns assistantVoiceTurns(MongoTemplate mongo, Clock clock, AssistantSpeechToText stt,
+            AssistantConversationTurns turns, AssistantGeminiReadiness readiness) {
+        return new AssistantVoiceTurns(mongo, clock, stt, turns, readiness);
     }
 }

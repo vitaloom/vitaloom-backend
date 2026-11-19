@@ -145,6 +145,51 @@ class AssistantGeminiTurnTest {
         assertThat(sleep.calls).isEmpty();
     }
 
+    @Test
+    void returnsJournalActionWithoutExecutingIt() {
+        var journal = callback("recordWater", "{}", "must not execute");
+        var model = new FakeChatModel(prompt -> response(assistant("", assess(),
+                call("write", "recordWater", "{\"amount\":\"250ml\"}"))));
+
+        var result = new AssistantGeminiTurn(model, "test-model")
+                .run(List.of(new UserMessage("Log 250ml water")), List.of(journal), () -> true);
+
+        assertThat(result.action()).isNotNull();
+        assertThat(result.action().name()).isEqualTo("recordWater");
+        assertThat(result.action().arguments()).isEqualTo("{\"amount\":\"250ml\"}");
+        assertThat(journal.calls).isEmpty();
+    }
+
+    @Test
+    void rejectsMultipleJournalActionsBeforeReturningAnyAction() {
+        var water = callback("recordWater", "{}", "must not execute");
+        var sleep = callback("recordSleep", "{}", "must not execute");
+        var model = new FakeChatModel(prompt -> response(assistant("", assess(),
+                call("water", "recordWater", "{}"), call("sleep", "recordSleep", "{}"))));
+
+        assertThatThrownBy(() -> new AssistantGeminiTurn(model, "test-model")
+                .run(List.of(new UserMessage("record both")), List.of(water, sleep), () -> true))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(water.calls).isEmpty();
+        assertThat(sleep.calls).isEmpty();
+    }
+
+    @Test
+    void rejectsJournalActionMixedWithEvidenceBeforeExecutingEither() {
+        var journal = callback("recordWater", "{}", "must not execute");
+        var evidence = callback("readWater", "{}", "must not execute");
+        var model = new FakeChatModel(prompt -> response(assistant("", assess(),
+                call("write", "recordWater", "{}"), call("read", "readWater", "{}"))));
+
+        assertThatThrownBy(() -> new AssistantGeminiTurn(model, "test-model")
+                .run(List.of(new UserMessage("record and read")), List.of(journal, evidence), () -> true))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(journal.calls).isEmpty();
+        assertThat(evidence.calls).isEmpty();
+    }
+
     private static RecordingToolCallback callback(String name, String schema, String result) {
         return new RecordingToolCallback(name, schema, result);
     }

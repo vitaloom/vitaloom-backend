@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -15,6 +16,7 @@ import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 
@@ -70,6 +72,55 @@ class AssistantConversationReplyTest {
         var reply = AssistantConversationReply.parse(json, Map.of());
         assertThat(reply.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
         assertThat(reply.parts().getFirst().text()).doesNotContain("NO_MATCH");
+    }
+
+    @Test
+    void preservesWriteClarificationAsItsOwnOutcome() {
+        String json = """
+                {"parts":[{"kind":"WRITE_CLARIFICATION","text":"Bạn muốn ghi cho ngày nào?","sources":[]}]}
+                """;
+
+        var reply = AssistantConversationReply.parse(json, Map.of());
+
+        assertThat(reply.outcome()).isEqualTo("WRITE_CLARIFICATION");
+        assertThat(reply.parts()).containsExactly(new AssistantCourseAnswers.Part(
+                "ANSWERED", "Bạn muốn ghi cho ngày nào?", null));
+    }
+
+    @Test
+    void rejectsWriteClarificationCombinedWithOtherParts() {
+        String json = """
+                {"parts":[{"kind":"WRITE_CLARIFICATION","text":"Bạn muốn ghi cho ngày nào?","sources":[]},
+                {"kind":"CONVERSATION","text":"Mình có thể giúp.","sources":[]}]}
+                """;
+
+        assertThatThrownBy(() -> AssistantConversationReply.parse(json, Map.of()))
+                .isInstanceOf(AssistantConversationReply.InvalidReply.class);
+    }
+
+    @Test
+    void evaluationIncludesPendingClarificationAndJournalTools() {
+        var provider = mock(AssistantProvider.class);
+        when(provider.converse(anyList(), anyList(), any())).thenReturn(new AssistantGeminiTurn.Result("""
+                {"parts":[{"kind":"WRITE_CLARIFICATION","text":"Bạn muốn ghi vào lúc nào?","sources":[]}]}
+                """, AssistantGeminiTurn.Grounding.OPEN));
+        var answers = new AssistantConversationalAnswers(provider, null, new AssistantCourseAnswers(
+                mock(SleepJournalService.class), mock(SleepRecentStatisticsService.class),
+                mock(WaterService.class), Clock.systemUTC()));
+        var previousQuestion = new org.springframework.ai.chat.messages.AssistantMessage("Bạn đã uống bao nhiêu?");
+        var previousAnswer = new org.springframework.ai.chat.messages.UserMessage("250ml");
+
+        var evaluation = answers.evaluate("synthetic-owner", "buổi sáng", UUID.randomUUID(), List.of(),
+                List.of(previousQuestion, previousAnswer), true, () -> true, () -> true);
+
+        assertThat(evaluation.action()).isNull();
+        assertThat(evaluation.answer().outcome()).isEqualTo("WRITE_CLARIFICATION");
+        var messages = ArgumentCaptor.forClass(List.class);
+        var tools = ArgumentCaptor.forClass(List.class);
+        verify(provider).converse(messages.capture(), tools.capture(), any());
+        assertThat(messages.getValue()).containsSubsequence(previousQuestion, previousAnswer);
+        assertThat(tools.getValue()).extracting(callback -> ((ToolCallback) callback).getToolDefinition().name())
+                .contains("recordWater", "recordSleep");
     }
 
     @Test

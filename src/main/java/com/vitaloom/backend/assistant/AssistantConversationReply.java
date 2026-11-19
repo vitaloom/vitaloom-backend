@@ -38,6 +38,7 @@ final class AssistantConversationReply {
                     || parts.size() > MAX_PARTS) throw new InvalidReply();
             var result = new ArrayList<AssistantCourseAnswers.Part>();
             var verified = new HashSet<String>();
+            boolean writeClarification = false;
             for (var part : parts) {
                 var kind = part.path("kind");
                 var text = part.path("text");
@@ -47,9 +48,13 @@ final class AssistantConversationReply {
                         || !citations.isArray() || citations.size() > MAX_CITATIONS) throw new InvalidReply();
                 boolean grounded = "GROUNDED".equals(kind.stringValue());
                 if (grounded == citations.isEmpty()) throw new InvalidReply();
+                if ("WRITE_CLARIFICATION".equals(kind.stringValue())) {
+                    if (parts.size() != 1 || !citations.isEmpty()) throw new InvalidReply();
+                    writeClarification = true;
+                }
                 if (!allowOpenConversation && "CONVERSATION".equals(kind.stringValue())) continue;
                 String status = switch (kind.stringValue()) {
-                    case "GROUNDED", "CONVERSATION", "CLARIFICATION" -> "ANSWERED";
+                    case "GROUNDED", "CONVERSATION", "CLARIFICATION", "WRITE_CLARIFICATION" -> "ANSWERED";
                     case "LIMITATION" -> "INSUFFICIENT_EVIDENCE";
                     default -> throw new InvalidReply();
                 };
@@ -72,8 +77,9 @@ final class AssistantConversationReply {
                 }
             }
             if (result.isEmpty()) throw new InvalidReply();
-            String outcome = result.stream().map(AssistantCourseAnswers.Part::status).distinct().count() > 1
-                    ? "PARTIAL" : result.getFirst().status();
+            String outcome = writeClarification ? "WRITE_CLARIFICATION"
+                    : result.stream().map(AssistantCourseAnswers.Part::status).distinct().count() > 1
+                            ? "PARTIAL" : result.getFirst().status();
             return new AssistantCourseAnswers.Answer(outcome, List.copyOf(result), null);
         } catch (JacksonException invalid) {
             throw new InvalidReply();

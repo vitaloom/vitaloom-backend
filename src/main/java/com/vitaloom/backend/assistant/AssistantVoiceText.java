@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -14,10 +15,6 @@ import tools.jackson.databind.JsonNode;
 final class AssistantVoiceText {
     private static final String WORD_LEFT = "(?<![\\p{L}\\p{N}])";
     private static final String WORD_RIGHT = "(?![\\p{L}\\p{N}])";
-    private static final Pattern CREATE = word("ghi|nhập|thêm|lưu");
-    private static final Pattern NEGATED = word("đừng|không (?:cần |muốn )?(?:ghi|nhập|thêm|lưu)|hủy|chưa ghi|cách (?:ghi|nhập|thêm|lưu)");
-    private static final Pattern WATER = word("nước|water");
-    private static final Pattern SLEEP = word("ngủ|sleep");
     private static final String UNIT_WORD = "(?:không|một|hai|ba|bốn|năm|sáu|bảy|tám|chín|mốt|tư|lăm)";
     private static final String CLOCK_NUMBER = "(?:\\d{1,2}|mười(?:\\s+" + UNIT_WORD + ")?|"
             + UNIT_WORD + "(?:\\s+mươi(?:\\s+" + UNIT_WORD + ")?)?)";
@@ -36,24 +33,12 @@ final class AssistantVoiceText {
             "không", 0, "một", 1, "hai", 2, "ba", 3, "bốn", 4,
             "năm", 5, "sáu", 6, "bảy", 7, "tám", 8, "chín", 9);
 
-    private final String text;
+    private final List<String> utterances;
     private final LocalDate today;
 
-    AssistantVoiceText(String transcript, LocalDate today) {
-        text = normalize(transcript);
+    AssistantVoiceText(List<String> utterances, LocalDate today) {
+        this.utterances = utterances.stream().map(AssistantVoiceText::normalize).toList();
         this.today = today;
-    }
-
-    boolean isCreateRequest() {
-        return CREATE.matcher(text).find() && !NEGATED.matcher(text).find();
-    }
-
-    boolean requestsWater() {
-        return WATER.matcher(text).find();
-    }
-
-    boolean requestsSleep() {
-        return SLEEP.matcher(text).find();
     }
 
     String quote(JsonNode args, String field) {
@@ -62,14 +47,20 @@ final class AssistantVoiceText {
         require(value.isString());
         String phrase = normalize(value.stringValue());
         require(!phrase.isEmpty());
-        String left = Character.isDigit(phrase.charAt(0)) ? "(?<![\\p{L}\\p{N}.,/-])" : WORD_LEFT;
-        require(Pattern.compile(left + Pattern.quote(phrase) + WORD_RIGHT).matcher(text).find());
+        sourceFor(phrase);
         return phrase;
+    }
+
+    private String sourceFor(String phrase) {
+        String left = Character.isDigit(phrase.charAt(0)) ? "(?<![\\p{L}\\p{N}.,/-])" : WORD_LEFT;
+        Pattern quote = Pattern.compile(left + Pattern.quote(phrase) + WORD_RIGHT);
+        return utterances.reversed().stream().filter(text -> quote.matcher(text).find()).findFirst()
+                .orElseThrow(IllegalArgumentException::new);
     }
 
     int amountMl(String phrase) {
         require(phrase != null);
-        var match = AMOUNT.matcher(text);
+        var match = AMOUNT.matcher(sourceFor(phrase));
         require(match.find() && match.group().equals(phrase));
         String digits = match.group(1);
         boolean liters = match.group(2).equals("lít") || match.group(2).equals("l");
@@ -82,36 +73,27 @@ final class AssistantVoiceText {
         return ml;
     }
 
-    boolean hasSupportedAmount() {
-        var match = AMOUNT.matcher(text);
-        if (!match.find()) return false;
-        try {
-            amountMl(match.group());
-            return true;
-        } catch (IllegalArgumentException invalidAmount) {
-            return false;
-        }
-    }
-
     Instant waterTime(String phrase, Instant receivedAt) {
         if (phrase == null) {
-            require(!TIME.matcher(text).find() && !DATE.matcher(text).find());
+            require(utterances.stream().noneMatch(text -> TIME.matcher(text).find() || DATE.matcher(text).find()));
             return receivedAt;
         }
-        requireCompleteWhen(DATE, phrase);
-        requireCompleteWhen(TIME, phrase);
+        String source = sourceFor(phrase);
+        requireCompleteWhen(DATE, phrase, source);
+        requireCompleteWhen(TIME, phrase, source);
         if (!TIME.matcher(phrase).find()) {
-            require(!TIME.matcher(text).find() && (DATE.matcher(phrase).find() ? date(phrase).equals(today)
+            require(!TIME.matcher(source).find() && (DATE.matcher(phrase).find() ? date(phrase).equals(today)
                     : NOW.matcher(phrase).find()));
             return receivedAt;
         }
+        require(DATE.matcher(phrase).find() || utterances.stream().noneMatch(text -> DATE.matcher(text).find()));
         Instant time = dateTime(phrase, false).atZone(AssistantVoiceActions.ZONE).toInstant();
         require(!time.isAfter(receivedAt));
         return time;
     }
 
-    private void requireCompleteWhen(Pattern pattern, String phrase) {
-        var spoken = pattern.matcher(text);
+    private static void requireCompleteWhen(Pattern pattern, String phrase, String source) {
+        var spoken = pattern.matcher(source);
         if (!spoken.find()) return;
         var selected = pattern.matcher(phrase);
         require(selected.find() && spoken.group().equals(selected.group()) && !spoken.find());
@@ -140,6 +122,7 @@ final class AssistantVoiceText {
     LocalDate date(String phrase) {
         var match = DATE.matcher(phrase);
         require(match.find());
+        requireCompleteToken(DATE, phrase, match.start(), match.group());
         LocalDate dayFromPhrase = switch (match.group()) {
             case "hôm nay" -> today;
             case "hôm qua" -> today.minusDays(1);
@@ -159,6 +142,7 @@ final class AssistantVoiceText {
     LocalDateTime dateTime(String phrase, boolean requireDay) {
         var match = TIME.matcher(phrase);
         require(match.find());
+        requireCompleteToken(TIME, phrase, match.start(), match.group());
         LocalDate day = requireDay || DATE.matcher(phrase).find() ? date(phrase) : today;
         int hour = number(match.group(1));
         String minuteText = match.group(2);
@@ -174,14 +158,20 @@ final class AssistantVoiceText {
         return day.atTime(LocalTime.of(hour, minute));
     }
 
-    void requireRange(String start, String end) {
-        require(Pattern.compile(Pattern.quote(start) + "\\s*,?\\s+(?:đến|tới|cho đến)\\s+" + Pattern.quote(end))
-                .matcher(text).find());
+    private void requireCompleteToken(Pattern pattern, String phrase, int offset, String selected) {
+        String source = sourceFor(phrase);
+        var literal = Pattern.compile(WORD_LEFT + Pattern.quote(phrase) + WORD_RIGHT).matcher(source);
+        var tokens = pattern.matcher(source);
+        while (literal.find()) {
+            if (tokens.find(literal.start() + offset) && tokens.start() == literal.start() + offset
+                    && tokens.group().equals(selected)) return;
+        }
+        throw new IllegalArgumentException();
     }
 
     String feeling(String phrase) {
         require(phrase != null);
-        require(!word("không\\s+" + Pattern.quote(phrase)).matcher(text).find());
+        require(!word("không\\s+" + Pattern.quote(phrase)).matcher(sourceFor(phrase)).find());
         return switch (phrase) {
             case "tốt", "thoải mái" -> "COMFORTABLE";
             case "bình thường" -> "NORMAL";

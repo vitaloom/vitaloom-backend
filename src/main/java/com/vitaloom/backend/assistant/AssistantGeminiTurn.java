@@ -32,7 +32,7 @@ import tools.jackson.databind.ObjectMapper;
 final class AssistantGeminiTurn {
     private static final String SAFETY_TOOL = "assessTurnSafety";
     private static final String FINISH_TOOL = "finishConversation";
-    private static final int MAX_DECLARED_TOOLS = 8;
+    private static final int MAX_DECLARED_TOOLS = 9;
     private static final int MAX_EVIDENCE_CALLS = 6;
     private static final int MAX_EVIDENCE_ROUNDS = 3;
     private static final tools.jackson.databind.ObjectReader JSON_READER = new ObjectMapper(JsonFactory.builder()
@@ -52,7 +52,7 @@ final class AssistantGeminiTurn {
     Result run(List<Message> messages, List<ToolCallback> tools, BooleanSupplier current) {
         if (messages == null || messages.isEmpty()) throw new IllegalArgumentException("Messages are required");
         if (tools == null || tools.size() > MAX_DECLARED_TOOLS) {
-            throw new IllegalArgumentException("At most eight evidence tools may be registered");
+            throw new IllegalArgumentException("At most nine evidence tools may be registered");
         }
         Map<String, ToolCallback> callbacks = indexCallbacks(tools);
         List<ToolCallback> declared = new ArrayList<>(tools);
@@ -101,6 +101,8 @@ final class AssistantGeminiTurn {
             List<AssistantMessage.ToolCall> evidenceCalls = requestedCalls.stream()
                     .filter(call -> !SAFETY_TOOL.equals(call.name()) && !FINISH_TOOL.equals(call.name())).toList();
             var finishCalls = requestedCalls.stream().filter(call -> FINISH_TOOL.equals(call.name())).toList();
+            List<AssistantMessage.ToolCall> journalCalls = evidenceCalls.stream()
+                    .filter(call -> AssistantJournalTools.isJournalTool(call.name())).toList();
             if (!finishCalls.isEmpty()) {
                 if (finishCalls.size() != 1 || !evidenceCalls.isEmpty()) {
                     throw new InvalidFinishException("Gemini must finish once and without evidence calls");
@@ -108,6 +110,14 @@ final class AssistantGeminiTurn {
                 if (!safetyAssessed) throw new IllegalStateException("Gemini omitted the required safety assessment");
                 ensureCurrent(current);
                 return new Result(validateFinish(finishCalls.getFirst().arguments()), grounding);
+            }
+            if (!journalCalls.isEmpty()) {
+                if (journalCalls.size() != 1 || evidenceCalls.size() != 1) {
+                    throw new IllegalStateException("Gemini must request one journal action without other tools");
+                }
+                validateCalls(journalCalls, callbacks, executedCallIds, executedCalls);
+                ensureCurrent(current);
+                return new Result(null, grounding, journalCalls.getFirst());
             }
             Map<AssistantMessage.ToolCall, ToolResponseMessage.ToolResponse> resultsByCall = new IdentityHashMap<>();
             if (!safetyCalls.isEmpty()) {
@@ -225,7 +235,8 @@ final class AssistantGeminiTurn {
                     throw new InvalidFinishException("Gemini returned an invalid final answer part");
                 }
                 String kindValue = kind.stringValue();
-                if (!Set.of("GROUNDED", "CONVERSATION", "CLARIFICATION", "LIMITATION").contains(kindValue)) {
+                if (!Set.of("GROUNDED", "CONVERSATION", "CLARIFICATION", "WRITE_CLARIFICATION", "LIMITATION")
+                        .contains(kindValue)) {
                     throw new InvalidFinishException("Gemini returned an invalid final answer kind");
                 }
                 boolean grounded = "GROUNDED".equals(kindValue);
@@ -239,6 +250,13 @@ final class AssistantGeminiTurn {
                         throw new InvalidFinishException("Final answer contains an invalid evidence key");
                     }
                 }
+            }
+            long writeClarifications = 0;
+            for (JsonNode part : parts) {
+                if ("WRITE_CLARIFICATION".equals(part.path("kind").stringValue())) writeClarifications++;
+            }
+            if (writeClarifications > 0 && (parts.size() != 1 || !parts.get(0).path("sources").isEmpty())) {
+                throw new InvalidFinishException("Write clarification must be the only answer part and have no sources");
             }
             return arguments;
         } catch (JacksonException failure) {
@@ -271,7 +289,9 @@ final class AssistantGeminiTurn {
     enum SafetyClassification { SAFE, URGENT, MEDICAL_RESTRICTED }
     enum Grounding { OPEN, EVIDENCE, APPROVED_KNOWLEDGE }
 
-    record Result(String text, Grounding grounding) {}
+    record Result(String text, Grounding grounding, AssistantMessage.ToolCall action) {
+        Result(String text, Grounding grounding) { this(text, grounding, null); }
+    }
     private record SafetyAssessment(SafetyClassification classification, Grounding grounding) {}
 
     static final class UnsafeRequestException extends RuntimeException {

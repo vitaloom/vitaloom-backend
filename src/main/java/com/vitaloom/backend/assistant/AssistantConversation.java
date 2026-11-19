@@ -14,5 +14,6 @@ record AssistantConversation(@Id String id, String owner, @Version Long revision
         return new AssistantConversation(id, owner, revision, now, expiresAt, allowed, history);
     }
 
-    record Turn(String turnId, String text, Instant at, AssistantCourseAnswers.Answer reply) {}
+    record Turn(String turnId, String text, Instant at, AssistantCourseAnswers.Answer reply,
+            String inputKey, Long generation) {}
 }

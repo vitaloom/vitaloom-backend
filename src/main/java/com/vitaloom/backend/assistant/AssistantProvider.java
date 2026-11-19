@@ -2,7 +2,6 @@ package com.vitaloom.backend.assistant;
 
 import java.util.List;
 import java.util.function.BooleanSupplier;
-import org.springframework.ai.chat.messages.AssistantMessage.ToolCall;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.tool.ToolCallback;
 
@@ -15,7 +14,6 @@ interface AssistantProvider {
 
     List<Float> embed(String model, String title, String text, boolean document, int dimensions);
 
-    ToolCall selectVoiceTool(String transcript);
 
     AssistantGeminiTurn.Result converse(List<Message> messages, List<ToolCallback> tools, BooleanSupplier current);
 

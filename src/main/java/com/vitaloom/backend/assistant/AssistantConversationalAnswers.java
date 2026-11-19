@@ -7,6 +7,7 @@ import java.util.UUID;
 import java.util.function.BooleanSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -26,6 +27,18 @@ final class AssistantConversationalAnswers {
             For safe requests, call the evidence tools you need. You can combine different tools and call them
             together or in sequence. Use searchApprovedKnowledge for factual health education and verified
             guidance. Use application navigation for supported screens and personal reads for recorded facts.
+            When the user clearly asks to create one Water or Main Sleep journal entry, use recordWater or
+            recordSleep only when every required field is explicitly present in the user's current or prior
+            user messages. Pending conversation context may contain Assistant questions and user answers. Never
+            use values stated only by the Assistant. For an explicit negation, cancellation, or hypothetical,
+            do not call a journal tool and respond conversationally. If the user does intend a write but the
+            requested action, target, or a required field is unclear or missing, do not call a journal tool.
+            Finish with exactly one WRITE_CLARIFICATION part asking for the most useful missing detail.
+            Never execute more than one journal action in a turn. Copy complete literal phrases for amounts,
+            dates, times, durations, and feelings. Do not translate, normalize, round, guess, calculate, or
+            invent them. For Water, omit `when` only when the user gave no date or time. A default current time
+            is allowed only then.
+            A journal tool call proposes an action. Do not claim it was saved.
             Resolve relative dates using the supplied reference date. Use recent context to resolve references,
             and ask a question if you cannot resolve an important ambiguity. Always obtain fresh personal evidence.
 
@@ -43,8 +56,9 @@ final class AssistantConversationalAnswers {
             {"parts":[{"kind":"GROUNDED","text":"Answer in prose","sources":["e1"]}]}
             Use one to four parts of natural prose. The kinds are GROUNDED (cite the evidence keys returned by
             tools that support the facts), CONVERSATION (ordinary casual chat without factual health claims),
-            CLARIFICATION (one useful question), and LIMITATION (unsupported or insufficient information).
-            The last three kinds must use an empty sources array and must not make health or personal-data claims.
+            CLARIFICATION (one useful question), WRITE_CLARIFICATION (one question before a journal write),
+            and LIMITATION (unsupported or insufficient information).
+            The non-GROUNDED kinds must use an empty sources array and must not make health or personal-data claims.
             Use keys in the sources array only. Do not write evidence keys in the prose or invent routes.
             Shorten the response when appropriate.
             """;
@@ -62,38 +76,66 @@ final class AssistantConversationalAnswers {
 
     AssistantCourseAnswers.Answer answer(String owner, String question, UUID turnId, List<String> priorTopics,
             boolean permitted, BooleanSupplier current, BooleanSupplier personalCurrent) {
+        return evaluateInternal(owner, question, turnId, priorTopics, List.of(), permitted, current,
+                personalCurrent, false).answer();
+    }
+
+    Evaluation evaluate(String owner, String question, UUID turnId, List<String> priorTopics,
+            List<Message> pendingWriteContext, boolean permitted, BooleanSupplier current,
+            BooleanSupplier personalCurrent) {
+        if (pendingWriteContext == null || pendingWriteContext.size() > 8
+                || pendingWriteContext.stream().anyMatch(message -> !(message instanceof UserMessage)
+                        && !(message instanceof AssistantMessage))) {
+            throw new IllegalArgumentException("Pending write context must contain at most four user/assistant pairs");
+        }
+        return evaluateInternal(owner, question, turnId, priorTopics, pendingWriteContext,
+                permitted, current, personalCurrent, true);
+    }
+
+    private Evaluation evaluateInternal(String owner, String question, UUID turnId, List<String> priorTopics,
+            List<Message> pendingWriteContext, boolean permitted, BooleanSupplier current,
+            BooleanSupplier personalCurrent, boolean journalWrites) {
         var evidence = new AssistantConversationTools(faq, turnId);
         var tools = new ArrayList<ToolCallback>(Arrays.asList(ToolCallbacks.from(evidence)));
         tools.addAll(Arrays.asList(ToolCallbacks.from(personal.conversationTools(
                 owner, evidence, permitted, personalCurrent))));
+        if (journalWrites && permitted) tools.addAll(Arrays.asList(
+                ToolCallbacks.from(new AssistantJournalTools.Declarations())));
+        if (tools.size() > 9) throw new IllegalStateException("Assistant tools exceed the configured tool limit");
         String instructions = INSTRUCTIONS + "\nReference date in Asia/Ho_Chi_Minh: " + personal.today()
                 + "\nRelevant recent conversation topics (no prior factual results): " + priorTopics + ".";
-        List<Message> messages = List.of(new SystemMessage(instructions), new UserMessage(question));
+        var messages = new ArrayList<Message>();
+        messages.add(new SystemMessage(instructions));
+        messages.addAll(pendingWriteContext);
+        messages.add(new UserMessage(question));
         try {
             var output = model.converse(messages, tools, current);
             if (!current.getAsBoolean()) throw new AssistantGeminiTurn.AccessChangedException();
+            if (output.action() != null) return new Evaluation(null, output.action());
             boolean knowledgeRequired = output.grounding() == AssistantGeminiTurn.Grounding.APPROVED_KNOWLEDGE
                     || evidence.healthKnowledgeRequested()
                     || output.grounding() == AssistantGeminiTurn.Grounding.OPEN && evidence.knowledgeRequested();
             if (knowledgeRequired && evidence.sources().values().stream()
                     .noneMatch(source -> evidence.supportsKnowledge(source.source()))) {
-                return knowledgeMissing(evidence.knowledgeUnavailable());
+                return new Evaluation(knowledgeMissing(evidence.knowledgeUnavailable()), null);
             }
             if (evidence.personalDenied() && evidence.sources().isEmpty()) {
-                return message("PERMISSION_REQUIRED",
-                        "Trợ lý chưa được phép đọc nhật ký của bạn. Bạn có thể bật quyền trong cài đặt Trợ lý.");
+                return new Evaluation(message("PERMISSION_REQUIRED",
+                        "Trợ lý chưa được phép đọc nhật ký của bạn. Bạn có thể bật quyền trong cài đặt Trợ lý."), null);
             }
             var reply = AssistantConversationReply.parse(output.text(), evidence.sources(),
                     !knowledgeRequired && output.grounding() == AssistantGeminiTurn.Grounding.OPEN);
             if (knowledgeRequired && reply.parts().stream().map(AssistantCourseAnswers.Part::source)
-                    .noneMatch(evidence::supportsKnowledge)) return knowledgeMissing(evidence.knowledgeUnavailable());
+                    .noneMatch(evidence::supportsKnowledge)) {
+                return new Evaluation(knowledgeMissing(evidence.knowledgeUnavailable()), null);
+            }
             if (!current.getAsBoolean()) throw new AssistantGeminiTurn.AccessChangedException();
-            return reply;
+            return new Evaluation(reply, null);
         } catch (AssistantGeminiTurn.UnsafeRequestException unsafe) {
             if (unsafe.classification() == AssistantGeminiTurn.SafetyClassification.URGENT) {
-                return message("SAFETY", "Nếu đang có nguy hiểm tức thời, hãy liên hệ dịch vụ cấp cứu địa phương ngay.");
+                return new Evaluation(message("SAFETY", "Nếu đang có nguy hiểm tức thời, hãy liên hệ dịch vụ cấp cứu địa phương ngay."), null);
             }
-            return message("SAFETY", "Trợ lý không thể chẩn đoán, kê đơn hoặc hướng dẫn liều thuốc. Hãy hỏi chuyên gia y tế.");
+            return new Evaluation(message("SAFETY", "Trợ lý không thể chẩn đoán, kê đơn hoặc hướng dẫn liều thuốc. Hãy hỏi chuyên gia y tế."), null);
         } catch (AssistantGeminiTurn.AccessChangedException
                 | AssistantPersonalDataTools.PersonalDataAccessDeniedException changed) {
             throw changed;
@@ -103,9 +145,11 @@ final class AssistantConversationalAnswers {
                     .addKeyValue("cause_type", failure.getCause() == null
                             ? null : failure.getCause().getClass().getSimpleName())
                     .log("Assistant conversation failed");
-            return unavailable();
+            return new Evaluation(unavailable(), null);
         }
     }
+
+    record Evaluation(AssistantCourseAnswers.Answer answer, AssistantMessage.ToolCall action) {}
 
     static AssistantCourseAnswers.Answer unavailable() {
         return message("DEPENDENCY_UNAVAILABLE", "Trợ lý đang tạm thời không khả dụng. Bạn có thể thử lại sau. "

@@ -8,12 +8,8 @@ import jakarta.validation.constraints.Size;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.function.BooleanSupplier;
 import java.util.UUID;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -22,10 +18,10 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.index.Index;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -42,27 +38,18 @@ import org.springframework.web.server.ResponseStatusException;
 @Conditional(AssistantActivation.Course.class)
 @RequestMapping("/api/assistant/mvp/conversations")
 class AssistantCourseController {
-    private static final int MAX_TURNS = 50;
     private static final int PAGE_SIZE = 20;
     private final MongoTemplate mongo;
-    private final AssistantCourseAnswers answers;
     private final Clock clock;
-    private final ObjectProvider<AssistantFixtureSearch> readyFaqSearch;
     private final AssistantAccountSettings accountSettings;
-    private final ObjectProvider<AssistantProvider> provider;
-    private final AssistantGeminiReadiness readiness;
+    private final AssistantConversationTurns turns;
 
-    AssistantCourseController(MongoTemplate mongo, AssistantCourseAnswers answers, Clock clock,
-            @Qualifier("assistantReadyFaqSearch") ObjectProvider<AssistantFixtureSearch> readyFaqSearch,
-            AssistantAccountSettings accountSettings, ObjectProvider<AssistantProvider> provider,
-            AssistantGeminiReadiness readiness) {
+    AssistantCourseController(MongoTemplate mongo, Clock clock, AssistantAccountSettings accountSettings,
+            AssistantConversationTurns turns) {
         this.mongo = mongo;
-        this.answers = answers;
         this.clock = clock;
-        this.readyFaqSearch = readyFaqSearch;
         this.accountSettings = accountSettings;
-        this.provider = provider;
-        this.readiness = readiness;
+        this.turns = turns;
     }
 
     @GetMapping
@@ -83,12 +70,7 @@ class AssistantCourseController {
     ResponseEntity<View> create(Authentication auth, @RequestBody(required = false) Acknowledgement request) {
         String owner = subject(auth);
         var preference = accountSettings.requireEnabled(owner);
-        ensureConversationIndexes(mongo);
-        Instant now = clock.instant();
-        var row = new AssistantConversation(UUID.randomUUID().toString(), owner, null, now,
-                now.plus(Duration.ofDays(7)), false, List.of());
-        requireCurrent(auth, preference);
-        var saved = mongo.insert(row);
+        var saved = turns.createIfNew(auth, preference, UUID.randomUUID());
         requireCurrent(auth, preference);
         return ResponseEntity.status(HttpStatus.CREATED).body(view(saved, preference));
     }
@@ -114,10 +96,13 @@ class AssistantCourseController {
         String owner = subject(auth);
         var preference = accountSettings.requireEnabled(owner);
         requireCurrent(auth, preference);
-        if (mongo.remove(owned(owner).addCriteria(Criteria.where("id").is(id.toString())),
-                AssistantConversation.class).getDeletedCount() == 0) {
+        var target = ownedIncludingDeleted(owner).addCriteria(Criteria.where("id").is(id.toString()));
+        if (mongo.updateFirst(target, new Update().set("deleting", true).unset("turns").inc("revision", 1),
+                AssistantConversation.class).getMatchedCount() == 0) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
+        turns.removeReplies(id);
+        mongo.remove(target, AssistantConversation.class);
         return ResponseEntity.noContent().build();
     }
 
@@ -137,61 +122,13 @@ class AssistantCourseController {
     View turn(Authentication auth, @PathVariable UUID id, @Valid @RequestBody Send request) {
         String owner = subject(auth);
         var preference = accountSettings.requireEnabled(owner);
-        var row = getOwned(owner, id);
         String text = request.text().strip();
-        for (var turn : row.turns()) {
-            if (turn.turnId().equals(request.turnId().toString())) {
-                if (!turn.text().equals(text)) throw new ResponseStatusException(HttpStatus.CONFLICT);
-                requireCurrent(auth, preference);
-                return view(row, preference);
-            }
-        }
-        if (row.turns().size() >= MAX_TURNS) throw new ResponseStatusException(HttpStatus.CONFLICT);
-
-        readiness.requireReady();
-        var model = provider.getIfAvailable();
-        if (model == null) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE);
-        var now = clock.instant();
-        var topics = row.turns().reversed().stream()
-                .filter(turn -> turn.at().plus(Duration.ofMinutes(30)).isAfter(now))
-                .flatMap(turn -> AssistantConversationalAnswers.recentTopics(turn.reply()).stream())
-                .distinct().limit(4).toList();
-        BooleanSupplier current = () -> isCurrent(auth, preference)
-                && mongo.exists(owned(owner).addCriteria(Criteria.where("id").is(id.toString())
-                        .and("revision").is(row.revision())), AssistantConversation.class);
-        AssistantCourseAnswers.Answer answer;
-        try {
-            requireCurrent(auth, preference);
-            String modelText = text.replace(owner, "[account identifier omitted]");
-            if (auth instanceof JwtAuthenticationToken token) {
-                modelText = modelText.replace(token.getToken().getTokenValue(), "[access token omitted]");
-            }
-            answer = new AssistantConversationalAnswers(model, readyFaqSearch.getIfAvailable(), answers)
-                    .answer(owner, modelText, request.turnId(), topics, true, current, current);
-        } catch (AssistantGeminiTurn.AccessChangedException
-                | AssistantPersonalDataTools.PersonalDataAccessDeniedException changed) {
-            requireCurrent(auth, preference);
-            throw new OptimisticLockingFailureException("Assistant conversation changed");
-        }
-        if (!current.getAsBoolean()) {
-            requireCurrent(auth, preference);
-            throw new OptimisticLockingFailureException("Assistant conversation changed");
-        }
-        var history = new ArrayList<>(row.turns());
-        history.add(new AssistantConversation.Turn(request.turnId().toString(), text, now, answer));
-        var saved = mongo.save(row.change(clock.instant(), true, List.copyOf(history)));
-        requireCurrent(auth, preference);
-        return view(saved, preference);
-    }
-
-    private boolean isCurrent(Authentication auth, AssistantAccountSettings.Preference preference) {
-        if (auth instanceof JwtAuthenticationToken token && token.getToken().getExpiresAt() != null
-                && !token.getToken().getExpiresAt().isAfter(clock.instant())) return false;
-        return accountSettings.isCurrent(subject(auth), preference);
+        return turns.submit(auth, preference, id, request.turnId(), text,
+                AssistantConversationTurns.textKey(text), clock.instant());
     }
 
     private void requireCurrent(Authentication auth, AssistantAccountSettings.Preference preference) {
-        if (!isCurrent(auth, preference)) throw new AccountSettingChangedException();
+        turns.requireCurrent(auth, preference);
     }
 
     @ExceptionHandler(OptimisticLockingFailureException.class)
@@ -223,14 +160,15 @@ class AssistantCourseController {
     }
 
     private Query owned(String owner) {
+        return ownedIncludingDeleted(owner).addCriteria(Criteria.where("deleting").ne(true));
+    }
+
+    private Query ownedIncludingDeleted(String owner) {
         return Query.query(Criteria.where("owner").is(owner).and("expiresAt").gt(clock.instant()));
     }
 
     private AssistantConversation getOwned(String owner, UUID id) {
-        var row = mongo.findOne(owned(owner).addCriteria(Criteria.where("id").is(id.toString())),
-                AssistantConversation.class);
-        if (row == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
-        return row;
+        return turns.getOwned(owner, id);
     }
 
     static View view(AssistantConversation row) {
