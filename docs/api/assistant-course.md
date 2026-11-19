@@ -1,73 +1,33 @@
 # Assistant MVP cho đồ án
 
-Đặt `ASSISTANT_GEMINI_API_KEY` và `ASSISTANT_VECTOR_MONGO_URI` để dùng [Gemini với corpus READY](assistant-ready-faq-live.md) trên mọi Spring profile. Mỗi request cần Bearer access JWT. Backend dùng JWT subject để xác định chủ hội thoại. Có thể bật hội thoại local với key trống bằng `vitaloom.assistant.course.enabled=true`, hoặc đặt thuộc tính đó thành `false` để tắt API hội thoại.
+Assistant dùng một quyền theo tài khoản và lấy chủ sở hữu từ Bearer JWT. Công tắc Profile vừa cấp quyền truy cập Assistant vừa đồng ý cho Google Gemini xử lý dữ liệu Sleep/Water liên quan, câu hỏi và ngữ cảnh cần thiết.
 
-Các đường dẫn dưới đây tương đối với `/api/assistant/mvp/conversations`.
+`GET /api/assistant/mvp/settings` trả `{personalDataAllowed: boolean}`. `PUT` nhận `{personalDataAllowed: boolean, consentVersion?: string}`. Khi bật, gửi `consentVersion: "gemini-health-v1"` sau khi người dùng thấy mô tả về Google Gemini. Bản lưu cấp quyền cũ thiếu phiên bản được xem như tắt. Backend tăng generation khi ghi cài đặt. Khi tắt, tất cả API Assistant ngoài settings từ chối truy cập, kể cả lịch sử và voice. TTL 7 ngày vẫn áp dụng với lịch sử.
 
-`GET /api/assistant/mvp/settings` trả `{personalDataAllowed: boolean}`; `PUT /api/assistant/mvp/settings` nhận `{personalDataAllowed: boolean}`. Hai endpoint dùng Bearer subject hiện tại và một cài đặt theo tài khoản không có TTL. Tài khoản chưa có cài đặt được xem là `false`. Quyền này cho phép Assistant đọc dữ liệu cá nhân từ các dịch vụ Sleep và Water trên các hội thoại hiện tại và mới. Đổi quyền tăng generation và chặn xuất bản kết quả cá nhân đã được tính bằng quyền cũ. Quyền không cấp consent gửi câu hỏi tới Gemini, ghi dữ liệu từ voice hoặc thay đổi consent của từng hội thoại.
+Các đường dẫn trong bảng tương đối với `/api/assistant/mvp/conversations`. Khi quyền bật, tạo hội thoại không cần chấp thuận lần hai. Các trường tương thích trong payload cũ không cấp quyền.
 
 | Method và đường dẫn | Request | Kết quả |
 | --- | --- | --- |
 | `GET ?page=0` | 20 hội thoại mỗi trang | `{items: [{id, updatedAt}], hasMore}` |
-| `POST /` | `{accepted: true}` | 201 và hội thoại mới. |
+| `POST /` | Không yêu cầu body | 201 và hội thoại mới. |
 | `GET /{id}` | — | Hội thoại đang còn hạn. |
-| `POST /{id}/turns` | `{turnId, text, geminiAccepted?}`, UUID và chuỗi 1–300 ký tự | Hội thoại sau khi thêm lượt. Retry cùng UUID và nội dung trả lại hội thoại đã lưu. |
+| `POST /{id}/turns` | `{turnId, text}`, UUID và chuỗi 1–300 ký tự | Hội thoại sau khi thêm lượt. Retry cùng UUID và nội dung trả lại hội thoại đã lưu. |
 | `PUT /{id}/permission` | `{allowed: boolean}` | Trả hội thoại nếu giá trị trùng với quyền tài khoản hiện tại. `409 ASSISTANT_ACCOUNT_SETTING_REQUIRED` nếu cần đổi quyền. Không xóa lượt đã lưu. |
 | `DELETE /{id}` | — | 204. |
 
 `POST /` và `GET /{id}` trả `{id, updatedAt, personalAllowed, turns}`. `personalAllowed` phản ánh quyền tài khoản ở thời điểm đọc. Mỗi lượt có `{turnId, text, outcome, parts}`. Mỗi phần có `{status, text, source}`, với nguồn dạng `{id, version, title, route, from, to}`. Ngày ISO theo phạm vi của dữ liệu. Nguồn app-help không có ngày. Văn bản phản hồi là tiếng Việt.
 
-Lượt hỏi tiếp có thể kế thừa chủ đề, phạm vi ngày và mục đích phân tích từ lượt cá nhân gần nhất đã xác định được ngữ cảnh trong 30 phút. Backend đọc lại dữ liệu theo phạm vi đã xác định và kiểm tra lại quyền đọc của tài khoản ở mỗi lượt. Các hội thoại cũ chỉ có intent vẫn dùng được. Với câu hỏi về tuần này, Assistant lấy các ngày từ thứ Hai đến hôm nay trong Recent Sleep Report đã xác minh. Assistant nêu độ đầy đủ và thay đổi đã quan sát, không áp dụng ngưỡng bất thường.
+Gemini quyết định truy xuất READY FAQ, đọc Sleep/Water hoặc kết hợp cả hai. Backend kiểm tra JWT, generation của quyền và revision hội thoại trước khi cung cấp bằng chứng hoặc gửi yêu cầu mới. Ngữ cảnh tóm tắt tối đa bốn chủ đề từ nguồn đã xác minh trong 30 phút. Backend đọc lại số liệu cần thiết theo lượt, không mặc định gửi lịch sử hoặc đưa thông tin định danh Auth/Profile vào payload.
 
-401 cho JWT thiếu hoặc không hợp lệ, 403 cho tài khoản ngoài allowlist hoặc khi chưa chấp nhận lưu, 404 cho hội thoại ngoại lai/hết hạn, 409 cho UUID bị tái dùng với nội dung khác, đạt 50 lượt hoặc ghi đồng thời, 503 cho lỗi lưu trữ Assistant. Một lỗi đọc dữ liệu cá nhân trong hội thoại có trạng thái `DEPENDENCY_UNAVAILABLE` và phần hướng dẫn có sẵn vẫn được trả về. Các trạng thái còn lại gồm `ANSWERED`, `PARTIAL`, `PERMISSION_REQUIRED`, `NO_DATA`, `UNVERIFIED_DATA`, `INSUFFICIENT_EVIDENCE` và `SAFETY`.
+401 áp dụng cho JWT thiếu hoặc không hợp lệ. 403 áp dụng khi quyền tắt. 404 áp dụng cho hội thoại ngoại lai hoặc hết hạn. 409 áp dụng khi quyền thay đổi trong lượt, UUID bị tái dùng với nội dung khác hoặc ghi đồng thời. 503 áp dụng khi kho lưu trữ hoặc deployment cấu hình provider chưa khả dụng. Tình trạng lỗi provider không thay đổi công tắc tài khoản.
 
-MongoDB áp dụng TTL 7 ngày từ lúc tạo. API chặn ngay khi hết hạn, còn MongoDB xóa bản ghi theo lịch TTL của nó. Ghi theo revision để lượt đang xử lý không ghi đè thao tác xóa hoặc thay đổi quyền đã ghi thành công. Lịch sử và dữ liệu đã đọc từ Sleep/Water được xử lý tại Backend.
+Các projection Sleep/Water chỉ dùng dịch vụ chủ quản. Gemini có thể yêu cầu giờ ngủ/thức hoặc từng lượng nước đã ghi khi cần. Dữ liệu không có bản ghi không được tính bằng 0. Các nguồn công khai và dữ liệu xác minh được kiểm tra trước khi trả lời. Ngày thống kê dùng `Asia/Ho_Chi_Minh`.
 
-## Phạm vi dữ liệu
-
-- KB nhỏ gồm ba hướng dẫn đã đối chiếu với route Giấc ngủ/Nước. Mục đích tra cứu dùng alias tiếng Việt và tiếng Anh, sau đó so khớp cosine trên vector từ khóa cục bộ. Liên kết nguồn do server định nghĩa. Atlas và mô hình embedding nằm ngoài cấu hình demo.
-- Sleep MAIN đọc ngày đơn và Recent đọc cửa sổ 7 ngày qua dịch vụ chủ quản. Supplement về xuất bản insight và A04 để ngoài demo.
-- Water đọc ngày hoặc tuần từ dữ liệu đã lưu, dùng `Asia/Ho_Chi_Minh`. Ngày không có bản ghi được ghi rõ, các ngày tương lai không xuất hiện trong danh sách. Phần Water có dữ liệu mang `PARTIAL` vì ngày ghi gốc, đồng bộ đầy đủ và lịch sử mục tiêu chưa được xác minh.
-- [Assistant sandbox](assistant-sandbox.md) là đường chạy Gemini riêng với một fixture tổng hợp cố định.
-
-## Thiết lập fixture cũ
-
-Phần dưới ghi lại cấu hình thử nghiệm cũ. Luồng hội thoại READY hiện dùng [cấu hình Gemini và VectorDB](assistant-ready-faq-live.md).
-
-Cờ boolean tùy chọn `geminiAccepted` xác nhận cho phép Gemini xử lý câu hỏi mẫu ở lượt hiện tại. Backend yêu cầu tài khoản sandbox đã cấu hình, cờ bật thử nghiệm và câu hỏi trùng khớp với fixture của máy chủ sau khi chuẩn hóa Unicode NFC, khoảng trắng hai đầu và chữ hoa/thường. Payload hiện có tiếp tục dùng luồng FAQ nội bộ và dịch vụ dữ liệu theo chủ sở hữu.
-
-Profile mặc định hỗ trợ đường thử với `ASSISTANT_RAG_SANDBOX_ENABLED=true`, `ASSISTANT_SANDBOX_ACCOUNT_ID` và `ASSISTANT_GEMINI_API_KEY` ở Backend. Dùng Atlas Local biệt lập và collection `assistant_sandbox_faq`. Chỉ đặt `ASSISTANT_RAG_INGEST=true` khi cần ingest fixture. Backend dùng Gemini Embedding 2 (768 chiều), truy vấn index cosine có bộ lọc metadata và đối chiếu fixture hiện hành trên primary trước khi dựng prompt. Lượt thành công trích dẫn `app-help-sleep-journal@1` với route `/sleep/journal`. Khi tìm kiếm không khả dụng hoặc phản hồi provider không hợp lệ, Mobile hiển thị thông báo kèm câu trả lời fixture nội bộ với trạng thái `DEPENDENCY_UNAVAILABLE`.
-
-Backend trả lượt đã lưu trước khi dispatch theo hội thoại và UUID lượt. Mỗi lần thử giữ claim 24 giờ trong phạm vi hội thoại. Claim đang chờ trả 409 để ứng dụng thử lại cùng UUID mà không gửi lại sang Gemini. Nếu hội thoại hết hạn hoặc đổi revision trong khi xử lý, Backend từ chối ghi câu trả lời cũ.
-
-Sau khi được duyệt dùng sandbox, chạy `tools/assistant-course-smoke.ps1 -GeminiRag -KeepRunning` với khóa từ môi trường riêng. Xem [runbook local](../../../vitaloom-business-docs-and-tools/docs/development-workflow/tasks/assistant-course-mvp.md).
-
-Để dùng Vector Search riêng với Mongo của ứng dụng, chạy:
-
-```powershell
-.\mvnw.cmd -DskipTests package
-.\tools\assistant-vector-bootstrap.ps1
-```
-
-Chạy lại bootstrap sau khi volume vector bị xóa. Script chuẩn bị mạng dùng chung, khởi động Compose VectorDB, chờ health check rồi khởi động Compose chính. Sau đó script tạo index nếu thiếu và dùng Backend với khóa Gemini trong môi trường hoặc `.env` để ingest. Script chỉ báo PASS sau khi cả ba FAQ đều có vector 768 chiều và tìm được qua index. Tiến trình Backend dùng để bootstrap tự dừng sau khi kiểm tra.
-
-Nếu chuyển từ Compose gộp, làm theo [hướng dẫn giữ volume cũ](../../README.md#2-start-local-infrastructure) trước khi chạy bootstrap. Reset volume Compose chính vẫn giữ dữ liệu vector.
-
-Khi chạy Backend để chat, đặt `ASSISTANT_VECTOR_MONGO_URI`, ví dụ `mongodb://127.0.0.1:27183/assistant_vector?directConnection=true&serverSelectionTimeoutMS=2000`, và dùng cùng model embedding với bootstrap. Tài khoản và quyền thử Gemini cấu hình theo phần sandbox ở trên.
-
-Backend đọc `ASSISTANT_GEMINI_CHAT_MODEL` (mặc định `gemini-3.1-flash-lite`) và `ASSISTANT_GEMINI_EMBEDDING_MODEL` (mặc định `gemini-embedding-2`). Nếu cần chọn `gemini-embedding-001`, đặt biến embedding và ingest lại. Backend dùng định dạng theo model và lọc generation riêng để chỉ tìm trong các vector tạo từ cùng model. Khi Google trả 429, đường chat trả fallback và lần chạy smoke dừng nếu không xác minh được Gemini. Backend không đổi model hay tier tự động.
-
-Sandbox nhận ba FAQ và câu diễn đạt lại đã duyệt trong [bản duyệt FAQ](../../../vitaloom-business-docs-and-tools/docs/development-workflow/tasks/assistant-v1-content-tool-review.md). Backend nhận diện câu cho phép trước, dùng câu chuẩn hoặc paraphrase thuộc bộ mẫu để truy vấn Atlas, rồi xác minh chunk và nguồn trên primary.
-
-Mẫu T01 nhận câu `Nhật ký ngủ tổng hợp hôm nay ghi bao nhiêu phút?`. Để chạy mẫu cần tài khoản sandbox, xác nhận từng lượt, quyền đọc Sleep/Nước trong cài đặt tài khoản và một bản ghi MAIN DURATION 423 phút tổng hợp hôm nay theo giờ Việt Nam, với cảm nhận để trống. Backend chỉ chấp nhận một lần gọi `getSleepRecords` với hai đầu khoảng ngày bằng ngày mẫu. Backend xác minh bản ghi theo JWT rồi chỉ gửi projection tổng hợp cố định. Kết quả gồm nguồn `synthetic-sleep-journal@1`. Tài khoản khác và dữ liệu ngoài mẫu tiếp tục theo luồng nội bộ.
-
-## Local READY FAQ chat
-
-See [Assistant READY FAQ with Gemini](assistant-ready-faq-live.md) for the two Backend settings and current authentication, consent and retrieval behavior. The READY response includes server-attributed FAQ IDs, titles and versions. The similarity threshold remains 0.75.
+Xem [điều kiện kích hoạt Gemini và Atlas](assistant-ready-faq-live.md) và [sandbox fixture](assistant-sandbox.md) dành cho thử nghiệm tổng hợp.
 
 ## Ghi nhật ký bằng giọng nói
 
-`POST /api/assistant/mvp/voice-turns` nhận Bearer access JWT và multipart form gồm `audio`, `turnId` (UUID), `consentAccepted=true`, `consentVersion=assemblyai-us-v1`. Audio tối đa 1 MiB. Mobile giới hạn 19 giây. Backend từ chối xử lý bản chép lời nếu AssemblyAI báo audio vượt 20 giây. Hỗ trợ M4A/MP4, WebM và WAV. Mỗi lượt trả HTTP 200 và một hội thoại mới theo cấu trúc trên, với bản chép lời và kết quả ghi. Khi bản chép lời thiếu thông tin bắt buộc, hội thoại vẫn hiển thị yêu cầu và lý do chưa ghi. Audio rỗng hoặc kiểu không hỗ trợ trả 400 hoặc 415. Audio vượt giới hạn dung lượng trả 413. Lượt chưa đồng ý hoặc dùng phiên bản đồng ý cũ trả 403. Audio không có bản chép lời dùng được trả 422. STT hoặc kho hội thoại không khả dụng trả 503.
+`POST /api/assistant/mvp/voice-turns` yêu cầu Bearer JWT và quyền Assistant đang bật. Multipart form gửi `audio`, `turnId` (UUID), `consentAccepted=true`, và `consentVersion=assemblyai-us-v1` để xác nhận thông báo về việc gửi bản ghi âm cho AssemblyAI. Audio tối đa 1 MiB. Mobile giới hạn 19 giây. Backend từ chối bản chép lời nếu AssemblyAI báo audio vượt 20 giây. Hỗ trợ M4A/MP4, WebM và WAV. Mỗi lượt thành công trả HTTP 200 và một hội thoại mới với bản chép lời và kết quả ghi. Audio rỗng hoặc kiểu không hỗ trợ trả 400 hoặc 415. Audio vượt giới hạn dung lượng trả 413. Tài khoản tắt Assistant hoặc thiếu xác nhận AssemblyAI hiện hành nhận 403. Audio không có bản chép lời dùng được trả 422. STT, provider hoặc kho hội thoại không khả dụng trả 503.
 
 Backend gửi audio tới AssemblyAI US để chép lời tiếng Việt bằng `universal-3-5-pro` với `universal-2` dự phòng. Backend yêu cầu AssemblyAI xóa transcript và audio liên kết khi đã nhận được ID lượt chép lời. Nếu không thể xác nhận xóa, dữ liệu phía nhà cung cấp chịu chính sách lưu giữ của tài khoản AssemblyAI. Gemini chỉ nhận bản chép lời hiện tại và mô tả hai công cụ nội bộ. Backend dùng JWT subject để tạo bản ghi qua Water và Sleep Journal v2, xác minh tham số và thực thi tối đa một công cụ tạo mới. Bản chép lời đi vào lịch sử hội thoại có thời hạn 7 ngày và có thể xóa từ Assistant.
 

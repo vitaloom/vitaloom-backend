@@ -1,10 +1,14 @@
 package com.vitaloom.backend.assistant;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -19,6 +23,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -29,6 +35,7 @@ import org.springframework.test.web.servlet.request.MockMultipartHttpServletRequ
 @SpringBootTest(properties = {
     "vitaloom.test.mongodb.database=assistant_voice_test",
     "ASSISTANT_GEMINI_API_KEY=fixture-only-fake-key",
+    "ASSISTANT_GEMINI_HEALTH_PROCESSING_VERIFIED=true",
     "ASSISTANT_VECTOR_MONGO_URI=",
     "ASSISTANT_VOICE_ENABLED=true",
     "ASSEMBLYAI_API_KEY=fixture-assembly-key"
@@ -42,8 +49,36 @@ class AssistantVoiceMongoIntegrationTest {
     private static final byte[] SLEEP_AUDIO = {4, 5, 6};
     @Autowired MockMvc mvc;
     @Autowired JwtTokenService tokens;
+    @Autowired MongoTemplate mongo;
     @MockitoBean AssistantSpeechToText stt;
     @MockitoBean GeminiAssistantProvider gemini;
+
+    @Test
+    void conversationUsesOneVersionedPermissionAcrossDisableAndReenable() throws Exception {
+        String owner = "chat-" + UUID.randomUUID();
+        String conversations = "/api/assistant/mvp/conversations";
+        mvc.perform(post(conversations).header("Authorization", auth(owner)))
+                .andExpect(status().isForbidden());
+        changePermission(owner, true);
+        var creation = mvc.perform(post(conversations).header("Authorization", auth(owner)))
+                .andExpect(status().isCreated()).andReturn();
+        String id = com.jayway.jsonpath.JsonPath.read(creation.getResponse().getContentAsString(), "$.id");
+        when(gemini.converse(anyList(), anyList(), any())).thenReturn(new AssistantGeminiTurn.Result("""
+                {"parts":[{"kind":"CONVERSATION","text":"Chào bạn.","sources":[]}]}
+                """, AssistantGeminiTurn.Grounding.OPEN));
+        var turn = post(conversations + "/" + id + "/turns").header("Authorization", auth(owner))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"turnId\":\"" + UUID.randomUUID() + "\",\"text\":\"Xin chào\"}");
+        mvc.perform(turn).andExpect(status().isOk()).andExpect(jsonPath("$.turns[0].parts[0].text").value("Chào bạn."));
+
+        changePermission(owner, false);
+        mvc.perform(get(conversations + "/" + id).header("Authorization", auth(owner)))
+                .andExpect(status().isForbidden());
+        changePermission(owner, true);
+        mvc.perform(get(conversations + "/" + id).header("Authorization", auth(owner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.turns.length()").value(1));
+        verify(gemini).converse(anyList(), anyList(), any());
+    }
 
     @Test
     void writesThroughAuthenticatedOwnerServicesAndReplaysTheWaterTurn() throws Exception {
@@ -54,7 +89,14 @@ class AssistantVoiceMongoIntegrationTest {
                 .andExpect(status().isUnauthorized());
         mvc.perform(voice(waterTurn, WATER_AUDIO, false).header("Authorization", auth(owner)))
                 .andExpect(status().isForbidden());
+        mvc.perform(voice(waterTurn, WATER_AUDIO, true).header("Authorization", auth(owner)))
+                .andExpect(status().isForbidden());
         verifyNoInteractions(stt, gemini);
+        mongo.getCollection("assistant_account_settings").insertOne(new org.bson.Document("_id", owner)
+                .append("personalDataAllowed", true).append("generation", 4L));
+        mvc.perform(get("/api/assistant/mvp/settings").header("Authorization", auth(owner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.personalDataAllowed").value(false));
+        changePermission(owner, true);
 
         String water = "Nhập lượng nước 250ml tại thời điểm hiện tại cho tôi";
         when(stt.transcribe(WATER_AUDIO)).thenReturn(water);
@@ -86,6 +128,24 @@ class AssistantVoiceMongoIntegrationTest {
                 .andExpect(jsonPath("$.sessions[0].feeling").value("COMFORTABLE"));
         mvc.perform(get("/api/sleep/v2/sessions").header("Authorization", auth("other-" + owner)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.sessions").isEmpty());
+        changePermission(owner, false);
+        mvc.perform(voice(waterTurn, WATER_AUDIO, true).header("Authorization", auth(owner)))
+                .andExpect(status().isForbidden());
+        mvc.perform(waterSummary(today, owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalMl").value(250));
+        mvc.perform(get("/api/sleep/v2/sessions").header("Authorization", auth(owner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.sessions[0].minutes").value(480));
+    }
+
+    private void changePermission(String owner, boolean enabled) throws Exception {
+        mvc.perform(put("/api/assistant/mvp/settings").header("Authorization", auth(owner))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(enabled ? """
+                                {"personalDataAllowed":true,"consentVersion":"gemini-health-v1"}
+                                """ : """
+                                {"personalDataAllowed":false}
+                                """))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.personalDataAllowed").value(enabled));
     }
 
     private MockMultipartHttpServletRequestBuilder voice(UUID turnId, byte[] audio, boolean consent) {

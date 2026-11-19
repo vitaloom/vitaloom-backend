@@ -21,8 +21,7 @@ final class AssistantActivation {
         @Override
         public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
             var environment = context.getEnvironment();
-            var enabled = environment.getProperty("vitaloom.assistant.course.enabled", Boolean.class);
-            return enabled != null ? enabled : StringUtils.hasText(environment.getProperty(KEY));
+            return environment.getProperty("vitaloom.assistant.course.enabled", Boolean.class, true);
         }
     }
 

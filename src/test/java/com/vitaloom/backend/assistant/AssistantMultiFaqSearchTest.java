@@ -36,124 +36,66 @@ class AssistantMultiFaqSearchTest {
     }
 
     @Test
-    void sendsRankedEligibleEvidenceOnceWithRequestedTopKAndMapsOnlyReturnedIds() {
-        candidates(5, row("source-b", .92), row("rejected", .91), row("source-a", .89));
-        when(documents.first()).thenReturn(faq("source-b"), null, faq("source-a"), faq("source-b"), faq("source-a"));
-        when(provider.answerFaqContext(eq(QUESTION), anyList())).thenReturn(List.of(
-                new AssistantProvider.FaqPart("source-a", "Answer A"),
-                new AssistantProvider.FaqPart("source-b", "Answer B")));
+    void returnsApprovedEvidenceWithSourceAndNoModelSynthesis() {
+        candidates(row("source-a", .89));
+        when(documents.first()).thenReturn(faq("source-a"), (Document) null);
 
-        var result = search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 5);
+        var selected = search.retrieveReadyEvidence(QUESTION, UUID.randomUUID());
 
-        assertThat(result.outcome()).isEqualTo("ANSWERED");
-        assertThat(result.parts()).extracting(AssistantCourseAnswers.Part::text)
-                .containsExactly("Answer A", "Answer B");
-        assertThat(result.parts()).extracting(part -> part.source().id()).containsExactly("source-a", "source-b");
-        var evidence = org.mockito.ArgumentCaptor.forClass(List.class);
-        verify(provider, times(1)).answerFaqContext(eq(QUESTION), evidence.capture());
-        assertThat(evidence.getValue()).extracting(item -> ((AssistantProvider.FaqEvidence) item).id())
-                .containsExactly("source-b", "source-a");
+        assertThat(selected).hasSize(1);
+        assertThat(selected.getFirst().evidence()).isEqualTo(
+                new AssistantProvider.FaqEvidence("source-a", "source-a question", "source-a answer"));
+        assertThat(selected.getFirst().source()).isEqualTo(new AssistantCourseAnswers.Source(
+                "source-a", 1, "source-a title", "", null, null));
+        assertThat(selected.getFirst().healthEducation()).isTrue();
+        assertThat(selected.getFirst().current()).isFalse();
+        verify(provider, never()).converse(anyList(), anyList(), any());
     }
 
     @Test
-    void skipsRejectedMetadataAndDeduplicatesCanonicalAnswersBeforeCappingAtThree() {
-        candidates(10, row("rejected", .97), row("one", .96), row("two", .95), row("duplicate", .94),
+    void rejectsIneligibleMetadataDeduplicatesEvidenceAndCapsAtThree() {
+        candidates(10, row("draft", .97), row("one", .96), row("two", .95), row("duplicate", .94),
                 row("fourth", .93));
-        when(documents.first()).thenReturn(null, faq("one", "Café answer"), faq("two", "second"),
-                faq("duplicate", "Cafe\u0301   ANSWER"), faq("fourth", "fourth"),
-                faq("one", "Café answer"), faq("two", "second"));
-        when(provider.answerFaqContext(eq(QUESTION), anyList())).thenReturn(List.of(
-                new AssistantProvider.FaqPart("one", "one"),
-                new AssistantProvider.FaqPart("two", "two")));
+        when(documents.first()).thenReturn(null, faq("one", "Café answer"), faq("two", "Second answer"),
+                faq("duplicate", "Cafe\u0301   ANSWER"), faq("fourth", "Fourth answer"));
 
-        search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 10);
+        var selected = search.retrieveReadyEvidence(QUESTION, UUID.randomUUID());
 
-        var evidence = org.mockito.ArgumentCaptor.forClass(List.class);
-        verify(provider).answerFaqContext(eq(QUESTION), evidence.capture());
-        assertThat(evidence.getValue()).extracting(item -> ((AssistantProvider.FaqEvidence) item).id())
-                .containsExactly("one", "two", "fourth");
+        assertThat(selected).extracting(item -> item.evidence().id()).containsExactly("one", "two", "fourth");
+        var filters = org.mockito.ArgumentCaptor.forClass(Bson.class);
+        verify(collection, times(5)).find(filters.capture());
+        assertThat(filters.getAllValues()).allSatisfy(filter -> {
+            assertThat(filter).isInstanceOf(Document.class);
+            var query = (Document) filter;
+            assertThat(query.getString("status")).isEqualTo("APPROVED");
+            assertThat(query.getString("releaseGate")).isEqualTo("READY");
+            assertThat(query.getBoolean("active")).isTrue();
+            assertThat(query.get("routingOnly")).isEqualTo(new Document("$ne", true));
+        });
+        var aggregate = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(collection).aggregate(aggregate.capture());
+        var vectorSearch = (Document) aggregate.getValue().getFirst();
+        assertThat(vectorSearch.get("$vectorSearch", Document.class).getBoolean("exact")).isTrue();
     }
 
     @Test
-    void doesNotDispatchWhenNoCandidateMeetsThreshold() {
-        candidates(5, row("weak", .749));
-        assertThat(search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 5).outcome())
-                .isEqualTo("INSUFFICIENT_EVIDENCE");
-        verify(provider, never()).answerFaqContext(anyString(), anyList());
+    void stopsWhenSimilarityIsBelowThreshold() {
+        candidates(row("weak", .749));
+        assertThat(search.retrieveReadyEvidence(QUESTION, UUID.randomUUID())).isEmpty();
+        verify(collection, never()).find(any(Bson.class));
     }
 
     @Test
-    void rejectsProviderCitationOutsideSelectedEvidence() {
-        candidates(5, row("selected", .90));
-        when(documents.first()).thenReturn(faq("selected"));
-        when(provider.answerFaqContext(eq(QUESTION), anyList())).thenReturn(
-                List.of(new AssistantProvider.FaqPart("invented", "answer")));
-        assertThatThrownBy(() -> search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 5))
-                .isInstanceOf(AssistantProvider.InvalidFaqResponse.class);
+    void propagatesRetrievalDependencyFailure() {
+        var failure = new IllegalStateException("search unavailable");
+        when(provider.embed(eq("gemini-embedding-2"), nullable(String.class), anyString(), anyBoolean(), eq(768)))
+                .thenThrow(failure);
+        assertThatThrownBy(() -> search.retrieveReadyEvidence(QUESTION, UUID.randomUUID())).isSameAs(failure);
     }
 
-    @Test
-    void discardsWholeAnswerWhenAnyCitationIsRevokedDuringGeneration() {
-        candidates(5, row("one", .92), row("two", .90));
-        when(documents.first()).thenReturn(faq("one"), faq("two"), faq("one"), null);
-        when(provider.answerFaqContext(eq(QUESTION), anyList())).thenReturn(List.of(
-                new AssistantProvider.FaqPart("one", "one answer"),
-                new AssistantProvider.FaqPart("two", "two answer")));
-        var result = search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 5);
-        assertThat(result.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
-        assertThat(result.parts()).hasSize(1);
-        assertThat(result.parts().getFirst().source()).isNull();
-    }
-
-    @Test
-    void propagatesProviderFailureWithoutFallbackDispatch() {
-        candidates(5, row("one", .92), row("two", .90));
-        when(documents.first()).thenReturn(faq("one"));
-        var failure = new IllegalStateException("provider failed");
-        when(provider.answerFaqContext(eq(QUESTION), anyList())).thenThrow(failure);
-        assertThatThrownBy(() -> search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 5)).isSameAs(failure);
-        verify(provider, times(1)).answerFaqContext(eq(QUESTION), anyList());
-    }
-
-    @Test
-    void rejectsUnsupportedTopK() {
-        assertThatThrownBy(() -> search.answerReadyFaqContext(QUESTION, UUID.randomUUID(), 4))
-                .isInstanceOf(IllegalArgumentException.class);
-        verifyNoInteractions(provider);
-    }
-
-    @Test
-    void mixedSleepGuidanceOffersOnlyReviewedPublicEvidenceAndReturnsApprovedText() {
-        String publicQuestion = "Người trưởng thành nên ngủ bao nhiêu tiếng?";
-        String sleepId = "READY-MANUAL-001";
-        candidates(10, row("water-faq", .97), row(sleepId, .95));
-        var approved = faq(sleepId, "Nội dung đã duyệt");
-        when(documents.first()).thenReturn(approved);
-        when(provider.answerFaqContext(eq(publicQuestion), anyList())).thenReturn(List.of(
-                new AssistantProvider.FaqPart(sleepId, "A model paraphrase")));
-
-        var result = search.answerReadySleepGuidance(UUID.randomUUID());
-
-        assertThat(result.parts()).extracting(AssistantCourseAnswers.Part::text).containsExactly("Nội dung đã duyệt");
-        verify(provider).answerFaqContext(publicQuestion, List.of(new AssistantProvider.FaqEvidence(
-                sleepId, sleepId + " question", "Nội dung đã duyệt")));
-        verify(collection, times(2)).find(argThat((Bson filter) -> filter instanceof Document doc
-                && "SLEEP".equals(doc.getString("domain"))));
-    }
-
-    @Test
-    void noMatchForSleepGuidanceDoesNotSubstituteWaterEvidence() {
-        String publicQuestion = "Người trưởng thành nên ngủ bao nhiêu tiếng?";
-        candidates(10, row("water-faq", .97), row("READY-MANUAL-001", .95));
-        when(documents.first()).thenReturn(faq("READY-MANUAL-001"));
-        when(provider.answerFaqContext(eq(publicQuestion), anyList())).thenReturn(List.of());
-
-        var result = search.answerReadySleepGuidance(UUID.randomUUID());
-
-        assertThat(result.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
-        assertThat(result.parts()).hasSize(1);
-        assertThat(result.parts().getFirst().source()).isNull();
-        verify(provider).answerFaqContext(eq(publicQuestion), anyList());
+    @SuppressWarnings("unchecked")
+    private void candidates(Document... rows) {
+        candidates(10, rows);
     }
 
     @SuppressWarnings("unchecked")
@@ -161,10 +103,8 @@ class AssistantMultiFaqSearchTest {
         AggregateIterable<Document> aggregate = mock(AggregateIterable.class);
         MongoCursor<Document> cursor = mock(MongoCursor.class);
         var iterator = List.of(rows).iterator();
-        when(collection.aggregate(argThat(pipeline ->
-                pipeline.getFirst() instanceof Document stage
-                        && Integer.valueOf(limit).equals(
-                                stage.get("$vectorSearch", Document.class).getInteger("limit")))))
+        when(collection.aggregate(argThat(pipeline -> pipeline.getFirst() instanceof Document stage
+                && Integer.valueOf(limit).equals(stage.get("$vectorSearch", Document.class).getInteger("limit")))))
                 .thenReturn(aggregate);
         when(aggregate.maxTime(anyLong(), any())).thenReturn(aggregate);
         when(aggregate.iterator()).thenReturn(cursor);
@@ -179,6 +119,7 @@ class AssistantMultiFaqSearchTest {
     private static Document faq(String id) { return faq(id, id + " answer"); }
 
     private static Document faq(String id, String answer) {
-        return row(id, 1).append("question", id + " question").append("answer", answer).append("title", id + " title");
+        return row(id, 1).append("question", id + " question").append("answer", answer).append("title", id + " title")
+                .append("type", "HEALTH_EDUCATION");
     }
 }

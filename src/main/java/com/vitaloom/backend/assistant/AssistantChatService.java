@@ -31,6 +31,10 @@ final class AssistantChatService {
         return answer(subject, turnId, null, provider::confirmsFixture);
     }
 
+    AssistantTurn.Status answer(String subject, UUID turnId, BooleanSupplier current) {
+        return answer(subject, turnId, null, () -> current.getAsBoolean() && provider.confirmsFixture());
+    }
+
     AssistantTurn.Status answer(String subject, UUID turnId, String fixture, BooleanSupplier check) {
         String id = subject + ":" + turnId;
         Instant expiresAt = Instant.now().plus(RETRY_WINDOW).truncatedTo(ChronoUnit.MILLIS);

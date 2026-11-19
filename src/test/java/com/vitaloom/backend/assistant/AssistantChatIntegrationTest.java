@@ -8,6 +8,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -22,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest(properties = {
@@ -43,27 +45,59 @@ class AssistantChatIntegrationTest {
     @Autowired JwtTokenService tokens;
     @MockitoBean AssistantProvider provider;
 
+    @BeforeEach
+    void enableTheAccountOptInForSyntheticFixtureScenarios() throws Exception {
+        for (String account : new String[] {ACCOUNT, "other-account"}) {
+            mvc.perform(put("/api/assistant/mvp/settings").header("Authorization", auth(account))
+                    .contentType(MediaType.APPLICATION_JSON).content("""
+                            {"personalDataAllowed":true,"consentVersion":"gemini-health-v1"}
+                            """))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.personalDataAllowed").value(true));
+        }
+    }
+
     @Test
     void defaultProfileWithOnlyAKeyEnablesBothRoutesForAuthenticatedUsers() throws Exception {
         var request = request(UUID.randomUUID(), true, QUESTION);
         mvc.perform(request).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
         mvc.perform(request(UUID.randomUUID(), true, QUESTION).header("Authorization", "Bearer invalid"))
             .andExpect(status().isUnauthorized());
-        mvc.perform(request(UUID.randomUUID(), false, QUESTION).header("Authorization", auth("other-account")))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.outcome").value("PERMISSION_REQUIRED"));
         mvc.perform(get("/api/assistant/mvp/conversations").header("Authorization", auth("other-account")))
             .andExpect(status().isOk()).andExpect(jsonPath("$.items").isEmpty());
         verifyNoInteractions(provider);
     }
 
     @Test
-    void declineAndUnsupportedTextNeverReachTheProvider() throws Exception {
-        mvc.perform(request(UUID.randomUUID(), false, QUESTION).header("Authorization", auth(ACCOUNT)))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.outcome").value("PERMISSION_REQUIRED"))
-            .andExpect(jsonPath("$.citations").isEmpty());
+    void unsupportedTextNeverReachesTheProvider() throws Exception {
         mvc.perform(request(UUID.randomUUID(), true, "Tôi muốn hỏi chuyện khác.").header("Authorization", auth(ACCOUNT)))
             .andExpect(status().isOk()).andExpect(jsonPath("$.outcome").value("INSUFFICIENT_EVIDENCE"))
             .andExpect(jsonPath("$.citations").isEmpty());
+        verifyNoInteractions(provider);
+    }
+
+    @Test
+    void legacyFixtureAcceptsOnlyTheAccountPermissionWithoutAPerTurnFlag() throws Exception {
+        when(provider.confirmsFixture()).thenReturn(true);
+        mvc.perform(post("/api/assistant/chat").header("Authorization", auth(ACCOUNT))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"turnId":"%s","text":"%s"}
+                                """.formatted(UUID.randomUUID(), QUESTION)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.outcome").value("ANSWERED"));
+        verify(provider).confirmsFixture();
+    }
+
+    @Test
+    void legacyFixtureEndpointRejectsAccountsWithTheToggleOff() throws Exception {
+        mvc.perform(put("/api/assistant/mvp/settings").header("Authorization", auth(ACCOUNT))
+                .contentType(MediaType.APPLICATION_JSON).content("""
+                        {"personalDataAllowed":false}
+                        """))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.personalDataAllowed").value(false));
+
+        mvc.perform(request(UUID.randomUUID(), true, QUESTION).header("Authorization", auth(ACCOUNT)))
+            .andExpect(status().isForbidden());
+
         verifyNoInteractions(provider);
     }
 

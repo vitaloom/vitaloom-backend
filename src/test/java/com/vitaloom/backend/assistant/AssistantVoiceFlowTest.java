@@ -60,6 +60,9 @@ class AssistantVoiceFlowTest {
             if (claims.putIfAbsent(claim.id(), claim) != null) throw new DuplicateKeyException("Duplicate claim");
             return claim;
         });
+        var preference = new AssistantAccountSettings.Preference(OWNER, true, 1, AssistantAccountSettings.CONSENT_VERSION);
+        when(mongo.findById(OWNER, AssistantAccountSettings.Preference.class)).thenReturn(preference);
+        when(mongo.exists(any(Query.class), eq(AssistantAccountSettings.Preference.class))).thenReturn(true);
         when(mongo.findById(any(), eq(AssistantVoiceTurns.Claim.class)))
                 .thenAnswer(invocation -> claims.get(invocation.getArgument(0)));
         when(mongo.insert(any(AssistantConversation.class))).thenAnswer(invocation -> {
@@ -72,9 +75,11 @@ class AssistantVoiceFlowTest {
             var row = conversations.get(query.getQueryObject().getString("id"));
             return row != null && row.owner().equals(query.getQueryObject().getString("owner")) ? row : null;
         });
+        var settings = new AssistantAccountSettings(mongo);
+        var readiness = new AssistantGeminiReadiness(true);
         var turns = new AssistantVoiceTurns(mongo, Clock.fixed(NOW, ZoneOffset.UTC), stt, selector,
-                new AssistantVoiceActions(water, sleep));
-        mvc = MockMvcBuilders.standaloneSetup(new AssistantVoiceController(turns)).build();
+                new AssistantVoiceActions(water, sleep), settings, readiness);
+        mvc = MockMvcBuilders.standaloneSetup(new AssistantVoiceController(turns, settings, readiness)).build();
     }
 
     @Test
@@ -112,7 +117,8 @@ class AssistantVoiceFlowTest {
                 .andExpect(jsonPath("$.turns[0].outcome").value("INSUFFICIENT_EVIDENCE"))
                 .andExpect(jsonPath("$.turns[0].parts[0].text")
                         .value(org.hamcrest.Matchers.containsString("Chưa thể ghi lượng nước")));
-        verifyNoInteractions(water, sleep, selector);
+        verify(selector).select(transcript);
+        verifyNoInteractions(water, sleep);
     }
 
     @Test
@@ -125,6 +131,71 @@ class AssistantVoiceFlowTest {
         mvc.perform(recording("true", "audio/mp4", new byte[0])).andExpect(status().isBadRequest());
         assertThat(claims).isEmpty();
         verifyNoInteractions(stt, selector, water, sleep);
+    }
+
+    @Test
+    void accountLevelOptOutRejectsVoiceBeforeSttAndClaimCreation() throws Exception {
+        when(mongo.findById(OWNER, AssistantAccountSettings.Preference.class)).thenReturn(null);
+
+        mvc.perform(recording("true", "audio/mp4", AUDIO)).andExpect(status().isForbidden());
+
+        assertThat(claims).isEmpty();
+        verifyNoInteractions(stt, selector, water, sleep);
+    }
+
+    @Test
+    void providerReadinessRejectsVoiceBeforeSttAndClaimCreation() throws Exception {
+        var settings = new AssistantAccountSettings(mongo);
+        var readiness = new AssistantGeminiReadiness(false);
+        var turns = new AssistantVoiceTurns(mongo, Clock.fixed(NOW, ZoneOffset.UTC), stt, selector,
+                new AssistantVoiceActions(water, sleep), settings, readiness);
+        var unavailable = MockMvcBuilders.standaloneSetup(
+                new AssistantVoiceController(turns, settings, readiness)).build();
+
+        unavailable.perform(recording("true", "audio/mp4", AUDIO)).andExpect(status().isServiceUnavailable());
+
+        assertThat(claims).isEmpty();
+        verifyNoInteractions(stt, selector, water, sleep);
+    }
+
+    @Test
+    void accountRevocationDuringModelSelectionPreventsTheMetricWrite() throws Exception {
+        String transcript = "Ghi 250 ml nước lúc này";
+        var allowed = new AssistantAccountSettings.Preference(OWNER, true, 1, AssistantAccountSettings.CONSENT_VERSION);
+        var revoked = new AssistantAccountSettings.Preference(OWNER, false, 2, null);
+        var settingsChanged = new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(mongo.findById(OWNER, AssistantAccountSettings.Preference.class))
+                .thenAnswer(invocation -> settingsChanged.get() ? revoked : allowed);
+        when(mongo.exists(any(Query.class), eq(AssistantAccountSettings.Preference.class)))
+                .thenAnswer(invocation -> !settingsChanged.get());
+        when(stt.transcribe(AUDIO)).thenReturn(transcript);
+        when(selector.select(transcript)).thenAnswer(invocation -> {
+            settingsChanged.set(true);
+            return new ToolCall("id", "function", "recordWater", "{\"amount\":\"250 ml\"}");
+        });
+
+        mvc.perform(recording("true", "audio/mp4", AUDIO)).andExpect(status().isForbidden());
+
+        verify(water, never()).create(any(), any(), any());
+        assertThat(conversations).isEmpty();
+    }
+
+    @Test
+    void refusesReplayWhenTheAccountConsentGenerationChanged() throws Exception {
+        var current = new java.util.concurrent.atomic.AtomicReference<>(
+                new AssistantAccountSettings.Preference(OWNER, true, 1, AssistantAccountSettings.CONSENT_VERSION));
+        when(mongo.findById(OWNER, AssistantAccountSettings.Preference.class)).thenAnswer(invocation -> current.get());
+        when(mongo.exists(any(Query.class), eq(AssistantAccountSettings.Preference.class)))
+                .thenAnswer(invocation -> current.get().personalDataAllowed());
+        when(stt.transcribe(AUDIO)).thenReturn("Ghi nhật ký nước");
+
+        mvc.perform(recording("true", "audio/mp4", AUDIO)).andExpect(status().isOk());
+        current.set(new AssistantAccountSettings.Preference(OWNER, true, 2, AssistantAccountSettings.CONSENT_VERSION));
+
+        mvc.perform(recording("true", "audio/mp4", AUDIO)).andExpect(status().isConflict());
+
+        assertThat(conversations).hasSize(1);
+        verify(stt, times(1)).transcribe(AUDIO);
     }
 
     private MockMultipartHttpServletRequestBuilder recording(String consent, String contentType, byte[] bytes) {

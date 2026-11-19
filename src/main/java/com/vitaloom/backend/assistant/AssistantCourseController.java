@@ -8,7 +8,9 @@ import jakarta.validation.constraints.Size;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 import java.util.UUID;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -23,6 +25,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -46,44 +49,48 @@ class AssistantCourseController {
     private final Clock clock;
     private final ObjectProvider<AssistantFixtureSearch> readyFaqSearch;
     private final AssistantAccountSettings accountSettings;
+    private final ObjectProvider<AssistantProvider> provider;
+    private final AssistantGeminiReadiness readiness;
 
-    AssistantCourseController(MongoTemplate mongo, AssistantCourseAnswers answers, Clock clock,
-            @Qualifier("assistantReadyFaqSearch") ObjectProvider<AssistantFixtureSearch> readyFaqSearch) {
-        this(mongo, answers, clock, readyFaqSearch, new AssistantAccountSettings(mongo));
-    }
-
-    @org.springframework.beans.factory.annotation.Autowired
     AssistantCourseController(MongoTemplate mongo, AssistantCourseAnswers answers, Clock clock,
             @Qualifier("assistantReadyFaqSearch") ObjectProvider<AssistantFixtureSearch> readyFaqSearch,
-            AssistantAccountSettings accountSettings) {
+            AssistantAccountSettings accountSettings, ObjectProvider<AssistantProvider> provider,
+            AssistantGeminiReadiness readiness) {
         this.mongo = mongo;
         this.answers = answers;
         this.clock = clock;
         this.readyFaqSearch = readyFaqSearch;
         this.accountSettings = accountSettings;
+        this.provider = provider;
+        this.readiness = readiness;
     }
 
     @GetMapping
     Page list(Authentication auth, @RequestParam(defaultValue = "0") int page) {
         if (page < 0 || page > 1000) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
-        var query = owned(subject(auth)).with(Sort.by(Sort.Direction.DESC, "updatedAt", "id"))
+        String owner = subject(auth);
+        var preference = accountSettings.requireEnabled(owner);
+        var query = owned(owner).with(Sort.by(Sort.Direction.DESC, "updatedAt", "id"))
                 .skip((long) page * PAGE_SIZE).limit(PAGE_SIZE + 1);
         query.fields().exclude("turns");
         var rows = mongo.find(query, AssistantConversation.class);
+        requireCurrent(auth, preference);
         return new Page(rows.stream().limit(PAGE_SIZE).map(row -> new Summary(row.id(), row.updatedAt())).toList(),
                 rows.size() > PAGE_SIZE);
     }
 
     @PostMapping
-    ResponseEntity<View> create(Authentication auth, @Valid @RequestBody Acknowledgement request) {
+    ResponseEntity<View> create(Authentication auth, @RequestBody(required = false) Acknowledgement request) {
         String owner = subject(auth);
-        if (!request.accepted()) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
-        var preference = accountSettings.get(owner);
+        var preference = accountSettings.requireEnabled(owner);
         ensureConversationIndexes(mongo);
         Instant now = clock.instant();
         var row = new AssistantConversation(UUID.randomUUID().toString(), owner, null, now,
                 now.plus(Duration.ofDays(7)), false, List.of());
-        return ResponseEntity.status(HttpStatus.CREATED).body(view(mongo.insert(row), preference));
+        requireCurrent(auth, preference);
+        var saved = mongo.insert(row);
+        requireCurrent(auth, preference);
+        return ResponseEntity.status(HttpStatus.CREATED).body(view(saved, preference));
     }
 
     static void ensureConversationIndexes(MongoTemplate mongo) {
@@ -96,12 +103,18 @@ class AssistantCourseController {
     @GetMapping("/{id}")
     View get(Authentication auth, @PathVariable UUID id) {
         String owner = subject(auth);
-        return view(getOwned(owner, id), accountSettings.get(owner));
+        var preference = accountSettings.requireEnabled(owner);
+        var row = getOwned(owner, id);
+        requireCurrent(auth, preference);
+        return view(row, preference);
     }
 
     @DeleteMapping("/{id}")
     ResponseEntity<Void> delete(Authentication auth, @PathVariable UUID id) {
-        if (mongo.remove(owned(subject(auth)).addCriteria(Criteria.where("id").is(id.toString())),
+        String owner = subject(auth);
+        var preference = accountSettings.requireEnabled(owner);
+        requireCurrent(auth, preference);
+        if (mongo.remove(owned(owner).addCriteria(Criteria.where("id").is(id.toString())),
                 AssistantConversation.class).getDeletedCount() == 0) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
@@ -111,8 +124,9 @@ class AssistantCourseController {
     @PutMapping("/{id}/permission")
     View permission(Authentication auth, @PathVariable UUID id, @Valid @RequestBody Permission request) {
         String owner = subject(auth);
+        var preference = accountSettings.requireEnabled(owner);
         var row = getOwned(owner, id);
-        var preference = accountSettings.get(owner);
+        requireCurrent(auth, preference);
         if (request.allowed() != preference.personalDataAllowed()) {
             throw AssistantAccountSettingsController.accountSettingRequired();
         }
@@ -122,91 +136,62 @@ class AssistantCourseController {
     @PostMapping("/{id}/turns")
     View turn(Authentication auth, @PathVariable UUID id, @Valid @RequestBody Send request) {
         String owner = subject(auth);
+        var preference = accountSettings.requireEnabled(owner);
         var row = getOwned(owner, id);
-        var preference = accountSettings.get(owner);
-        boolean personalAllowed = preference.personalDataAllowed();
         String text = request.text().strip();
         for (var turn : row.turns()) {
             if (turn.turnId().equals(request.turnId().toString())) {
                 if (!turn.text().equals(text)) throw new ResponseStatusException(HttpStatus.CONFLICT);
+                requireCurrent(auth, preference);
                 return view(row, preference);
             }
         }
         if (row.turns().size() >= MAX_TURNS) throw new ResponseStatusException(HttpStatus.CONFLICT);
+
+        readiness.requireReady();
+        var model = provider.getIfAvailable();
+        if (model == null) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE);
         var now = clock.instant();
-        var latestContext = row.turns().stream().filter(turn -> turn.reply().context() != null
-                        && turn.at().plus(Duration.ofMinutes(30)).isAfter(now))
-                .map(turn -> turn.reply().context()).reduce((first, second) -> second).orElse(null);
-        var context = latestContext == null || latestContext.intent() == null ? null : latestContext;
-        boolean personalQuestion = AssistantCourseAnswers.isPersonalDataQuestion(text);
-        var search = Boolean.TRUE.equals(request.geminiAccepted()) ? readyFaqSearch.getIfAvailable() : null;
+        var topics = row.turns().reversed().stream()
+                .filter(turn -> turn.at().plus(Duration.ofMinutes(30)).isAfter(now))
+                .flatMap(turn -> AssistantConversationalAnswers.recentTopics(turn.reply()).stream())
+                .distinct().limit(4).toList();
+        BooleanSupplier current = () -> isCurrent(auth, preference)
+                && mongo.exists(owned(owner).addCriteria(Criteria.where("id").is(id.toString())
+                        .and("revision").is(row.revision())), AssistantConversation.class);
         AssistantCourseAnswers.Answer answer;
         try {
-            if (search == null) {
-                answer = answers.answer(owner, text, personalAllowed, context,
-                        () -> accountSettings.isCurrent(owner, preference));
-            } else {
-                answer = answers.readyFaqLocalRoute(owner, text, personalAllowed, context,
-                        () -> accountSettings.isCurrent(owner, preference));
-                if (answer != null && personalAllowed && answers.needsSleepGuidance(text, answer)) {
-                    if (!accountSettings.isCurrent(owner, preference)) throw new AccountSettingChangedException();
-                    answer = addSleepGuidance(search, request.turnId(), answer);
-                }
-                if (answer == null && personalQuestion) {
-                    answer = personalAnswer(owner, id, row, text, context, search, preference);
-                } else if (answer == null) {
-                    try {
-                        answer = search.answerReadyFaqContext(text, request.turnId(), 10);
-                    } catch (RuntimeException failure) {
-                        answer = new AssistantCourseAnswers.Answer("DEPENDENCY_UNAVAILABLE",
-                                List.of(new AssistantCourseAnswers.Part("DEPENDENCY_UNAVAILABLE",
-                                        "FAQ Assistant is temporarily unavailable.", null)), null);
-                    }
-                }
+            requireCurrent(auth, preference);
+            String modelText = text.replace(owner, "[account identifier omitted]");
+            if (auth instanceof JwtAuthenticationToken token) {
+                modelText = modelText.replace(token.getToken().getTokenValue(), "[access token omitted]");
             }
-        } catch (AssistantPersonalDataTools.PersonalDataAccessDeniedException changed) {
-            throw new AccountSettingChangedException();
+            answer = new AssistantConversationalAnswers(model, readyFaqSearch.getIfAvailable(), answers)
+                    .answer(owner, modelText, request.turnId(), topics, true, current, current);
+        } catch (AssistantGeminiTurn.AccessChangedException
+                | AssistantPersonalDataTools.PersonalDataAccessDeniedException changed) {
+            requireCurrent(auth, preference);
+            throw new OptimisticLockingFailureException("Assistant conversation changed");
         }
-        if (!row.expiresAt().isAfter(clock.instant())) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
-        if (!accountSettings.isUnchanged(owner, preference)) {
-            throw new AccountSettingChangedException();
+        if (!current.getAsBoolean()) {
+            requireCurrent(auth, preference);
+            throw new OptimisticLockingFailureException("Assistant conversation changed");
         }
-        var history = new java.util.ArrayList<>(row.turns());
+        var history = new ArrayList<>(row.turns());
         history.add(new AssistantConversation.Turn(request.turnId().toString(), text, now, answer));
-        // Versioned save prevents recreation after deletion or publication with obsolete permission.
-        return view(mongo.save(row.change(now, personalAllowed, List.copyOf(history))), preference);
+        var saved = mongo.save(row.change(clock.instant(), true, List.copyOf(history)));
+        requireCurrent(auth, preference);
+        return view(saved, preference);
     }
 
-    private AssistantCourseAnswers.Answer addSleepGuidance(AssistantFixtureSearch search, UUID turnId,
-            AssistantCourseAnswers.Answer personal) {
-        try {
-            return answers.combineSleepGuidance(personal, search.answerReadySleepGuidance(turnId));
-        } catch (RuntimeException unavailable) {
-            return answers.combineSleepGuidance(personal, new AssistantCourseAnswers.Answer(
-                    "DEPENDENCY_UNAVAILABLE", List.of(new AssistantCourseAnswers.Part("DEPENDENCY_UNAVAILABLE",
-                            "Chưa thể tải hướng dẫn sức khỏe giấc ngủ đã duyệt.", null)), null));
-        }
+    private boolean isCurrent(Authentication auth, AssistantAccountSettings.Preference preference) {
+        if (auth instanceof JwtAuthenticationToken token && token.getToken().getExpiresAt() != null
+                && !token.getToken().getExpiresAt().isAfter(clock.instant())) return false;
+        return accountSettings.isCurrent(subject(auth), preference);
     }
 
-    private AssistantCourseAnswers.Answer personalAnswer(String owner, UUID id, AssistantConversation row,
-            String text, AssistantCourseAnswers.Context context, AssistantFixtureSearch search,
-            AssistantAccountSettings.Preference preference) {
-        if (accountSettings.isCurrent(owner, preference)) {
-            java.util.function.BooleanSupplier current = () -> mongo.exists(owned(owner)
-                    .addCriteria(Criteria.where("id").is(id.toString()).and("revision").is(row.revision())),
-                    AssistantConversation.class) && accountSettings.isCurrent(owner, preference);
-            try {
-                var answer = search.answerPersonalData(answers.personalToolQuestion(text),
-                        answers.personalTools(owner, text, current), current);
-                if (answer != null) return answer;
-            } catch (AssistantPersonalDataTools.PersonalDataAccessDeniedException changed) {
-                throw changed;
-            } catch (RuntimeException unavailable) {
-                // The local route can still answer from the owning services.
-            }
-        }
-        return answers.answer(owner, text, preference.personalDataAllowed(), context,
-                () -> accountSettings.isCurrent(owner, preference));
+    private void requireCurrent(Authentication auth, AssistantAccountSettings.Preference preference) {
+        if (!isCurrent(auth, preference)) throw new AccountSettingChangedException();
     }
 
     @ExceptionHandler(OptimisticLockingFailureException.class)

@@ -30,9 +30,14 @@ class AssistantVoiceController {
     private static final Set<String> MEDIA_TYPES = Set.of(
             "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/webm", "audio/wav", "audio/x-wav");
     private final AssistantVoiceTurns turns;
+    private final AssistantAccountSettings accountSettings;
+    private final AssistantGeminiReadiness readiness;
 
-    AssistantVoiceController(AssistantVoiceTurns turns) {
+    AssistantVoiceController(AssistantVoiceTurns turns, AssistantAccountSettings accountSettings,
+            AssistantGeminiReadiness readiness) {
         this.turns = turns;
+        this.accountSettings = accountSettings;
+        this.readiness = readiness;
     }
 
     @PostMapping(path = "/api/assistant/mvp/voice-turns", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -43,13 +48,16 @@ class AssistantVoiceController {
         if (!"true".equals(consentAccepted) || !"assemblyai-us-v1".equals(consentVersion)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN);
         }
+        String owner = authentication.getName();
+        var preference = accountSettings.requireEnabled(owner);
+        readiness.requireReady();
         if (audio.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
         if (audio.getSize() > MAX_AUDIO_BYTES) throw new ResponseStatusException(HttpStatus.CONTENT_TOO_LARGE);
         String contentType = audio.getContentType();
         if (contentType == null || !MEDIA_TYPES.contains(contentType.split(";", 2)[0].strip().toLowerCase(Locale.ROOT))) {
             throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE);
         }
-        var conversation = turns.send(authentication.getName(), turnId, audio.getBytes());
+        var conversation = turns.send(owner, turnId, audio.getBytes(), preference);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(conversation);
     }
 

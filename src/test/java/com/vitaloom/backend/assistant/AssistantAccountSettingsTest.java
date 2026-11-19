@@ -1,6 +1,7 @@
 package com.vitaloom.backend.assistant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -22,7 +23,7 @@ class AssistantAccountSettingsTest {
     @Test
     void settingsEndpointReturnsOnlyThePreferenceForTheAuthenticatedAccount() {
         when(mongo.findById("account-a", AssistantAccountSettings.Preference.class))
-                .thenReturn(new AssistantAccountSettings.Preference("account-a", true, 7));
+                .thenReturn(new AssistantAccountSettings.Preference("account-a", true, 7, AssistantAccountSettings.CONSENT_VERSION));
 
         var response = new AssistantAccountSettingsController(settings)
                 .get(new TestingAuthenticationToken("account-a", ""));
@@ -43,7 +44,7 @@ class AssistantAccountSettingsTest {
     @Test
     void defaultOffSettingIsInvalidatedByFirstOptIn() {
         when(mongo.findById("account-a", AssistantAccountSettings.Preference.class))
-                .thenReturn(null, null, new AssistantAccountSettings.Preference("account-a", true, 1));
+                .thenReturn(null, null, new AssistantAccountSettings.Preference("account-a", true, 1, AssistantAccountSettings.CONSENT_VERSION));
         var preference = settings.get("account-a");
 
         assertThat(settings.isUnchanged("account-a", preference)).isTrue();
@@ -54,7 +55,7 @@ class AssistantAccountSettingsTest {
     void settingIsStoredIndependentlyForTheAuthenticatedAccount() {
         when(mongo.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class),
                 eq(AssistantAccountSettings.Preference.class)))
-                .thenReturn(new AssistantAccountSettings.Preference("account-a", true, 1));
+                .thenReturn(new AssistantAccountSettings.Preference("account-a", true, 1, AssistantAccountSettings.CONSENT_VERSION));
 
         var preference = settings.set("account-a", true);
 
@@ -66,9 +67,51 @@ class AssistantAccountSettingsTest {
     }
 
     @Test
+    void legacyUnversionedEnableDoesNotGrantPersonalDataAccess() {
+        assertThatThrownBy(() -> new AssistantAccountSettingsController(settings)
+                .set(new TestingAuthenticationToken("account-a", ""),
+                        new AssistantAccountSettingsController.Change(true, null)))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        verify(mongo, never()).findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class),
+                eq(AssistantAccountSettings.Preference.class));
+    }
+
+    @Test
+    void storedLegacyGrantCannotActivateAssistant() {
+        var legacy = new AssistantAccountSettings.Preference("account-a", true, 7, null);
+        when(mongo.findById("account-a", AssistantAccountSettings.Preference.class)).thenReturn(legacy);
+
+        assertThat(settings.get("account-a").personalDataAllowed()).isFalse();
+        assertThatThrownBy(() -> settings.requireEnabled("account-a"))
+                .isInstanceOf(AssistantAccountSettingsController.AccountAccessRequiredException.class);
+        assertThat(settings.isCurrent("account-a", legacy)).isFalse();
+    }
+
+    @Test
+    void enablingRequiresTheCurrentConsentVersion() {
+        when(mongo.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class),
+                eq(AssistantAccountSettings.Preference.class)))
+                .thenReturn(new AssistantAccountSettings.Preference("account-a", true, 1, AssistantAccountSettings.CONSENT_VERSION));
+
+        var response = new AssistantAccountSettingsController(settings)
+                .set(new TestingAuthenticationToken("account-a", ""),
+                        new AssistantAccountSettingsController.Change(true, "gemini-health-v1"));
+
+        assertThat(response.personalDataAllowed()).isTrue();
+    }
+
+    @Test
+    void disabledSettingsCannotBeUsedForProtectedAssistantOperations() {
+        when(mongo.findById("account-a", AssistantAccountSettings.Preference.class)).thenReturn(null);
+
+        assertThatThrownBy(() -> settings.requireEnabled("account-a"))
+                .isInstanceOf(AssistantAccountSettingsController.AccountAccessRequiredException.class);
+    }
+
+    @Test
     void personalAccessBecomesInvalidWhenItsAccountSettingChanges() {
-        var allowed = new AssistantAccountSettings.Preference("account-a", true, 1);
-        var revoked = new AssistantAccountSettings.Preference("account-a", false, 2);
+        var allowed = new AssistantAccountSettings.Preference("account-a", true, 1, AssistantAccountSettings.CONSENT_VERSION);
+        var revoked = new AssistantAccountSettings.Preference("account-a", false, 2, null);
         when(mongo.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class),
                 eq(AssistantAccountSettings.Preference.class))).thenReturn(allowed, revoked);
         when(mongo.exists(any(Query.class), eq(AssistantAccountSettings.Preference.class)))

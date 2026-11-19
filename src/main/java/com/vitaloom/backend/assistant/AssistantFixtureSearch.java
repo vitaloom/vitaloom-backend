@@ -22,8 +22,7 @@ final class AssistantFixtureSearch implements AutoCloseable {
     private static final String COLLECTION = "assistant_sandbox_faq";
     private static final String INDEX = "assistant_fixture_v1";
     private static final int DIMENSIONS = 768;
-    private static final int FAQ_CANDIDATE_LIMIT = 3;
-    private static final int FAQ_CONTEXT_LIMIT = 3;
+    private static final int FAQ_EVIDENCE_LIMIT = 3;
     private static final double FAQ_SCORE_THRESHOLD = 0.75;
     private static final Logger LOG = LoggerFactory.getLogger(AssistantFixtureSearch.class);
 
@@ -88,12 +87,6 @@ final class AssistantFixtureSearch implements AutoCloseable {
         return provider.confirmsSyntheticSleep(day, current, verifyRecord);
     }
 
-    AssistantCourseAnswers.Answer answerPersonalData(String question, AssistantPersonalDataTools tools,
-            BooleanSupplier current) {
-        provider.selectPersonalTool(question, tools, current);
-        return current.getAsBoolean() ? tools.answer() : null;
-    }
-
     boolean answer(AssistantFixture.Faq faq, String text, BooleanSupplier current) {
         if (!current.getAsBoolean()) return false;
         String question = text.strip().equalsIgnoreCase(faq.paraphrase()) ? faq.paraphrase() : faq.question();
@@ -116,95 +109,13 @@ final class AssistantFixtureSearch implements AutoCloseable {
                 && provider.confirmsFixture(question, active.getString("answer")) && current.getAsBoolean();
     }
 
-    AssistantCourseAnswers.Answer answerReadyFaq(String question, UUID requestId) {
-        long started = System.nanoTime();
-        int calls = 0;
-        String stage = "embedding";
-        String outcome = "dependency_error";
-        try {
-            if (!model.equals("gemini-embedding-2")) {
-                throw new IllegalStateException("READY FAQ vector index requires gemini-embedding-2");
-            }
-            var query = embed("", question, false);
-            stage = "vector_search";
-            var collection = mongo.getCollection("assistant_ready_faq");
-            var candidates = rankedReadyFaqs(collection, query, FAQ_CANDIDATE_LIMIT);
-            String today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).toString();
-            outcome = "empty_results";
-            try (var cursor = candidates.iterator()) {
-                int rank = 0;
-                while (rank < FAQ_CANDIDATE_LIMIT && cursor.hasNext()) {
-                    var candidate = cursor.next();
-                    rank++;
-                    double score = candidate.getDouble("score");
-                    if (score < FAQ_SCORE_THRESHOLD) {
-                        logCandidate(requestId, candidate, rank, "not_checked", "below_threshold");
-                        if (calls == 0) outcome = "below_threshold";
-                        break;
-                    }
-                    stage = "metadata_check";
-                    var filter = readyFaqFilter(candidate, today);
-                    var faq = collection.find(filter).first();
-                    if (faq == null) {
-                        logCandidate(requestId, candidate, rank, "rejected", "not_called");
-                        if (calls == 0) outcome = "metadata_rejected";
-                        continue;
-                    }
-                    stage = "generation";
-                    calls++;
-                    String reply;
-                    try {
-                        reply = provider.answerFaq(question, faq.getString("question"), faq.getString("answer"));
-                    } catch (RuntimeException failure) {
-                        logCandidate(requestId, candidate, rank, "accepted", failureReason(failure));
-                        throw failure;
-                    }
-                    if (reply == null) {
-                        logCandidate(requestId, candidate, rank, "accepted", "no_match");
-                        outcome = "no_match";
-                        continue;
-                    }
-                    stage = "metadata_recheck";
-                    if (collection.find(filter).first() == null) {
-                        logCandidate(requestId, candidate, rank, "revoked", "match");
-                        outcome = "metadata_revoked";
-                        continue;
-                    }
-                    logCandidate(requestId, candidate, rank, "accepted", "match");
-                    outcome = "answered";
-                    var source = new AssistantCourseAnswers.Source(faq.getString("_id"), faq.getInteger("version"),
-                            faq.getString("title"), "", null, null);
-                    return new AssistantCourseAnswers.Answer("ANSWERED",
-                            List.of(new AssistantCourseAnswers.Part("ANSWERED", reply, source)), null);
-                }
-            }
-            return insufficientFaqAnswer();
-        } catch (RuntimeException failure) {
-            outcome = failureReason(failure);
-            throw failure;
-        } finally {
-            LOG.atDebug().addKeyValue("request_id", requestId).addKeyValue("embedding_model", model)
-                    .addKeyValue("embedding_dimensions", DIMENSIONS).addKeyValue("stage", stage)
-                    .addKeyValue("outcome", outcome).addKeyValue("generation_calls", calls)
-                    .addKeyValue("latency_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started))
-                    .log("Assistant FAQ retrieval");
-        }
+    List<ReadyEvidence> retrieveReadyEvidence(String question, UUID requestId) {
+        return retrieveReadyEvidence(question, requestId, 10);
     }
 
-    AssistantCourseAnswers.Answer answerReadyFaqContext(String question, UUID requestId, int topK) {
-        return answerReadyFaqContext(question, requestId, topK, java.util.Set.of());
-    }
-
-    AssistantCourseAnswers.Answer answerReadySleepGuidance(UUID requestId) {
-        return answerReadyFaqContext("Người trưởng thành nên ngủ bao nhiêu tiếng?", requestId, 10,
-                java.util.Set.of("READY-MANUAL-001", "READY-MANUAL-002"));
-    }
-
-    private AssistantCourseAnswers.Answer answerReadyFaqContext(String question, UUID requestId, int topK,
-            java.util.Set<String> allowedIds) {
+    private List<ReadyEvidence> retrieveReadyEvidence(String question, UUID requestId, int topK) {
         if (topK != 5 && topK != 10) throw new IllegalArgumentException("Unsupported READY FAQ topK");
         long started = System.nanoTime();
-        int calls = 0;
         String stage = "embedding";
         String outcome = "dependency_error";
         try {
@@ -216,19 +127,14 @@ final class AssistantFixtureSearch implements AutoCloseable {
             var collection = mongo.getCollection("assistant_ready_faq");
             var candidates = rankedReadyFaqs(collection, query, topK);
             String today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).toString();
-            var selected = new java.util.LinkedHashMap<String, Document>();
+            var selected = new java.util.LinkedHashMap<String, ReadyEvidence>();
             var canonicalAnswers = new java.util.HashSet<String>();
-            boolean sleepGuidance = !allowedIds.isEmpty();
             outcome = "empty_results";
             try (var cursor = candidates.iterator()) {
                 int rank = 0;
-                while (rank < topK && selected.size() < FAQ_CONTEXT_LIMIT && cursor.hasNext()) {
+                while (rank < topK && selected.size() < FAQ_EVIDENCE_LIMIT && cursor.hasNext()) {
                     var candidate = cursor.next();
                     rank++;
-                    if (sleepGuidance && !allowedIds.contains(candidate.getString("_id"))) {
-                        logContextCandidate(requestId, candidate, rank, "not_checked", "domain_not_allowed", topK);
-                        continue;
-                    }
                     double score = candidate.getDouble("score");
                     if (score < FAQ_SCORE_THRESHOLD) {
                         logContextCandidate(requestId, candidate, rank, "not_checked", "below_threshold", topK);
@@ -237,7 +143,6 @@ final class AssistantFixtureSearch implements AutoCloseable {
                     }
                     stage = "metadata_check";
                     var eligibility = readyFaqFilter(candidate, today);
-                    if (sleepGuidance) constrainSleepGuidance(eligibility);
                     var faq = collection.find(eligibility).first();
                     if (faq == null || !nonblank(faq, "_id", "title", "question", "answer")) {
                         logContextCandidate(requestId, candidate, rank, "rejected", "metadata_rejected", topK);
@@ -252,50 +157,13 @@ final class AssistantFixtureSearch implements AutoCloseable {
                         logContextCandidate(requestId, candidate, rank, "accepted", "duplicate", topK);
                         continue;
                     }
-                    selected.put(id, faq);
+                    selected.put(id, readyEvidence(collection, faq, today));
                     logContextCandidate(requestId, candidate, rank, "accepted", "selected", topK);
                     outcome = "selected";
                 }
             }
-            if (selected.isEmpty()) {
-                return insufficientFaqAnswer();
-            }
-            stage = "generation";
-            calls = 1;
-            var evidence = selected.values().stream().map(faq -> new AssistantProvider.FaqEvidence(
-                    faq.getString("_id"), faq.getString("question"), faq.getString("answer"))).toList();
-            var reply = provider.answerFaqContext(question, evidence);
-            if (reply == null) throw new AssistantProvider.InvalidFaqResponse();
-            if (reply.isEmpty()) {
-                outcome = "no_match";
-                return insufficientFaqAnswer();
-            }
-            if (reply.size() > FAQ_CONTEXT_LIMIT) throw new AssistantProvider.InvalidFaqResponse();
-            var citedIds = new java.util.HashSet<String>();
-            var answerParts = new java.util.ArrayList<AssistantCourseAnswers.Part>();
-            for (var part : reply) {
-                if (part == null || part.faqId() == null || part.faqId().isBlank() || part.answer() == null
-                        || part.answer().isBlank() || !citedIds.add(part.faqId()) || !selected.containsKey(part.faqId())) {
-                    throw new AssistantProvider.InvalidFaqResponse();
-                }
-                var faq = selected.get(part.faqId());
-                answerParts.add(new AssistantCourseAnswers.Part("ANSWERED",
-                        sleepGuidance ? faq.getString("answer") : part.answer(),
-                        new AssistantCourseAnswers.Source(faq.getString("_id"), faq.getInteger("version"),
-                                faq.getString("title"), "", null, null)));
-            }
-            stage = "metadata_recheck";
-            for (String id : citedIds) {
-                var faq = selected.get(id);
-                var eligibility = readyFaqFilter(faq, today);
-                if (sleepGuidance) constrainSleepGuidance(eligibility);
-                if (collection.find(eligibility).first() == null) {
-                    outcome = "metadata_revoked";
-                    return insufficientFaqAnswer();
-                }
-            }
-            outcome = "answered";
-            return new AssistantCourseAnswers.Answer("ANSWERED", List.copyOf(answerParts), null);
+            outcome = selected.isEmpty() ? "no_evidence" : "evidence_retrieved";
+            return List.copyOf(selected.values());
         } catch (RuntimeException failure) {
             outcome = failureReason(failure);
             throw failure;
@@ -303,14 +171,41 @@ final class AssistantFixtureSearch implements AutoCloseable {
             LOG.atDebug().addKeyValue("request_id", requestId).addKeyValue("embedding_model", model)
                     .addKeyValue("embedding_dimensions", DIMENSIONS).addKeyValue("strategy", "multi_faq_context")
                     .addKeyValue("top_k", topK).addKeyValue("stage", stage).addKeyValue("outcome", outcome)
-                    .addKeyValue("generation_calls", calls)
                     .addKeyValue("latency_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started))
-                    .log("Assistant FAQ context retrieval");
+                    .log("Assistant FAQ evidence retrieval");
         }
     }
 
-    private static void constrainSleepGuidance(Document eligibility) {
-        eligibility.append("domain", "SLEEP").append("type", "HEALTH_EDUCATION").append("language", "vi");
+    private ReadyEvidence readyEvidence(MongoCollection<Document> collection, Document faq, String today) {
+        var evidence = new AssistantProvider.FaqEvidence(
+                faq.getString("_id"), faq.getString("question"), faq.getString("answer"));
+        var source = new AssistantCourseAnswers.Source(faq.getString("_id"), faq.getInteger("version"),
+                faq.getString("title"), "", null, null);
+        var eligibility = readyFaqFilter(faq, today);
+        String type = faq.getString("type");
+        if (type != null) eligibility.append("type", type);
+        return new ReadyEvidence(evidence, source, "HEALTH_EDUCATION".equals(type),
+                () -> nonblank(collection.find(eligibility).first(), "_id", "title", "question", "answer"));
+    }
+
+    static final class ReadyEvidence {
+        private final AssistantProvider.FaqEvidence evidence;
+        private final AssistantCourseAnswers.Source source;
+        private final boolean healthEducation;
+        private final BooleanSupplier current;
+
+        private ReadyEvidence(AssistantProvider.FaqEvidence evidence, AssistantCourseAnswers.Source source,
+                boolean healthEducation, BooleanSupplier current) {
+            this.evidence = evidence;
+            this.source = source;
+            this.healthEducation = healthEducation;
+            this.current = current;
+        }
+
+        AssistantProvider.FaqEvidence evidence() { return evidence; }
+        AssistantCourseAnswers.Source source() { return source; }
+        boolean healthEducation() { return healthEducation; }
+        boolean current() { return current.getAsBoolean(); }
     }
 
     private static AggregateIterable<Document> rankedReadyFaqs(
@@ -335,17 +230,12 @@ final class AssistantFixtureSearch implements AutoCloseable {
     }
 
     private static boolean nonblank(Document document, String... fields) {
+        if (document == null) return false;
         for (String field : fields) {
             Object value = document.get(field);
             if (!(value instanceof String text) || text.isBlank()) return false;
         }
         return true;
-    }
-
-    private static AssistantCourseAnswers.Answer insufficientFaqAnswer() {
-        return new AssistantCourseAnswers.Answer("INSUFFICIENT_EVIDENCE",
-                List.of(new AssistantCourseAnswers.Part("INSUFFICIENT_EVIDENCE",
-                        "Không tìm thấy FAQ phù hợp. No matching FAQ was found.", null)), null);
     }
 
     private static void logContextCandidate(UUID requestId, Document candidate, int rank, String metadata,
@@ -358,17 +248,8 @@ final class AssistantFixtureSearch implements AutoCloseable {
                 .log("Assistant FAQ context candidate");
     }
 
-    private static void logCandidate(UUID requestId, Document candidate, int rank, String metadata, String decision) {
-        LOG.atDebug().addKeyValue("request_id", requestId).addKeyValue("faq_id", candidate.getString("_id"))
-                .addKeyValue("rank", rank).addKeyValue("vector_score", candidate.getDouble("score"))
-                .addKeyValue("metric", "cosine").addKeyValue("threshold", FAQ_SCORE_THRESHOLD)
-                .addKeyValue("metadata", metadata).addKeyValue("decision", decision)
-                .log("Assistant FAQ candidate");
-    }
-
     private static String failureReason(RuntimeException failure) {
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-            if (cause instanceof AssistantProvider.InvalidFaqResponse) return "invalid_model_response";
             if (cause instanceof HttpTimeoutException || cause instanceof SocketTimeoutException
                     || cause instanceof TimeoutException || cause instanceof com.mongodb.MongoTimeoutException) {
                 return "timeout";

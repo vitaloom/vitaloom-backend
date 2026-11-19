@@ -16,13 +16,13 @@ final class AssistantFixture {
     }
     static final Faq JOURNAL = new Faq("app-help-sleep-journal", "Nhật ký giấc ngủ", "/sleep/journal",
             QUESTION, "Tìm chỗ xem lại các lần ngủ đã ghi ở đâu?", ANSWER);
-    static final List<Faq> CORPUS = List.of(JOURNAL,
-            new Faq("app-help-water-progress", "Tiến độ nước", "/water/progress",
-                    "Làm sao xem tiến độ uống nước trong tuần?", "Có chỗ nào xem các lần uống trong tuần không?",
-                    "Mở Nước rồi chọn Tiến độ."),
-            new Faq("app-help-water-log", "Ghi lượng nước", "/water/add",
-                    "Ghi một lần uống nước như thế nào?", "Mình vừa uống nước, nhập ở đâu?",
-                    "Mở Nước rồi chọn thêm lần uống."));
+    static final Faq WATER_PROGRESS = new Faq("app-help-water-progress", "Tiến độ nước", "/water/progress",
+            "Làm sao xem tiến độ uống nước trong tuần?", "Có chỗ nào xem các lần uống trong tuần không?",
+            "Mở Nước rồi chọn Tiến độ.");
+    static final Faq WATER_LOG = new Faq("app-help-water-log", "Ghi lượng nước", "/water/add",
+            "Ghi một lần uống nước như thế nào?", "Mình vừa uống nước, nhập ở đâu?",
+            "Mở Nước rồi chọn thêm lần uống.");
+    static final List<Faq> CORPUS = List.of(JOURNAL, WATER_PROGRESS, WATER_LOG);
 
     record Faq(String id, String title, String route, String question, String paraphrase, String answer) {
         AssistantCourseAnswers.Source source() {
