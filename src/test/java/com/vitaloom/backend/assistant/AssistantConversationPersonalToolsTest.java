@@ -7,7 +7,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.vitaloom.backend.sleep.dto.response.SessionResponse;
 import com.vitaloom.backend.sleep.service.SleepJournalService;
+import com.vitaloom.backend.statistics.service.SleepInsightsStatisticsService;
 import com.vitaloom.backend.statistics.service.SleepRecentStatisticsService;
 import com.vitaloom.backend.water.dto.response.DailyWaterSummaryResponse;
 import com.vitaloom.backend.water.dto.response.WaterLogResponse;
@@ -15,6 +17,7 @@ import com.vitaloom.backend.water.service.WaterService;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
@@ -28,6 +31,7 @@ class AssistantConversationPersonalToolsTest {
     private final WaterService water = mock(WaterService.class);
     private final SleepRecentStatisticsService sleep = mock(SleepRecentStatisticsService.class);
     private final SleepJournalService journal = mock(SleepJournalService.class);
+    private final SleepInsightsStatisticsService insights = mock(SleepInsightsStatisticsService.class);
     private final AtomicBoolean current = new AtomicBoolean(true);
     private final AssistantConversationTools evidence = new AssistantConversationTools(null, UUID.randomUUID());
     private final AssistantConversationPersonalTools tools = new AssistantConversationPersonalTools(OWNER,
@@ -64,8 +68,46 @@ class AssistantConversationPersonalToolsTest {
 
     @Test
     void absentTimingServiceIsReportedUnavailableWithoutPublishingEvidence() {
-        assertThat(tools.readRecentSleepTiming().status()).isEqualTo("UNAVAILABLE");
+        var noTiming = new AssistantConversationPersonalTools(OWNER,
+                new AssistantPersonalDataService(sleep, water, Clock.fixed(NOW, ZoneOffset.UTC)),
+                journal, null, evidence, true, current::get);
+
+        assertThat(noTiming.readRecentSleepTiming().status()).isEqualTo("UNAVAILABLE");
         assertThat(evidence.sources()).isEmpty();
+    }
+
+    @Test
+    void readyTimingEvidenceIsPublishedWithTheReferenceZone() {
+        var timingEvidence = new AssistantConversationTools(null, UUID.randomUUID());
+        var detail = new SleepInsightsStatisticsService.Detail("A04", "TIMING", "READY",
+                new SleepInsightsStatisticsService.Period(LocalDate.parse("2026-11-12"),
+                        LocalDate.parse("2026-11-18"), "Asia/Ho_Chi_Minh"),
+                "Giờ ngủ và thức", "Observed timing", java.util.Map.of("sampleDays", 4),
+                java.util.Map.of("bedtime", "22:15"), List.of(), List.of(), "policy-v1", "evidence-v1");
+        when(insights.detail(OWNER, "A04", ZoneId.of("Asia/Ho_Chi_Minh"))).thenReturn(detail);
+        var timingTools = new AssistantConversationPersonalTools(OWNER,
+                new AssistantPersonalDataService(sleep, water, Clock.fixed(NOW, ZoneOffset.UTC)),
+                journal, insights, timingEvidence, true, current::get);
+
+        var result = timingTools.readRecentSleepTiming();
+
+        assertThat(result.status()).isEqualTo("READY");
+        assertThat(result.evidence().facts().toString()).contains("Asia/Ho_Chi_Minh", "sampleDays=4", "22:15");
+        assertThat(timingEvidence.sources()).hasSize(1);
+    }
+
+    @Test
+    void verifiedRangeSleepDayPublishesTimingWhenRequested() {
+        var start = Instant.parse("2026-11-18T15:00:00Z");
+        var end = Instant.parse("2026-11-18T22:00:00Z");
+        when(journal.list(OWNER, DATE, DATE)).thenReturn(List.of(new SessionResponse("synthetic-session", NOW,
+                "MAIN", "RANGE", "OK", DATE, 420, "Asia/Ho_Chi_Minh", null, null, start, end, false)));
+
+        var withTiming = tools.readSleepDay(DATE, true);
+
+        assertThat(withTiming.status()).isEqualTo("VERIFIED");
+        assertThat(withTiming.evidence().facts().toString()).contains("minutes=420", "startedAt=2026-11-18T22:00+07:00",
+                "endedAt=2026-11-19T05:00+07:00");
     }
 
     @Test

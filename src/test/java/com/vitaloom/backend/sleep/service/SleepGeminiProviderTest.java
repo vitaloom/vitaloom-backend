@@ -84,6 +84,29 @@ class SleepGeminiProviderTest {
     }
 
     @Test
+    void rejectsInvalidSelectionShapesAndCodes() {
+        var period = evidence().period();
+        var selectedEvidence = new Evidence(period, "Asia/Ho_Chi_Minh", List.of(
+                new Candidate("A01", "policy", "a1", period, Map.of(), Map.of()),
+                evidence().candidates().getFirst()));
+        for (String structured : List.of(
+                "{\"insightCodes\":\"B01\"}",
+                "{\"insightCodes\":[7]}",
+                "{\"insightCodes\":[]}",
+                "{\"insightCodes\":[\"B01\",\"A01\",\"B01\"]}",
+                "{\"insightCodes\":[\"A01\"]}",
+                "{\"insightCodes\":[\"Z99\"]}")) {
+            AtomicInteger calls = new AtomicInteger();
+            GeminiSleepStoryProvider provider = provider((request, requestBody) -> {
+                calls.incrementAndGet();
+                return response(structured);
+            }, System::nanoTime);
+            assertThatThrownBy(() -> provider.generate(selectedEvidence)).isInstanceOf(IllegalArgumentException.class);
+            assertThat(calls).hasValue(1);
+        }
+    }
+
+    @Test
     void providerResponseCopiesBodyAndUsesContentValueSemantics() {
         byte[] source = "secret response".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         ProviderResponse response = new ProviderResponse(200, source);
@@ -108,6 +131,8 @@ class SleepGeminiProviderTest {
                 "{\"candidates\":[]}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
                 "{\"candidates\":[{},{}]}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
                 "{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[]}}]}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":4}]}}]}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"{}\"},{\"text\":\"{}\"}]}}]}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
                 "{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"[]\"}]}}]}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         for (byte[] body : malformedBodies) {
@@ -127,6 +152,86 @@ class SleepGeminiProviderTest {
     }
 
     @Test
+    void sendsOnlyNumericAllowlistedFieldsForEverySupportedInsightCode() throws Exception {
+        var period = evidence().period();
+        List<Candidate> candidates = List.of(
+                evidence().candidates().getFirst(),
+                new Candidate("A02", "policy", "fp", period, Map.of("eligibleMainDays", 5, "privateText", "hidden"),
+                        Map.of("metGoalDays", 3, "extra", 99)),
+                new Candidate("A03", "policy", "fp", period, Map.of(), Map.of("baseline", Map.of("meanMinutes", 60),
+                        "recent", "malformed", "deltaMinutes", -4)),
+                new Candidate("A04", "policy", "fp", period, Map.of("eligibleRangeDays", 6),
+                        Map.of("bedtime", "malformed", "wake", Map.of("spanMinutes", 20))),
+                new Candidate("A05", "policy", "fp", period, Map.of(), Map.of("weekday", Map.of("meanMinutes", 400, "days", 5),
+                        "weekend", Map.of("meanMinutes", "unknown", "days", 2), "deltaMinutes", 15)),
+                new Candidate("B02", "policy", "fp", period, Map.of(), Map.of("comfortable", Map.of("meanMinutes", 430, "days", 2),
+                        "tired", List.of("malformed"), "deltaMinutes", -30)),
+                new Candidate("B03", "policy", "fp", period,
+                        Map.of("baselineRatedMain", 4, "baselineMainWithoutFeeling", 1, "recentRatedMain", 5,
+                                "recentMainWithoutFeeling", 0),
+                        Map.of("deltaPercentagePoints", Map.of("comfortable", 10, "normal", -5, "tired", -5))),
+                new Candidate("B04", "policy", "fp", period, Map.of("ratedMain", 5), Map.of("exceptionCount", 2)));
+        GeminiSleepStoryProvider provider = provider((request, requestBody) -> {
+            var body = mapper.readTree(requestBody);
+            String prompt = body.at("/contents/0/parts/0/text").asText();
+            String input = prompt.substring(prompt.indexOf("JSON input: ") + "JSON input: ".length());
+            var safe = mapper.readTree(input).get("readyEvidence");
+            assertThat(safe.at("/A02/eligibleMainDays").asInt()).isEqualTo(5);
+            assertThat(safe.at("/A02/metGoalDays").asInt()).isEqualTo(3);
+            assertThat(safe.at("/A02/privateText").isMissingNode()).isTrue();
+            assertThat(safe.at("/A03/baseline/meanMinutes").asInt()).isEqualTo(60);
+            assertThat(safe.at("/A03/recent").isEmpty()).isTrue();
+            assertThat(safe.at("/A04/bedtime").isEmpty()).isTrue();
+            assertThat(safe.at("/A04/wake/spanMinutes").asInt()).isEqualTo(20);
+            assertThat(safe.at("/A05/weekday/days").asInt()).isEqualTo(5);
+            assertThat(safe.at("/A05/weekend/meanMinutes").isMissingNode()).isTrue();
+            assertThat(safe.at("/B02/comfortable/meanMinutes").asInt()).isEqualTo(430);
+            assertThat(safe.at("/B02/tired").isEmpty()).isTrue();
+            assertThat(safe.at("/B03/deltaPercentagePoints/tired").asInt()).isEqualTo(-5);
+            assertThat(safe.at("/B04/exceptionCount").asInt()).isEqualTo(2);
+            return response("{\"insightCodes\":[\"B01\"]}");
+        }, System::nanoTime);
+
+        assertThat(provider.generate(new Evidence(period, "Asia/Ho_Chi_Minh", candidates)).observations()).hasSize(1);
+    }
+
+    @Test
+    void rejectsUnsupportedInsightCodesBeforeDispatchAndEnforcesRequestByteBudget() {
+        AtomicInteger unsupportedCalls = new AtomicInteger();
+        var unsupportedEvidence = new Evidence(evidence().period(), "Asia/Ho_Chi_Minh",
+                List.of(new Candidate("X99", "policy", "fp", evidence().period(), Map.of(), Map.of())));
+        GeminiSleepStoryProvider unsupported = provider((request, requestBody) -> {
+            unsupportedCalls.incrementAndGet();
+            return response("{}");
+        }, System::nanoTime);
+        assertThatThrownBy(() -> unsupported.generate(unsupportedEvidence)).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported insight code");
+        assertThat(unsupportedCalls).hasValue(0);
+
+        AtomicInteger oversizedCalls = new AtomicInteger();
+        var hugeNumber = new java.math.BigDecimal("9".repeat(9_000));
+        Candidate oversizedCandidate = new Candidate("B01", "policy", "fp", evidence().period(),
+                Map.of("ratedMain", hugeNumber), Map.of());
+        GeminiSleepStoryProvider oversized = provider((request, requestBody) -> {
+            oversizedCalls.incrementAndGet();
+            return response("{}");
+        }, System::nanoTime);
+        assertThatThrownBy(() -> oversized.generate(new Evidence(evidence().period(), "Asia/Ho_Chi_Minh",
+                List.of(oversizedCandidate)))).isInstanceOf(RuntimeException.class);
+        assertThat(oversizedCalls).hasValue(0);
+    }
+
+    @Test
+    void validatesConfiguredDispatchLimitBounds() {
+        assertThatThrownBy(() -> new GeminiSleepStoryProvider(KEY, mapper,
+                (request, requestBody) -> response("{}"), System::nanoTime, 0))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("between 1 and 12");
+        assertThatThrownBy(() -> new GeminiSleepStoryProvider(KEY, mapper,
+                (request, requestBody) -> response("{}"), System::nanoTime, 13))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("between 1 and 12");
+    }
+
+    @Test
     void classifiesTransientStatusesAndTransportFailuresWithoutRetry() throws Exception {
         for (int status : List.of(500, 502, 503, 504)) {
             AtomicInteger calls = new AtomicInteger();
@@ -138,6 +243,10 @@ class SleepGeminiProviderTest {
                     .isInstanceOf(SleepStoryService.TransientProviderException.class);
             assertThat(calls).hasValue(1);
         }
+        GeminiSleepStoryProvider rejectedStatus = provider((request, requestBody) -> new ProviderResponse(400, new byte[0]),
+                System::nanoTime);
+        assertThatThrownBy(() -> rejectedStatus.generate(evidence())).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("rejected the request");
 
         AtomicInteger ioCalls = new AtomicInteger();
         GeminiSleepStoryProvider ioFailure = provider((request, requestBody) -> {

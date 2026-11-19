@@ -60,6 +60,40 @@ class AssistantPersonalDataServiceTest {
     }
 
     @Test
+    void recentWindowPreservesServerAverageAndSortsOnlyDaysInsideTheReportedPeriod() {
+        when(sleep.recent(OWNER)).thenReturn(report("VERIFIED", List.of(
+                day("2026-11-18", "RECORDED", 480), day("2026-11-11", "RECORDED", 300),
+                day("2026-11-12", "NOT_RECORDED", null), day("2026-11-15", "RECORDED", 420)), 455));
+
+        var result = service.sleepPeriod(OWNER, false);
+
+        assertThat(result.from()).isEqualTo("2026-11-12");
+        assertThat(result.to()).isEqualTo("2026-11-18");
+        assertThat(result.windowDays()).isEqualTo(7);
+        assertThat(result.recordedDays()).isEqualTo(2);
+        assertThat(result.averageMinutesPerRecordedDay()).isEqualTo(455);
+        assertThat(result.days()).extracting(AssistantPersonalDataService.SleepDay::date)
+                .containsExactly("2026-11-12", "2026-11-15", "2026-11-18");
+    }
+
+    @Test
+    void verifiedWindowDistinguishesNoRecordedDaysFromMixedUnverifiedDays() {
+        when(sleep.recent(OWNER)).thenReturn(report("VERIFIED", List.of(), null));
+        var noData = service.sleepPeriod(OWNER, false);
+        when(sleep.recent(OWNER)).thenReturn(report("VERIFIED", List.of(
+                day("2026-11-12", "NOT_RECORDED", null), day("2026-11-13", "UNVERIFIED", null)), null));
+
+        var mixed = service.sleepPeriod(OWNER, false);
+
+        assertThat(noData.status()).isEqualTo("NO_DATA");
+        assertThat(noData.recordedDays()).isZero();
+        assertThat(noData.averageMinutesPerRecordedDay()).isNull();
+        assertThat(mixed.status()).isEqualTo("UNVERIFIED_DATA");
+        assertThat(mixed.days()).extracting(AssistantPersonalDataService.SleepDay::minutes)
+                .containsOnlyNulls();
+    }
+
+    @Test
     void waterDayOmitsEntriesUnlessRequestedAndLimitsRequestedEntriesToFifty() {
         var logs = java.util.stream.IntStream.range(0, 51)
                 .mapToObj(i -> new WaterLogResponse("synthetic-" + i, 100 + i, NOW.plusSeconds(i))).toList();
@@ -119,6 +153,10 @@ class AssistantPersonalDataServiceTest {
         var validDuration = session("DURATION", 420, null, null, "UTC", NOW);
         var validRange = session("RANGE", 420, NOW, NOW.plusSeconds(420 * 60L), "UTC", NOW);
         var invalidRange = session("RANGE", 419, NOW, NOW.plusSeconds(420 * 60L), "UTC", NOW);
+        var missingRangeStart = session("RANGE", 420, null, NOW, "UTC", NOW);
+        var invalidRangeZone = session("RANGE", 420, NOW, NOW.plusSeconds(420 * 60L), "Not/AZone", NOW);
+        var unsupportedMethod = session("OTHER", 420, null, null, "UTC", NOW);
+        var excessiveDuration = session("DURATION", 1441, null, null, "UTC", NOW);
         var missingConfirmation = session("DURATION", 420, null, null, "UTC", null);
 
         assertThat(AssistantPersonalDataService.verifiedMainSleep(List.of(validDuration))).isTrue();
@@ -126,6 +164,10 @@ class AssistantPersonalDataServiceTest {
         assertThat(AssistantPersonalDataService.verifiedMainSleep(List.of())).isFalse();
         assertThat(AssistantPersonalDataService.verifiedMainSleep(List.of(validDuration, validDuration))).isFalse();
         assertThat(AssistantPersonalDataService.verifiedMainSleep(List.of(invalidRange))).isFalse();
+        assertThat(AssistantPersonalDataService.verifiedMainSleep(List.of(missingRangeStart))).isFalse();
+        assertThat(AssistantPersonalDataService.verifiedMainSleep(List.of(invalidRangeZone))).isFalse();
+        assertThat(AssistantPersonalDataService.verifiedMainSleep(List.of(unsupportedMethod))).isFalse();
+        assertThat(AssistantPersonalDataService.verifiedMainSleep(List.of(excessiveDuration))).isFalse();
         assertThat(AssistantPersonalDataService.verifiedMainSleep(List.of(missingConfirmation))).isFalse();
     }
 
