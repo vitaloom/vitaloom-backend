@@ -439,14 +439,12 @@ class SleepStoryServiceTest {
     @Test
     void providerRequiresExplicitEnableAndNonProductionProfile() {
         var context = new ApplicationContextRunner().withUserConfiguration(DeterministicSleepStoryProvider.class);
-        var enabled = context.withPropertyValues("vitaloom.sleep.story.enabled=true");
-        enabled.run(result -> assertThat(result).doesNotHaveBean(Provider.class));
-        enabled.withPropertyValues("spring.profiles.active=prod,dev")
+        context.withPropertyValues("spring.profiles.active=test")
                 .run(result -> assertThat(result).doesNotHaveBean(Provider.class));
-        context.withPropertyValues("spring.profiles.active=dev")
-                .run(result -> assertThat(result).doesNotHaveBean(Provider.class));
-        enabled.withPropertyValues("spring.profiles.active=dev")
+        context.withPropertyValues("spring.profiles.active=test", "vitaloom.sleep.story.enabled=true")
                 .run(result -> assertThat(result).hasSingleBean(Provider.class));
+        context.withPropertyValues("spring.profiles.active=prod,test", "vitaloom.sleep.story.enabled=true")
+                .run(result -> assertThat(result).doesNotHaveBean(Provider.class));
     }
 
     private static Insights snapshot(Item... items) {

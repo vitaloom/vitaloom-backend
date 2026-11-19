@@ -116,6 +116,8 @@ Windows:
 
 The application listens on port `8080` by default. Override it with `SERVER_PORT` in `.env`.
 
+Sleep Recent Story and Explanation use Gemini on Spring's default profile. Add `GEMINI_API_KEY` to the untracked `.env`; `VITALOOM_SLEEP_GEMINI_ENABLED` defaults to `true` and can be set to `false` to disable the provider. Set `SPRING_PROFILES_ACTIVE=default` only when another profile is currently selected. The local Compose stack provides Redis on `REDIS_PORT` (default `6379`), which the host application uses for the AI cache.
+
 After changing `SERVER_PORT`, restart Spring Boot and run `docker compose up -d nginx` to apply the new upstream port. With the default gateway port, `GET http://localhost/api/health` checks connectivity through Nginx.
 
 Nginx defines rate-limit zones in `nginx/rate-limit-zones.conf` and applies them in `nginx/rate-limit-routes.conf`. After changing either file, recreate the gateway with `docker compose up -d --no-deps --force-recreate nginx`.

@@ -35,8 +35,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 @Component
-@Profile("((default & !dev & !test) | sleep-ai-gemini-sandbox) & !prod & !production")
-@ConditionalOnProperty(prefix = "vitaloom.sleep.gemini", name = "sandbox-approved", havingValue = "true")
+@Profile("default & !prod & !production")
 @ConditionalOnProperty(prefix = "vitaloom.sleep.gemini", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class GeminiSleepStoryProvider implements CacheNamespacedProvider {
     private static final String MODEL = "gemini-3.1-flash-lite";
@@ -64,7 +63,7 @@ public class GeminiSleepStoryProvider implements CacheNamespacedProvider {
 
     @Autowired
     public GeminiSleepStoryProvider(@Value("${GEMINI_API_KEY:}") String apiKey, ObjectMapper mapper,
-            @Value("${vitaloom.sleep.gemini.sandbox-max-dispatches:12}") int maxDispatches) {
+            @Value("${vitaloom.sleep.gemini.max-dispatches:12}") int maxDispatches) {
         this(apiKey, mapper, new HttpTransport(HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(3))
                 .followRedirects(HttpClient.Redirect.NEVER)
@@ -94,10 +93,10 @@ public class GeminiSleepStoryProvider implements CacheNamespacedProvider {
 
     GeminiSleepStoryProvider(String apiKey, ObjectMapper mapper, Transport transport, LongSupplier ticker, int maxDispatches) {
         if (apiKey == null || apiKey.isEmpty() || !apiKey.chars().allMatch(c -> c >= '!' && c <= '~')) {
-            throw new IllegalStateException("Gemini sandbox requires a valid GEMINI_API_KEY.");
+            throw new IllegalStateException("Gemini provider requires a valid GEMINI_API_KEY.");
         }
         if (maxDispatches < 1 || maxDispatches > MAX_PER_PROCESS) {
-            throw new IllegalArgumentException("Gemini sandbox attempt limit must be between 1 and 12.");
+            throw new IllegalArgumentException("Gemini provider attempt limit must be between 1 and 12.");
         }
         this.apiKey = apiKey;
         this.mapper = mapper;
@@ -231,10 +230,10 @@ public class GeminiSleepStoryProvider implements CacheNamespacedProvider {
     }
 
     private synchronized void reserveCall() {
-        if (lifetimeCalls >= maxDispatches) throw new IllegalStateException("Gemini sandbox budget exhausted.");
+        if (lifetimeCalls >= maxDispatches) throw new IllegalStateException("Gemini provider attempt limit reached.");
         long now = ticker.getAsLong();
         while (!dispatches.isEmpty() && now - dispatches.getFirst() >= MINUTE_NANOS) dispatches.removeFirst();
-        if (dispatches.size() >= MAX_PER_MINUTE) throw new IllegalStateException("Gemini sandbox rate limit reached.");
+        if (dispatches.size() >= MAX_PER_MINUTE) throw new IllegalStateException("Gemini provider rate limit reached.");
         dispatches.addLast(now);
         lifetimeCalls++;
     }

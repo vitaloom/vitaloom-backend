@@ -1,6 +1,6 @@
 # P6-COOLDOWN delivery · 2026-11-16
 
-Scope: successful-generation cooldowns for the existing dev/test fake-provider Story and Explanation. Sources: the P6 hardening runbook, AI content guidelines and accepted P6-EVIDENCE/P6-CACHE publication checks. The runner owns Git operations and independent review; leave delivery unstaged. No production provider or production data is involved.
+Scope: successful-generation cooldowns for the test-only deterministic Story and Explanation provider. Sources: the P6 hardening runbook, AI content guidelines and accepted P6-EVIDENCE/P6-CACHE publication checks. The runner owns Git operations and independent review; leave delivery unstaged. No live Gemini request or production data is involved.
 
 ## Plan and implementation
 

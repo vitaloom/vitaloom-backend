@@ -19,10 +19,10 @@ class GeminiSleepStorySmokeIT {
     @Test
     @Timeout(25)
     void exercisesStoryAndExplanationWithSyntheticEvidence() {
-        requireApprovedSandbox();
+        requireEnabled();
         String key = System.getenv("GEMINI_API_KEY");
         if (key == null || key.isBlank()) {
-            fail("Load the sandbox key into GEMINI_API_KEY through the process secret environment.");
+            fail("Load the Gemini API key into GEMINI_API_KEY through the process environment.");
         }
         var provider = new GeminiSleepStoryProvider(key, new ObjectMapper());
         var period = new Period(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 7), "Asia/Ho_Chi_Minh");
@@ -39,10 +39,9 @@ class GeminiSleepStorySmokeIT {
         assertEquals(b01.fingerprint(), explanation.evidenceFingerprint());
     }
 
-    private static void requireApprovedSandbox() {
-        if (!"true".equalsIgnoreCase(System.getenv("VITALOOM_SLEEP_GEMINI_ENABLED"))
-                || !"true".equalsIgnoreCase(System.getenv("VITALOOM_SLEEP_GEMINI_SANDBOX_APPROVED"))) {
-            fail("Enable the Gemini smoke only after the isolated sandbox, cost and privacy review are approved.");
+    private static void requireEnabled() {
+        if (!"true".equalsIgnoreCase(System.getenv("VITALOOM_SLEEP_GEMINI_ENABLED"))) {
+            fail("Set VITALOOM_SLEEP_GEMINI_ENABLED=true to run the live Gemini smoke.");
         }
     }
 }

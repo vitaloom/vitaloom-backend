@@ -1,6 +1,6 @@
 # P6-EVIDENCE delivery · 2026-11-16
 
-Scope: canonical evidence identities and Validate Before Publish for the dev/test fake-provider Story and Explanation. The runner owns Git delivery and independent review; changes are left unstaged. No production provider, data or infrastructure is involved.
+Scope: canonical evidence identities and Validate Before Publish for the test-only deterministic Story and Explanation provider. The runner owns Git delivery and independent review; changes are left unstaged. No live Gemini request, production data or infrastructure is involved.
 
 ## Implementation and compatibility
 

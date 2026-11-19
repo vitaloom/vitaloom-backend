@@ -129,7 +129,7 @@ class SleepGeminiProviderTest {
         }
         ticker.set(3 * minute);
         assertThatThrownBy(() -> provider.generate(evidence())).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("budget");
+                .hasMessageContaining("attempt limit");
         assertThat(calls).hasValue(12);
     }
 
@@ -151,7 +151,7 @@ class SleepGeminiProviderTest {
     }
 
     @Test
-    void sandboxCanLowerItsLifetimeDispatchLimit() {
+    void providerCanLowerItsLifetimeAttemptLimit() {
         AtomicInteger calls = new AtomicInteger();
         GeminiSleepStoryProvider provider = new GeminiSleepStoryProvider(KEY, mapper, (request, requestBody) -> {
             calls.incrementAndGet();
@@ -160,7 +160,7 @@ class SleepGeminiProviderTest {
 
         provider.generate(evidence());
         assertThatThrownBy(() -> provider.generate(evidence())).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("budget");
+                .hasMessageContaining("attempt limit");
         assertThat(calls).hasValue(1);
     }
 
@@ -173,27 +173,27 @@ class SleepGeminiProviderTest {
     }
 
     @Test
-    void providerActivationRequiresSandboxProfileBothSwitchesAndKey() {
+    void providerActivationRequiresDefaultProfileAndKey() {
         var context = new ApplicationContextRunner()
                 .withUserConfiguration(GeminiSleepStoryProvider.class)
                 .withBean(ObjectMapper.class, ObjectMapper::new)
-                .withPropertyValues("spring.profiles.active=sleep-ai-gemini-sandbox");
-        context.run(result -> assertThat(result).doesNotHaveBean(GeminiSleepStoryProvider.class));
-        context.withPropertyValues("vitaloom.sleep.gemini.enabled=true")
-                .run(result -> assertThat(result).doesNotHaveBean(GeminiSleepStoryProvider.class));
-        context.withPropertyValues("vitaloom.sleep.gemini.enabled=true",
-                        "vitaloom.sleep.gemini.sandbox-approved=true")
-                .run(result -> {
+                .withPropertyValues("spring.profiles.active=default");
+        context.run(result -> {
                     assertThat(result).hasFailed();
                     assertThat(result.getStartupFailure()).hasRootCauseMessage(
-                            "Gemini sandbox requires a valid GEMINI_API_KEY.");
+                            "Gemini provider requires a valid GEMINI_API_KEY.");
                 });
-        context.withPropertyValues("vitaloom.sleep.gemini.enabled=true",
-                        "vitaloom.sleep.gemini.sandbox-approved=true", "GEMINI_API_KEY=" + KEY)
+        new ApplicationContextRunner().withUserConfiguration(GeminiSleepStoryProvider.class)
+                .withBean(ObjectMapper.class, ObjectMapper::new)
+                .withPropertyValues("spring.profiles.active=default", "GEMINI_API_KEY=" + KEY)
                 .run(result -> assertThat(result).hasSingleBean(GeminiSleepStoryProvider.class));
-        context.withPropertyValues("spring.profiles.active=sleep-ai-gemini-sandbox,prod",
-                        "vitaloom.sleep.gemini.enabled=true", "vitaloom.sleep.gemini.sandbox-approved=true",
-                        "GEMINI_API_KEY=" + KEY)
+        new ApplicationContextRunner().withUserConfiguration(GeminiSleepStoryProvider.class)
+                .withBean(ObjectMapper.class, ObjectMapper::new)
+                .withPropertyValues("spring.profiles.active=default", "vitaloom.sleep.gemini.enabled=false", "GEMINI_API_KEY=" + KEY)
+                .run(result -> assertThat(result).doesNotHaveBean(GeminiSleepStoryProvider.class));
+        new ApplicationContextRunner().withUserConfiguration(GeminiSleepStoryProvider.class)
+                .withBean(ObjectMapper.class, ObjectMapper::new)
+                .withPropertyValues("spring.profiles.active=prod", "GEMINI_API_KEY=" + KEY)
                 .run(result -> assertThat(result).doesNotHaveBean(GeminiSleepStoryProvider.class));
     }
 

@@ -20,9 +20,8 @@ class GeminiSleepProviderConfigurationTest {
     }
 
     @Test
-    void defaultProfileActivatesGeminiWhenApprovedAndEnabledIsOmitted() {
-        defaultProfile().withPropertyValues(
-                        "vitaloom.sleep.gemini.sandbox-approved=true", "GEMINI_API_KEY=synthetic-test-value")
+    void defaultProfileActivatesGeminiWhenEnabledIsOmittedAndKeyIsProvided() {
+        defaultProfile().withPropertyValues("GEMINI_API_KEY=synthetic-test-value")
                 .run(context -> {
                     assertThat(context).hasSingleBean(GeminiSleepStoryProvider.class);
                     assertThat(context).doesNotHaveBean(DeterministicSleepStoryProvider.class);
@@ -30,22 +29,22 @@ class GeminiSleepProviderConfigurationTest {
     }
 
     @Test
-    void explicitFalseDisablesGeminiAndMissingApprovalKeepsItDisabled() {
-        defaultProfile().withPropertyValues("vitaloom.sleep.gemini.enabled=false",
-                        "vitaloom.sleep.gemini.sandbox-approved=true", "GEMINI_API_KEY=synthetic-test-value")
+    void explicitFalseDisablesGeminiAndMissingKeyFailsStartup() {
+        defaultProfile().withPropertyValues("vitaloom.sleep.gemini.enabled=false", "GEMINI_API_KEY=synthetic-test-value")
                 .run(context -> assertThat(context).doesNotHaveBean(GeminiSleepStoryProvider.class));
-        defaultProfile().withPropertyValues("GEMINI_API_KEY=synthetic-test-value")
-                .run(context -> assertThat(context).doesNotHaveBean(GeminiSleepStoryProvider.class));
+        defaultProfile().run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure()).hasRootCauseMessage("Gemini provider requires a valid GEMINI_API_KEY.");
+        });
     }
 
     @Test
-    void documentedEnvironmentNamesActivateGeminiInApprovedSandbox() {
+    void documentedEnvironmentNamesActivateGeminiOnDefaultProfile() {
         providers().withInitializer(context -> {
                     var environment = context.getEnvironment();
-                    environment.setActiveProfiles("dev", "sleep-ai-gemini-sandbox");
+                    environment.setActiveProfiles("default");
                     environment.getPropertySources().addFirst(new SystemEnvironmentPropertySource("synthetic-env", Map.of(
-                            "VITALOOM_SLEEP_GEMINI_SANDBOX_APPROVED", "true",
-                            "VITALOOM_SLEEP_STORY_ENABLED", "true",
+                            "VITALOOM_SLEEP_GEMINI_ENABLED", "true",
                             "GEMINI_API_KEY", "synthetic-test-value")));
                 })
                 .run(context -> {
@@ -55,23 +54,15 @@ class GeminiSleepProviderConfigurationTest {
     }
 
     @Test
-    void developmentAndTestKeepTheFakeAndProductionExcludesGemini() {
+    void onlyTestProfileKeepsTheFakeAndProductionExcludesGemini() {
         providers().withPropertyValues("spring.profiles.active=dev", "vitaloom.sleep.story.enabled=true")
                 .run(context -> {
-                    assertThat(context).hasSingleBean(DeterministicSleepStoryProvider.class);
+                    assertThat(context).doesNotHaveBean(DeterministicSleepStoryProvider.class);
                     assertThat(context).doesNotHaveBean(GeminiSleepStoryProvider.class);
                 });
         providers().withPropertyValues("spring.profiles.active=test", "vitaloom.sleep.story.enabled=true")
                 .run(context -> assertThat(context).hasSingleBean(DeterministicSleepStoryProvider.class));
-        providers().withPropertyValues("spring.profiles.active=default,dev",
-                        "vitaloom.sleep.story.enabled=true", "vitaloom.sleep.gemini.sandbox-approved=true",
-                        "GEMINI_API_KEY=synthetic-test-value")
-                .run(context -> {
-                    assertThat(context).hasSingleBean(DeterministicSleepStoryProvider.class);
-                    assertThat(context).doesNotHaveBean(GeminiSleepStoryProvider.class);
-                });
-        providers().withPropertyValues("spring.profiles.active=default,prod",
-                        "vitaloom.sleep.gemini.sandbox-approved=true", "GEMINI_API_KEY=synthetic-test-value")
+        providers().withPropertyValues("spring.profiles.active=prod", "GEMINI_API_KEY=synthetic-test-value")
                 .run(context -> assertThat(context).doesNotHaveBean(GeminiSleepStoryProvider.class));
     }
 }
