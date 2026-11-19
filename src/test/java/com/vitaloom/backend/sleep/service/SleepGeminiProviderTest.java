@@ -84,6 +84,119 @@ class SleepGeminiProviderTest {
     }
 
     @Test
+    void providerResponseCopiesBodyAndUsesContentValueSemantics() {
+        byte[] source = "secret response".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        ProviderResponse response = new ProviderResponse(200, source);
+        source[0] = 'X';
+        byte[] exposed = response.body();
+        exposed[1] = 'X';
+
+        ProviderResponse same = new ProviderResponse(200,
+                "secret response".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(response.body()).isEqualTo("secret response".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(response).isEqualTo(same);
+        assertThat(response.hashCode()).isEqualTo(same.hashCode());
+        assertThat(response).isNotEqualTo(new ProviderResponse(201, same.body()));
+        assertThat(response.toString()).contains("status=200").doesNotContain("secret response");
+    }
+
+    @Test
+    void rejectsUnsupportedAndMalformedGeminiEnvelopesWithoutRetry() {
+        List<byte[]> malformedBodies = List.of(
+                "{".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "{\"promptFeedback\":{\"blockReason\":\"SAFETY\"},\"candidates\":[]}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "{\"candidates\":[]}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "{\"candidates\":[{},{}]}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[]}}]}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"[]\"}]}}]}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        for (byte[] body : malformedBodies) {
+            AtomicInteger calls = new AtomicInteger();
+            GeminiSleepStoryProvider provider = provider((request, requestBody) -> {
+                calls.incrementAndGet();
+                return new ProviderResponse(200, body);
+            }, System::nanoTime);
+            assertThatThrownBy(() -> provider.generate(evidence())).isInstanceOf(RuntimeException.class);
+            assertThat(calls).hasValue(1);
+        }
+
+        GeminiSleepStoryProvider thoughtPart = provider((request, requestBody) -> new ProviderResponse(200,
+                mapper.writeValueAsBytes(Map.of("candidates", List.of(Map.of("finishReason", "STOP",
+                        "content", Map.of("parts", List.of(Map.of("text", "{}", "thought", true)))))))), System::nanoTime);
+        assertThatThrownBy(() -> thoughtPart.generate(evidence())).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void classifiesTransientStatusesAndTransportFailuresWithoutRetry() throws Exception {
+        for (int status : List.of(500, 502, 503, 504)) {
+            AtomicInteger calls = new AtomicInteger();
+            GeminiSleepStoryProvider provider = provider((request, requestBody) -> {
+                calls.incrementAndGet();
+                return new ProviderResponse(status, new byte[0]);
+            }, System::nanoTime);
+            assertThatThrownBy(() -> provider.generate(evidence()))
+                    .isInstanceOf(SleepStoryService.TransientProviderException.class);
+            assertThat(calls).hasValue(1);
+        }
+
+        AtomicInteger ioCalls = new AtomicInteger();
+        GeminiSleepStoryProvider ioFailure = provider((request, requestBody) -> {
+            ioCalls.incrementAndGet();
+            throw new java.io.IOException("synthetic transport failure");
+        }, System::nanoTime);
+        assertThatThrownBy(() -> ioFailure.generate(evidence()))
+                .isInstanceOf(SleepStoryService.TransientProviderException.class);
+        assertThat(ioCalls).hasValue(1);
+
+        for (java.io.IOException failure : List.of(new javax.net.ssl.SSLException("rejected"),
+                new java.net.ProtocolException("rejected"))) {
+            AtomicInteger rejectedCalls = new AtomicInteger();
+            GeminiSleepStoryProvider rejected = provider((request, requestBody) -> {
+                rejectedCalls.incrementAndGet();
+                throw failure;
+            }, System::nanoTime);
+            assertThatThrownBy(() -> rejected.generate(evidence())).isInstanceOf(IllegalArgumentException.class);
+            assertThat(rejectedCalls).hasValue(1);
+        }
+
+        GeminiSleepStoryProvider oversized = provider((request, requestBody) ->
+                new ProviderResponse(200, new byte[32 * 1024 + 1]), System::nanoTime);
+        assertThatThrownBy(() -> oversized.generate(evidence())).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("byte limit");
+    }
+
+    @Test
+    void restoresInterruptFlagWhenTransportIsInterrupted() {
+        AtomicInteger calls = new AtomicInteger();
+        GeminiSleepStoryProvider provider = provider((request, requestBody) -> {
+            calls.incrementAndGet();
+            throw new InterruptedException("synthetic interruption");
+        }, System::nanoTime);
+        try {
+            assertThatThrownBy(() -> provider.generate(evidence())).isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("interrupted");
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+            assertThat(calls).hasValue(1);
+        } finally {
+            Thread.interrupted();
+        }
+
+        AtomicInteger preInterruptedCalls = new AtomicInteger();
+        GeminiSleepStoryProvider preInterrupted = provider((request, requestBody) -> {
+            preInterruptedCalls.incrementAndGet();
+            return response("{\"insightCodes\":[\"B01\"]}");
+        }, System::nanoTime);
+        try {
+            Thread.currentThread().interrupt();
+            assertThatThrownBy(() -> preInterrupted.generate(evidence())).isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("interrupted");
+            assertThat(preInterruptedCalls).hasValue(0);
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
     void rejectsDuplicateTrailingUnknownAndIncompleteStructuredResponsesWithoutRetry() {
         for (String structured : List.of(
                 "{\"insightCodes\":[\"B01\"],\"insightCodes\":[\"B01\"]}",

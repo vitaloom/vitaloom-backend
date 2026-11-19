@@ -86,7 +86,7 @@ public final class AssistantPersonalDataService {
         LocalDate today = today();
         LocalDate monday = parseDate(weekStartText);
         LocalDate currentMonday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        if (monday.getDayOfWeek() != DayOfWeek.MONDAY || monday.isAfter(currentMonday)) {
+        if (!DayOfWeek.MONDAY.equals(monday.getDayOfWeek()) || monday.isAfter(currentMonday)) {
             throw new IllegalArgumentException("Water week must start on a current or past Monday");
         }
         var report = water.weeklyProgress(owner, monday.toString(), ZONE.getId());

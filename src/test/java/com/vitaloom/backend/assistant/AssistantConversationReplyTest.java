@@ -65,6 +65,19 @@ class AssistantConversationReplyTest {
     }
 
     @Test
+    void handlesLongMalformedInlineCitationWithoutRejectingOrdinaryProse() {
+        String malformed = " [e1,".repeat(250) + "not-a-citation";
+        String prose = "Mình chưa có đủ thông tin" + malformed;
+        String json = "{\"parts\":[{\"kind\":\"LIMITATION\",\"text\":"
+                + new tools.jackson.databind.ObjectMapper().writeValueAsString(prose)
+                + ",\"sources\":[]}]}";
+
+        var reply = AssistantConversationReply.parse(json, Map.of());
+
+        assertThat(reply.parts().getFirst().text()).isEqualTo(prose);
+    }
+
+    @Test
     void permitsConversationAndNaturalLimitationsWithoutCitations() {
         String json = """
                 {"parts":[{"kind":"LIMITATION","text":"Mình chưa có đủ thông tin để trả lời câu này.","sources":[]}]}

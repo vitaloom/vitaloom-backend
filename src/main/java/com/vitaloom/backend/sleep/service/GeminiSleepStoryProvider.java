@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -203,7 +204,32 @@ public class GeminiSleepStoryProvider implements CacheNamespacedProvider {
         ProviderResponse send(HttpRequest request, byte[] requestBody) throws IOException, InterruptedException;
     }
 
-    public record ProviderResponse(int status, byte[] body) {}
+    public record ProviderResponse(int status, byte[] body) {
+        public ProviderResponse {
+            body = body.clone();
+        }
+
+        @Override
+        public byte[] body() {
+            return body.clone();
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return this == other || other instanceof ProviderResponse response
+                    && status == response.status && Arrays.equals(body, response.body);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * Integer.hashCode(status) + Arrays.hashCode(body);
+        }
+
+        @Override
+        public String toString() {
+            return "ProviderResponse[status=" + status + ", body=<redacted>]";
+        }
+    }
 
     private JsonNode responseText(JsonNode response) {
         if (response.path("promptFeedback").has("blockReason")) {

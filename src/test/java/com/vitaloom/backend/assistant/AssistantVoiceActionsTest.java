@@ -161,6 +161,30 @@ class AssistantVoiceActionsTest {
         verifyNoInteractions(water, sleep);
     }
 
+    @Test
+    void rejectsLongMalformedAmountWithoutWriting() {
+        String amount = "một hai ".repeat(180) + "ml";
+        var answer = actions.apply("account-a", "Ghi " + amount, NOW,
+                call("recordWater", "{\"amount\":" + quoteJson(amount) + "}"));
+
+        assertThat(answer.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        verifyNoInteractions(water, sleep);
+    }
+
+    @Test
+    void returnsInsufficientForMissingFeelingBeforeParsingOtherSleepFields() {
+        var answer = actions.apply("account-a", "Ghi giấc ngủ", NOW,
+                call("recordSleep", "{\"duration\":42,\"day\":false}"));
+
+        assertThat(answer.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(answer.parts().getFirst().text()).contains("cảm nhận");
+        verifyNoInteractions(water, sleep);
+    }
+
+    private static String quoteJson(String value) {
+        return new tools.jackson.databind.ObjectMapper().writeValueAsString(value);
+    }
+
     private static ToolCall call(String name, String arguments) {
         return new ToolCall("call", "function", name, arguments);
     }

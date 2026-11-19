@@ -25,8 +25,8 @@ final class AssistantVoiceText {
     private static final Pattern NOW = word("bây giờ|hiện tại|vừa (?:mới )?uống|lúc này|ngay");
     private static final String NUMBER_WORD = "(?:không|một|hai|ba|bốn|năm|sáu|bảy|tám|chín|mười|mươi|mốt|tư|lăm|nghìn|trăm|linh|lẻ)";
     private static final Pattern AMOUNT = Pattern.compile("(?<![\\p{L}\\p{N}.,])"
-            + "([0-9]{1,4}(?:[.,][0-9]{1,3})?|" + NUMBER_WORD + "(?:\\s+" + NUMBER_WORD + ")*)"
-            + "\\s*(ml|mi li lít|mililit|mililít|lít|l)" + WORD_RIGHT);
+            + "([0-9]{1,4}+(?:[.,][0-9]{1,3}+)?+|" + NUMBER_WORD + "(?:\\s++" + NUMBER_WORD + ")*+)"
+            + "\\s*+(ml|mi li lít|mililit|mililít|lít|l)" + WORD_RIGHT);
     private static final Pattern HOURS = Pattern.compile("(.+?)\\s*(tiếng|giờ|h)(?:\\s*rưỡi|\\s*(\\d{1,2})(?:\\s*phút)?)?");
     private static final Pattern MINUTES = Pattern.compile("(.+?)\\s*phút");
     private static final Map<String, Integer> UNITS = Map.of(

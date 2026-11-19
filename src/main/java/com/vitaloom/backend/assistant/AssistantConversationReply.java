@@ -17,7 +17,7 @@ final class AssistantConversationReply {
     private static final int MAX_TEXT = 1800;
     private static final int MAX_REPLY = 6000;
     private static final int MAX_CITATIONS = 4;
-    private static final Pattern INLINE_EVIDENCE_KEY = Pattern.compile("\\s*\\[e[0-9]+(?:\\s*,\\s*e[0-9]+)*]");
+    private static final Pattern INLINE_EVIDENCE_KEY = Pattern.compile("\\s*+\\[e[0-9]++(?:\\s*+,\\s*+e[0-9]++)*+]");
     private static final tools.jackson.databind.ObjectReader READER = new ObjectMapper(JsonFactory.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build()).reader()
             .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);

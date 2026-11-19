@@ -70,6 +70,7 @@ final class AssistantVoiceActions {
     }
 
     private AssistantCourseAnswers.Answer recordSleep(String owner, AssistantVoiceText request, JsonNode args) {
+        if (!args.has("feeling")) return insufficient("recordSleep");
         String feeling = request.feeling(request.quote(args, "feeling"));
         String duration = request.quote(args, "duration");
         String day = request.quote(args, "day");
