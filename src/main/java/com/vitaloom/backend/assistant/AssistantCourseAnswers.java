@@ -6,7 +6,6 @@ import com.vitaloom.backend.statistics.service.SleepRecentStatisticsService;
 import com.vitaloom.backend.water.service.WaterService;
 import java.time.Clock;
 import java.time.LocalDate;
-import java.time.ZoneId;
 import java.util.List;
 import java.util.function.BooleanSupplier;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,8 +15,6 @@ import org.springframework.stereotype.Component;
 @Component
 @Conditional(AssistantActivation.Course.class)
 final class AssistantCourseAnswers {
-    private static final ZoneId ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
-
     private final SleepJournalService journal;
     private final SleepRecentStatisticsService sleep;
     private final WaterService water;
@@ -43,10 +40,6 @@ final class AssistantCourseAnswers {
             boolean permitted, BooleanSupplier current) {
         return new AssistantConversationPersonalTools(owner, new AssistantPersonalDataService(sleep, water, clock),
                 journal, insights, evidence, permitted, current);
-    }
-
-    LocalDate today() {
-        return LocalDate.now(clock.withZone(ZONE));
     }
 
     enum Intent { SLEEP_DAY, SLEEP_RECENT, WATER_DAY, WATER_WEEK }

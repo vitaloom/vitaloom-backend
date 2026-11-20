@@ -49,7 +49,7 @@ class AssistantMultiFaqSearchTest {
                 "source-a", 1, "source-a title", "", null, null));
         assertThat(selected.getFirst().healthEducation()).isTrue();
         assertThat(selected.getFirst().current()).isFalse();
-        verify(provider, never()).converse(anyList(), anyList(), any());
+        verify(provider, never()).converse(anyList(), anyList(), any(), any());
     }
 
     @Test

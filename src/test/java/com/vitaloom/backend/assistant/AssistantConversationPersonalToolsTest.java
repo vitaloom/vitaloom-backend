@@ -33,7 +33,7 @@ class AssistantConversationPersonalToolsTest {
     private final SleepJournalService journal = mock(SleepJournalService.class);
     private final SleepInsightsStatisticsService insights = mock(SleepInsightsStatisticsService.class);
     private final AtomicBoolean current = new AtomicBoolean(true);
-    private final AssistantConversationTools evidence = new AssistantConversationTools(null, UUID.randomUUID());
+    private final AssistantConversationTools evidence = new AssistantConversationTools(null, UUID.randomUUID(), () -> true);
     private final AssistantConversationPersonalTools tools = new AssistantConversationPersonalTools(OWNER,
             new AssistantPersonalDataService(sleep, water, Clock.fixed(NOW, ZoneOffset.UTC)),
             journal, null, evidence, true, current::get);
@@ -42,7 +42,7 @@ class AssistantConversationPersonalToolsTest {
     void deniedPermissionDoesNotReadPersonalServicesAndMarksTheTurn() {
         var journal = mock(SleepJournalService.class);
         var sleep = mock(SleepRecentStatisticsService.class);
-        var deniedEvidence = new AssistantConversationTools(null, UUID.randomUUID());
+        var deniedEvidence = new AssistantConversationTools(null, UUID.randomUUID(), () -> true);
         var denied = new AssistantConversationPersonalTools(OWNER,
                 new AssistantPersonalDataService(sleep, water, Clock.fixed(NOW, ZoneOffset.UTC)), journal,
                 null, deniedEvidence, false, current::get);
@@ -78,7 +78,7 @@ class AssistantConversationPersonalToolsTest {
 
     @Test
     void readyTimingEvidenceIsPublishedWithTheReferenceZone() {
-        var timingEvidence = new AssistantConversationTools(null, UUID.randomUUID());
+        var timingEvidence = new AssistantConversationTools(null, UUID.randomUUID(), () -> true);
         var detail = new SleepInsightsStatisticsService.Detail("A04", "TIMING", "READY",
                 new SleepInsightsStatisticsService.Period(LocalDate.parse("2026-11-12"),
                         LocalDate.parse("2026-11-18"), "Asia/Ho_Chi_Minh"),
@@ -152,7 +152,7 @@ class AssistantConversationPersonalToolsTest {
         });
 
         assertThatThrownBy(() -> tools.readWaterDay(DATE, true))
-                .isInstanceOf(AssistantPersonalDataTools.PersonalDataAccessDeniedException.class);
+                .isInstanceOf(AssistantNativeChat.AccessChanged.class);
         assertThat(evidence.sources()).isEmpty();
     }
 

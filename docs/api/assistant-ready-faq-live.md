@@ -2,7 +2,7 @@
 
 Assistant conversation requests require a bearer JWT and the current version of the account-wide permission. Mobile shows the Google Gemini data disclosure before enabling the existing Profile toggle. Old local-only grants are ineffective until the user enables permission with the new disclosure.
 
-When authorized, Gemini selects relevant evidence and submits a structured response. Backend validates tool arguments, owner and permission generation, then binds reply citations to the evidence from the current turn. READY retrieval uses exact vector search, top 10 and a 0.75 similarity floor, then rechecks approval and content version. A result's similarity does not establish its relevance.
+When authorized, Gemini selects request-scoped tools through Spring AI and replies in ordinary prose. Backend checks the proposed reply against relevant excerpts and fresh personal facts, then binds sources used in the reply to Backend-owned metadata. READY retrieval uses exact vector search, top 10 and a 0.75 similarity floor, then rechecks approval and content version. Release also requires support for the actual claim.
 
 ## Deployment
 

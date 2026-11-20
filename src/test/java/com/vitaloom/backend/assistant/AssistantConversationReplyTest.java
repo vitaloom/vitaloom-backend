@@ -5,216 +5,195 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static com.vitaloom.backend.assistant.AssistantScriptedChat.call;
+import static com.vitaloom.backend.assistant.AssistantScriptedChat.prose;
 
 import com.vitaloom.backend.sleep.service.SleepJournalService;
 import com.vitaloom.backend.statistics.service.SleepRecentStatisticsService;
+import com.vitaloom.backend.water.dto.response.DailyWaterSummaryResponse;
+import com.vitaloom.backend.water.dto.response.WaterLogResponse;
 import com.vitaloom.backend.water.service.WaterService;
 import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
-import org.mockito.ArgumentCaptor;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.tool.ToolCallback;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.ai.chat.messages.Message;
 
 class AssistantConversationReplyTest {
-    private static final AssistantCourseAnswers.Source SOURCE = new AssistantCourseAnswers.Source(
-            "sleep-recent", 1, "Giấc ngủ gần đây", "/sleep/recent", "2026-11-12", "2026-11-18");
+    private static final String OWNER = "owner-with-synthetic-data";
+    private static final Instant NOW = Instant.parse("2026-11-18T03:00:00Z");
+    private static final String DATE = "2026-11-18";
+    private static final String WATER_ARGS = "{\"date\":\"2026-11-18\"}";
+    private static final String FAQ_ARGS = "{\"query\":\"Câu hỏi mô phỏng?\",\"healthEducation\":true}";
+    private static final AssistantCourseAnswers.Source FAQ = new AssistantCourseAnswers.Source(
+            "HEALTH-FIXTURE-001", 1, "Tài liệu mô phỏng", "", null, null);
+    private final AssistantProvider provider = mock(AssistantProvider.class);
+    private final SleepJournalService journal = mock(SleepJournalService.class);
+    private final SleepRecentStatisticsService sleep = mock(SleepRecentStatisticsService.class);
+    private final WaterService water = mock(WaterService.class);
+    private final AssistantFixtureSearch search = mock(AssistantFixtureSearch.class);
+    private final AssistantConversationalAnswers answers = new AssistantConversationalAnswers(provider, search,
+            new AssistantCourseAnswers(journal, sleep, water, Clock.fixed(NOW, ZoneOffset.UTC)));
+
+    @BeforeEach
+    void allowOrdinaryProse() {
+        when(provider.checkPolicy(anyList(), any())).thenReturn(AssistantScriptedChat.ALLOW);
+    }
 
     @Test
-    void publishesModelProseWithBackendProvenance() {
-        String json = """
-                {"parts":[{"kind":"GROUNDED","text":"Có 4 ngày được ghi nhận.","sources":["e1"]}]}
-                """;
-        var reply = AssistantConversationReply.parse(json, Map.of("e1",
-                new AssistantConversationReply.EvidenceSource(SOURCE, () -> true)));
+    void publishesOrdinaryClarificationWithoutAResponseProtocol() {
+        when(provider.converse(anyList(), anyList(), any(), any())).thenReturn("Bạn đã ngủ bao lâu?");
+        var reply = ask("Ghi giấc ngủ sáng nay", () -> true);
         assertThat(reply.outcome()).isEqualTo("ANSWERED");
-        assertThat(reply.parts()).containsExactly(new AssistantCourseAnswers.Part(
-                "ANSWERED", "Có 4 ngày được ghi nhận.", SOURCE));
+        assertThat(reply.parts()).containsExactly(new AssistantCourseAnswers.Part("ANSWERED", "Bạn đã ngủ bao lâu?", null));
+        verifyNoInteractions(water, journal, sleep, search);
     }
 
     @Test
-    void rejectsUnseenAndRevokedCitations() {
-        String json = """
-                {"parts":[{"kind":"GROUNDED","text":"Có 4 ngày được ghi nhận.","sources":["e1"]}]}
-                """;
-        assertThatThrownBy(() -> AssistantConversationReply.parse(json, Map.of()))
-                .isInstanceOf(AssistantConversationReply.InvalidReply.class);
-        assertThatThrownBy(() -> AssistantConversationReply.parse(json, Map.of("e1",
-                new AssistantConversationReply.EvidenceSource(SOURCE, () -> false))))
-                .isInstanceOf(AssistantConversationReply.InvalidReply.class);
+    void bindsHybridProseToTheFreshPersonalAndApprovedSources() {
+        prepareFaq();
+        when(water.dailySummary(OWNER, DATE, "Asia/Ho_Chi_Minh")).thenReturn(new DailyWaterSummaryResponse(
+                DATE, 2000, 250, .125, List.of(new WaterLogResponse("synthetic", 250, NOW))));
+        String text = "Nhật ký có 250 ml. Tài liệu mô phỏng nêu cách xem dữ liệu.";
+        when(provider.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation, List.of(call("readWaterDay", WATER_ARGS),
+                        call("searchApprovedKnowledge", FAQ_ARGS)), prompt -> prose(text)));
+        when(provider.checkPolicy(anyList(), any())).thenReturn(AssistantScriptedChat.ALLOW)
+                .thenAnswer(invocation -> {
+                    List<Message> messages = invocation.getArgument(0);
+                    assertThat(messages.getLast().getText())
+                            .contains("PERSONAL", "HEALTH_EDUCATION", "recordedMl", "250", "Nội dung mô phỏng");
+                    return verdict("ALLOW", "\"e1\",\"e2\"");
+                });
+
+        var reply = ask("Tôi ghi bao nhiêu nước và tài liệu nói gì?", () -> true);
+
+        assertThat(reply.parts()).extracting(AssistantCourseAnswers.Part::text).containsExactly(text, "");
+        assertThat(reply.parts()).extracting(part -> part.source().id()).containsExactly("water-day", FAQ.id());
+        assertThat(reply.parts().getFirst().source().route()).isEqualTo("/water/progress");
+        assertThat(reply.parts().getFirst().source().from()).isEqualTo(DATE);
     }
 
-    @Test
-    void mapsMultipleSourcesWithoutRepeatingProseOrShowingInternalKeys() {
-        var faq = new AssistantCourseAnswers.Source("HEALTH-SLEEP-001", 1, "Sleep duration", "", null, null);
-        String json = """
-                {"parts":[{"kind":"GROUNDED","text":"Bạn có thể đối chiếu với khuyến nghị theo độ tuổi [e2].",
-                "sources":["e1","e2"]}]}
-                """;
-        var reply = AssistantConversationReply.parse(json, Map.of(
-                "e1", new AssistantConversationReply.EvidenceSource(SOURCE, () -> true),
-                "e2", new AssistantConversationReply.EvidenceSource(faq, () -> true)));
-
-        assertThat(reply.parts()).extracting(AssistantCourseAnswers.Part::source).containsExactly(SOURCE, faq);
-        assertThat(reply.parts()).extracting(AssistantCourseAnswers.Part::text)
-                .containsExactly("Bạn có thể đối chiếu với khuyến nghị theo độ tuổi.", "");
-    }
-
-    @Test
-    void handlesLongMalformedInlineCitationWithoutRejectingOrdinaryProse() {
-        String malformed = " [e1,".repeat(250) + "not-a-citation";
-        String prose = "Mình chưa có đủ thông tin" + malformed;
-        String json = "{\"parts\":[{\"kind\":\"LIMITATION\",\"text\":"
-                + new tools.jackson.databind.ObjectMapper().writeValueAsString(prose)
-                + ",\"sources\":[]}]}";
-
-        var reply = AssistantConversationReply.parse(json, Map.of());
-
-        assertThat(reply.parts().getFirst().text()).isEqualTo(prose);
-    }
-
-    @Test
-    void permitsConversationAndNaturalLimitationsWithoutCitations() {
-        String json = """
-                {"parts":[{"kind":"LIMITATION","text":"Mình chưa có đủ thông tin để trả lời câu này.","sources":[]}]}
-                """;
-        var reply = AssistantConversationReply.parse(json, Map.of());
+    @ParameterizedTest
+    @ValueSource(strings = {"Các ghi chép của bạn cho thấy điều này.", "Đã ghi 250 ml.", "Hãy điều trị bằng thuốc X."})
+    void suppressesUnsupportedOutputWithoutRetrievalOrReceipt(String unsupported) {
+        when(provider.converse(anyList(), anyList(), any(), any())).thenReturn(unsupported);
+        when(provider.checkPolicy(anyList(), any())).thenReturn(verdict("UNSUPPORTED", ""));
+        var reply = ask("Bạn có thể giúp gì?", () -> true);
         assertThat(reply.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
-        assertThat(reply.parts().getFirst().text()).doesNotContain("NO_MATCH");
+        assertThat(reply.parts().getFirst().text()).doesNotContain(unsupported);
     }
 
     @Test
-    void preservesWriteClarificationAsItsOwnOutcome() {
-        String json = """
-                {"parts":[{"kind":"WRITE_CLARIFICATION","text":"Bạn muốn ghi cho ngày nào?","sources":[]}]}
-                """;
+    void unrelatedApprovedKnowledgeCannotLicenseTheProse() {
+        prepareFaq();
+        when(provider.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation, List.of(call("searchApprovedKnowledge", FAQ_ARGS)), prompt ->
+                        prose("Khuyến nghị mô phỏng không có trong tài liệu.")));
+        when(provider.checkPolicy(anyList(), any())).thenReturn(AssistantScriptedChat.ALLOW, verdict("UNSUPPORTED", ""));
 
-        var reply = AssistantConversationReply.parse(json, Map.of());
+        var reply = ask("Hãy đưa ra khuyến nghị", () -> true);
 
-        assertThat(reply.outcome()).isEqualTo("WRITE_CLARIFICATION");
-        assertThat(reply.parts()).containsExactly(new AssistantCourseAnswers.Part(
-                "ANSWERED", "Bạn muốn ghi cho ngày nào?", null));
+        assertThat(reply.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(reply.parts().getFirst().source()).isNull();
     }
 
     @Test
-    void rejectsWriteClarificationCombinedWithOtherParts() {
-        String json = """
-                {"parts":[{"kind":"WRITE_CLARIFICATION","text":"Bạn muốn ghi cho ngày nào?","sources":[]},
-                {"kind":"CONVERSATION","text":"Mình có thể giúp.","sources":[]}]}
-                """;
+    void refusesHealthProseIfApprovalWasWithdrawnDuringReview() {
+        var evidence = prepareFaq();
+        when(provider.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation, List.of(call("searchApprovedKnowledge", FAQ_ARGS)), prompt ->
+                        prose("Nội dung mô phỏng.")));
+        when(provider.checkPolicy(anyList(), any())).thenReturn(AssistantScriptedChat.ALLOW).thenAnswer(invocation -> {
+            when(evidence.current()).thenReturn(false);
+            return verdict("ALLOW", "\"e1\"");
+        });
 
-        assertThatThrownBy(() -> AssistantConversationReply.parse(json, Map.of()))
-                .isInstanceOf(AssistantConversationReply.InvalidReply.class);
+        var reply = ask("Bạn tìm thấy gì?", () -> true);
+
+        assertThat(reply.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(reply.parts().getFirst().source()).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"URGENT", "MEDICAL_RESTRICTED"})
+    void safetyReviewVetoesTheWholeReadBatch(String code) {
+        when(provider.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation, List.of(call("readWaterDay", WATER_ARGS),
+                        call("searchApprovedKnowledge", FAQ_ARGS)), prompt -> { throw new AssertionError(); }));
+        when(provider.checkPolicy(anyList(), any())).thenReturn(verdict(code, ""));
+
+        var reply = ask("Yêu cầu y tế mô phỏng", () -> true);
+
+        assertThat(reply.outcome()).isEqualTo("SAFETY");
+        assertThat(reply.parts().getFirst().text()).contains(code.equals("URGENT") ? "cấp cứu" : "kê đơn");
+        verifyNoInteractions(water, journal, sleep, search);
     }
 
     @Test
-    void evaluationIncludesPendingClarificationAndJournalTools() {
-        var provider = mock(AssistantProvider.class);
-        when(provider.converse(anyList(), anyList(), any())).thenReturn(new AssistantGeminiTurn.Result("""
-                {"parts":[{"kind":"WRITE_CLARIFICATION","text":"Bạn muốn ghi vào lúc nào?","sources":[]}]}
-                """, AssistantGeminiTurn.Grounding.OPEN));
-        var answers = new AssistantConversationalAnswers(provider, null, new AssistantCourseAnswers(
-                mock(SleepJournalService.class), mock(SleepRecentStatisticsService.class),
-                mock(WaterService.class), Clock.systemUTC()));
-        var previousQuestion = new org.springframework.ai.chat.messages.AssistantMessage("Bạn đã uống bao nhiêu?");
-        var previousAnswer = new org.springframework.ai.chat.messages.UserMessage("250ml");
+    void refusesPrivateQueriesBeforeEmbedding() {
+        when(provider.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation, List.of(call("searchApprovedKnowledge",
+                        "{\"query\":\"Tìm hồ sơ cá nhân ngày 18/11 và 250 ml\",\"healthEducation\":true}")),
+                        prompt -> { throw new AssertionError(); }));
+        when(provider.checkPolicy(anyList(), any())).thenReturn(verdict("UNSUPPORTED", ""));
 
-        var evaluation = answers.evaluate("synthetic-owner", "buổi sáng", UUID.randomUUID(), List.of(),
-                List.of(previousQuestion, previousAnswer), true, () -> true, () -> true);
-
-        assertThat(evaluation.action()).isNull();
-        assertThat(evaluation.answer().outcome()).isEqualTo("WRITE_CLARIFICATION");
-        var messages = ArgumentCaptor.forClass(List.class);
-        var tools = ArgumentCaptor.forClass(List.class);
-        verify(provider).converse(messages.capture(), tools.capture(), any());
-        assertThat(messages.getValue()).containsSubsequence(previousQuestion, previousAnswer);
-        assertThat(tools.getValue()).extracting(callback -> ((ToolCallback) callback).getToolDefinition().name())
-                .contains("recordWater", "recordSleep");
+        assertThat(ask("Tìm thông tin", () -> true).outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        verifyNoInteractions(search);
     }
 
     @Test
-    void providerFailureUsesSafeFallbackWithoutReadingData() {
-        var provider = mock(AssistantProvider.class);
-        var sleep = mock(SleepRecentStatisticsService.class);
-        var water = mock(WaterService.class);
-        var journal = mock(SleepJournalService.class);
-        when(provider.converse(anyList(), anyList(), any())).thenThrow(new IllegalStateException("internal detail"));
-        var answers = new AssistantConversationalAnswers(provider, null,
-                new AssistantCourseAnswers(journal, sleep, water, Clock.systemUTC()));
+    void prohibitsProviderFollowUpWhenAccessIsRevokedDuringPersonalRead() {
+        var current = new AtomicBoolean(true);
+        when(water.dailySummary(OWNER, DATE, "Asia/Ho_Chi_Minh")).thenAnswer(invocation -> {
+            current.set(false);
+            return new DailyWaterSummaryResponse(DATE, 2000, 250, .125,
+                    List.of(new WaterLogResponse("synthetic", 250, NOW)));
+        });
+        when(provider.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation, List.of(call("readWaterDay", WATER_ARGS)),
+                        prompt -> { throw new AssertionError("Evidence must not reach Gemini"); }));
 
-        var reply = answers.answer("synthetic-owner", "Giấc ngủ gần đây của tôi", UUID.randomUUID(),
-                List.of(), true, () -> true, () -> true);
+        assertThatThrownBy(() -> ask("Hôm nay tôi ghi bao nhiêu nước?", current::get))
+                .isInstanceOf(AssistantNativeChat.AccessChanged.class);
+    }
+
+    @Test
+    void returnsNeutralTechnicalCopyWhenTheProviderFails() {
+        when(provider.converse(anyList(), anyList(), any(), any())).thenThrow(new IllegalStateException("private"));
+        var reply = ask("Giấc ngủ gần đây của tôi", () -> true);
 
         assertThat(reply.outcome()).isEqualTo("DEPENDENCY_UNAVAILABLE");
-        assertThat(reply.parts().getFirst().text()).contains("thử lại sau", "cấp cứu")
-                .doesNotContain("internal detail", "DEPENDENCY_UNAVAILABLE");
-        verifyNoInteractions(sleep, water, journal);
+        assertThat(reply.parts().getFirst().text()).contains("thử lại sau").doesNotContain("cấp cứu", "private");
+        verifyNoInteractions(water, journal, sleep, search);
     }
 
-    @Test
-    void faqKeepsVerifiedAnswerWhenGeminiAddsUncitedConversation() {
-        var provider = mock(AssistantProvider.class);
-        var search = mock(AssistantFixtureSearch.class);
-        var evidence = mock(AssistantFixtureSearch.ReadyEvidence.class);
-        var faq = new AssistantCourseAnswers.Source("HEALTH-FIXTURE-001", 1, "Synthetic FAQ", "", null, null);
-        when(evidence.evidence()).thenReturn(new AssistantProvider.FaqEvidence(
-                faq.id(), "Câu hỏi mô phỏng?", "Nội dung mô phỏng có nguồn."));
-        when(evidence.source()).thenReturn(faq);
-        when(evidence.healthEducation()).thenReturn(true);
-        when(evidence.current()).thenReturn(true);
-        when(search.retrieveReadyEvidence(any(), any())).thenReturn(List.of(evidence));
-        when(provider.converse(anyList(), anyList(), any())).thenAnswer(invocation -> {
-            var callbacks = invocation.<List<ToolCallback>>getArgument(1);
-            var tool = callbacks.stream()
-                    .filter(callback -> callback.getToolDefinition().name().equals("searchApprovedKnowledge"))
-                    .findFirst().orElseThrow();
-            assertThat(tool.call("""
-                    {"query":"Câu hỏi mô phỏng?","healthEducation":true}
-                    """)).contains("FOUND", "e1");
-            return new AssistantGeminiTurn.Result("""
-                    {"parts":[{"kind":"GROUNDED","text":"Nội dung mô phỏng có nguồn.","sources":["e1"]},
-                    {"kind":"CONVERSATION","text":"Chi tiết mô phỏng chưa xác minh.","sources":[]}]}
-                    """, AssistantGeminiTurn.Grounding.APPROVED_KNOWLEDGE);
-        });
-        var answers = new AssistantConversationalAnswers(provider, search, new AssistantCourseAnswers(
-                mock(SleepJournalService.class), mock(SleepRecentStatisticsService.class),
-                mock(WaterService.class), Clock.systemUTC()));
-
-        var reply = answers.answer("synthetic-owner", "Câu hỏi mô phỏng?", UUID.randomUUID(),
-                List.of(), true, () -> true, () -> true);
-
-        assertThat(reply.outcome()).isEqualTo("ANSWERED");
-        assertThat(reply.parts()).containsExactly(new AssistantCourseAnswers.Part(
-                "ANSWERED", "Nội dung mô phỏng có nguồn.", faq));
+    private AssistantFixtureSearch.ReadyEvidence prepareFaq() {
+        var item = mock(AssistantFixtureSearch.ReadyEvidence.class);
+        when(item.evidence()).thenReturn(new AssistantProvider.FaqEvidence(
+                FAQ.id(), "Câu hỏi mô phỏng?", "Nội dung mô phỏng có nguồn."));
+        when(item.source()).thenReturn(FAQ);
+        when(item.healthEducation()).thenReturn(true);
+        when(item.current()).thenReturn(true);
+        when(search.retrieveReadyEvidence(any(), any())).thenReturn(List.of(item));
+        return item;
     }
 
-    @Test
-    void restrictedReplyWithOnlyConversationRemainsInvalid() {
-        String json = """
-                {"parts":[{"kind":"CONVERSATION","text":"Chi tiết mô phỏng chưa xác minh.","sources":[]}]}
-                """;
-        assertThatThrownBy(() -> AssistantConversationReply.parse(json, Map.of(), false))
-                .isInstanceOf(AssistantConversationReply.InvalidReply.class);
+    private AssistantCourseAnswers.Answer ask(String text, BooleanSupplier current) {
+        return answers.answer(OWNER, text, UUID.randomUUID(), NOW, List.of(), List.of(), List.of(),
+                true, current, null, null);
     }
 
-    @Test
-    void discardsUncitedHealthGuidanceWhenNoApprovedEvidenceWasFound() {
-        var provider = mock(AssistantProvider.class);
-        when(provider.converse(anyList(), anyList(), any())).thenReturn(new AssistantGeminiTurn.Result("""
-                {"parts":[{"kind":"CONVERSATION","text":"Bạn nên ngủ 9 tiếng mỗi đêm.","sources":[]}]}
-                """, AssistantGeminiTurn.Grounding.APPROVED_KNOWLEDGE));
-        var answers = new AssistantConversationalAnswers(provider, null, new AssistantCourseAnswers(
-                mock(SleepJournalService.class), mock(SleepRecentStatisticsService.class),
-                mock(WaterService.class), Clock.systemUTC()));
-
-        var reply = answers.answer("synthetic-owner", "Nên ngủ bao lâu?", UUID.randomUUID(),
-                List.of(), true, () -> true, () -> true);
-
-        assertThat(reply.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
-        assertThat(reply.parts().getFirst().text()).doesNotContain("9 tiếng");
+    private static String verdict(String verdict, String sources) {
+        return "{\"verdict\":\"" + verdict + "\",\"sources\":[" + sources + "]}";
     }
 }

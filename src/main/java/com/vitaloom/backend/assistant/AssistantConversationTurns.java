@@ -9,19 +9,22 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Conditional;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.annotation.Id;
@@ -44,7 +47,9 @@ final class AssistantConversationTurns {
     private static final Duration CONTEXT_AGE = Duration.ofMinutes(30);
     private static final Duration WRITE_SETTLEMENT_TIME = Duration.ofMinutes(2);
     private static final Pattern JWT = Pattern.compile("\\beyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\b");
-    private static final int MAX_PENDING_TURNS = 3;
+    private static final int MAX_CONTEXT_TURNS = 5;
+    private static final int MAX_WRITE_CONTEXT_TURNS = 3;
+    private static final int MAX_CONTEXT_REPLY_CHARS = 1800;
     private static final int MAX_TURNS = 50;
     private final MongoTemplate mongo;
     private final Clock clock;
@@ -53,7 +58,7 @@ final class AssistantConversationTurns {
     private final ObjectProvider<AssistantProvider> provider;
     private final AssistantGeminiReadiness readiness;
     private final AssistantAccountSettings settings;
-    private final AssistantVoiceActions journal;
+    private final AssistantJournalActions journal;
     private boolean receiptIndexesReady;
 
     AssistantConversationTurns(MongoTemplate mongo, Clock clock, AssistantCourseAnswers reads,
@@ -67,7 +72,7 @@ final class AssistantConversationTurns {
         this.provider = provider;
         this.readiness = readiness;
         this.settings = settings;
-        this.journal = new AssistantVoiceActions(water, sleep);
+        this.journal = new AssistantJournalActions(water, sleep);
     }
 
     AssistantCourseController.View submit(Authentication auth, AssistantAccountSettings.Preference preference,
@@ -77,6 +82,7 @@ final class AssistantConversationTurns {
         var row = getOwned(owner, conversationId);
         var existing = replay(row, turnId, text, inputKey);
         if (existing != null) {
+            if (existing.generation() != null && existing.generation() != preference.generation()) throw conflict();
             requireCurrent(auth, preference);
             return AssistantCourseController.view(row, preference);
         }
@@ -89,100 +95,225 @@ final class AssistantConversationTurns {
         var receipt = mongo.findById(receiptId, Receipt.class);
         AssistantCourseAnswers.Answer answer;
         Instant at = receivedAt;
+        boolean journalAction;
         if (receipt != null) {
             if (!receipt.conversationId().equals(row.id()) || !receipt.inputKey().equals(inputKey)
-                    || receipt.generation() != preference.generation()) {
+                    || receipt.generation() != preference.generation()
+                    || !Objects.equals(receipt.revision(), row.revision())) {
                 throw conflict();
             }
-            answer = recoverAnswer(receipt);
+            try {
+                verifyCurrent(auth, preference, current);
+                answer = recoverAnswer(receipt);
+            } catch (OptimisticLockingFailureException changed) {
+                return replayAfterConflict(auth, preference, conversationId, turnId, text, inputKey);
+            }
             at = receipt.at();
+            journalAction = Boolean.TRUE.equals(receipt.journalAction());
         } else {
             readiness.requireReady();
             var model = provider.getIfAvailable();
             if (model == null) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE);
-            var pending = pendingTurns(row, preference, receivedAt);
-            var evaluation = evaluate(auth, preference, model, row, turnId, text, receivedAt, pending, current);
-            verifyCurrent(auth, preference, current);
-
-            // Reserve both the logical turn and its conversation revision before allowing a side effect.
-            // A completed receipt can be republished after a failed chat save. An uncertain write is never retried.
-            ensureReceiptIndexes();
+            var execution = new WriteExecution(auth, preference, current,
+                    new Receipt(receiptId, row.id(), row.revision(), inputKey, preference.generation(),
+                            receivedAt, null, row.expiresAt(), null));
             try {
-                mongo.insert(new Receipt(receiptId, row.id(), row.revision(), inputKey, preference.generation(),
-                        receivedAt, clock.instant(), row.expiresAt(), null));
-            } catch (DuplicateKeyException duplicate) {
-                throw conflict();
+                answer = evaluate(auth, model, row, turnId, text, receivedAt, preference, current, execution);
+                journalAction = Boolean.TRUE.equals(execution.claim.journalAction());
+                verifyCurrent(auth, preference, current);
+                if (!journalAction) {
+                    execution.reserve(false);
+                    verifyCurrent(auth, preference, current);
+                    answer = settle(execution.claim, answer);
+                }
+            } catch (AssistantNativeChat.AccessChanged changed) {
+                return replayAfterConflict(auth, preference, conversationId, turnId, text, inputKey);
+            } catch (OptimisticLockingFailureException changed) {
+                return replayAfterConflict(auth, preference, conversationId, turnId, text, inputKey);
             }
-            answer = evaluation.answer();
-            verifyCurrent(auth, preference, current);
-            if (evaluation.action() != null) {
-                var evidence = new ArrayList<String>();
-                for (var turn : pending) evidence.add(redact(auth, turn.text()));
-                evidence.add(redact(auth, text));
-                answer = journal.apply(owner, evidence, receivedAt, evaluation.action());
-            }
-            if (!completeReceipt(receiptId, answer)) throw conflict();
         }
 
-        verifyCurrent(auth, preference, current);
         var history = new ArrayList<>(row.turns());
         history.add(new AssistantConversation.Turn(turnId.toString(), text, at, answer, inputKey,
-                preference.generation()));
-        var saved = mongo.save(row.change(clock.instant(), true, List.copyOf(history)));
+                preference.generation(), journalAction));
+        AssistantConversation saved;
+        try {
+            verifyCurrent(auth, preference, current);
+            saved = mongo.save(row.change(clock.instant(), true, List.copyOf(history)));
+        } catch (OptimisticLockingFailureException changed) {
+            return replayAfterConflict(auth, preference, conversationId, turnId, text, inputKey);
+        }
         requireCurrent(auth, preference);
+        if (!mongo.exists(owned(owner, row.id()), AssistantConversation.class)) throw conflict();
         return AssistantCourseController.view(saved, preference);
+    }
+
+    private AssistantCourseController.View replayAfterConflict(Authentication auth,
+            AssistantAccountSettings.Preference preference, UUID conversationId, UUID turnId, String text,
+            String inputKey) {
+        requireCurrent(auth, preference);
+        var row = getOwned(auth.getName(), conversationId);
+        var appended = replay(row, turnId, text, inputKey);
+        if (appended == null || !Objects.equals(appended.generation(), preference.generation())) throw conflict();
+        requireCurrent(auth, preference);
+        return AssistantCourseController.view(row, preference);
     }
 
     private AssistantCourseAnswers.Answer recoverAnswer(Receipt receipt) {
         if (receipt.answer() != null) return receipt.answer();
         if (receipt.claimedAt().plus(WRITE_SETTLEMENT_TIME).isAfter(clock.instant())) throw conflict();
-        var uncertain = AssistantVoiceActions.answer("DEPENDENCY_UNAVAILABLE",
-                "Chưa thể xác nhận thao tác ghi. Hãy kiểm tra nhật ký trước khi gửi yêu cầu mới.");
-        if (!completeReceipt(receipt.id(), uncertain)) throw conflict();
-        return uncertain;
+        var answer = Boolean.FALSE.equals(receipt.journalAction())
+                ? AssistantResponsePolicy.unavailable()
+                : AssistantResponsePolicy.message("DEPENDENCY_UNAVAILABLE", UNCERTAIN_WRITE);
+        return settle(receipt, answer);
     }
 
-    private boolean completeReceipt(String receiptId, AssistantCourseAnswers.Answer answer) {
-        return mongo.updateFirst(Query.query(Criteria.where("id").is(receiptId).and("answer").is(null)
-                        .and("discarded").ne(true)), new Update().set("answer", answer), Receipt.class)
-                .getMatchedCount() == 1;
+    private AssistantCourseAnswers.Answer settle(Receipt claim, AssistantCourseAnswers.Answer answer) {
+        try {
+            if (mongo.updateFirst(activeClaim(claim), new Update().set("answer", answer), Receipt.class)
+                    .getMatchedCount() == 1) return answer;
+        } catch (DataAccessException uncertain) {
+            // The update may have committed even if its acknowledgement was lost.
+            var saved = settledAnswer(claim);
+            if (saved != null) return saved;
+            throw uncertain;
+        }
+        var saved = settledAnswer(claim);
+        if (saved != null) return saved;
+        throw conflict();
     }
 
-    private AssistantConversationalAnswers.Evaluation evaluate(Authentication auth,
-            AssistantAccountSettings.Preference preference, AssistantProvider model, AssistantConversation row,
-            UUID turnId, String text, Instant now, List<AssistantConversation.Turn> pending, BooleanSupplier current) {
-        var topics = row.turns().reversed().stream().filter(turn -> turn.at().plus(CONTEXT_AGE).isAfter(now))
+    private AssistantCourseAnswers.Answer settledAnswer(Receipt claim) {
+        var saved = mongo.findById(claim.id(), Receipt.class);
+        if (saved != null && saved.conversationId().equals(claim.conversationId())
+                && saved.inputKey().equals(claim.inputKey()) && Objects.equals(saved.revision(), claim.revision())
+                && saved.generation() == claim.generation()) return saved.answer();
+        return null;
+    }
+
+    private static Query activeClaim(Receipt claim) {
+        return Query.query(Criteria.where("id").is(claim.id()).and("answer").is(null).and("discarded").ne(true)
+                .and("conversationId").is(claim.conversationId()).and("revision").is(claim.revision())
+                .and("generation").is(claim.generation()).and("inputKey").is(claim.inputKey()));
+    }
+
+    final class WriteExecution {
+        private final Authentication auth;
+        private final AssistantAccountSettings.Preference preference;
+        private final BooleanSupplier current;
+        private Receipt claim;
+        private boolean attempted;
+        private AssistantCourseAnswers.Answer outcome;
+
+        private WriteExecution(Authentication auth, AssistantAccountSettings.Preference preference,
+                BooleanSupplier current, Receipt claim) {
+            this.auth = auth;
+            this.preference = preference;
+            this.current = current;
+            this.claim = claim;
+        }
+
+        private void reserve(boolean journalAction) {
+            verifyCurrent(auth, preference, current);
+            ensureReceiptIndexes();
+            claim = new Receipt(claim.id(), claim.conversationId(), claim.revision(), claim.inputKey(),
+                    claim.generation(), claim.at(), clock.instant(), claim.expiresAt(), null, journalAction);
+            try {
+                mongo.insert(claim);
+            } catch (DuplicateKeyException duplicate) {
+                throw conflict();
+            }
+        }
+
+        void begin() {
+            if (attempted) throw conflict();
+            attempted = true;
+        }
+
+        AssistantCourseAnswers.Answer outcome() { return outcome; }
+
+        void reject(AssistantCourseAnswers.Answer rejection) {
+            outcome = rejection;
+        }
+
+        AssistantJournalActions.Outcome executeValidated(Supplier<AssistantJournalActions.Outcome> create) {
+            reserve(true);
+            if (!mongo.exists(activeClaim(claim), Receipt.class)) throw conflict();
+            verifyCurrent(auth, preference, current);
+            AssistantJournalActions.Outcome result;
+            try {
+                result = create.get();
+            } catch (RuntimeException uncertain) {
+                throw new UncertainWrite(uncertain);
+            }
+            try {
+                outcome = settle(claim, result.answer());
+            } catch (OptimisticLockingFailureException changed) {
+                throw changed;
+            } catch (DataAccessException uncertain) {
+                throw new UncertainWrite(uncertain);
+            }
+            if (!result.answer().equals(outcome)) throw conflict();
+            verifyCurrent(auth, preference, current);
+            return result;
+        }
+    }
+
+    private AssistantCourseAnswers.Answer evaluate(Authentication auth, AssistantProvider model, AssistantConversation row,
+            UUID turnId, String text, Instant now, AssistantAccountSettings.Preference preference,
+            BooleanSupplier current, WriteExecution execution) {
+        var recent = recentTurns(row, preference, now);
+        var topics = recent.stream()
                 .flatMap(turn -> AssistantConversationalAnswers.recentTopics(turn.reply()).stream())
                 .distinct().limit(4).toList();
         List<Message> context = new ArrayList<>();
-        for (var turn : pending) {
+        for (var turn : recent.reversed()) {
+            String reply = turn.reply().parts().stream().map(AssistantCourseAnswers.Part::text)
+                    .filter(part -> part != null && !part.isBlank()).collect(Collectors.joining("\n\n"));
+            if (reply.isEmpty()) continue;
+            String safeReply = redact(auth, reply);
             context.add(new UserMessage(redact(auth, turn.text())));
-            context.add(new AssistantMessage(redact(auth, turn.reply().parts().getFirst().text())));
+            int start = Math.max(0, safeReply.length() - MAX_CONTEXT_REPLY_CHARS);
+            context.add(new AssistantMessage(safeReply.substring(start)));
         }
-        try {
-            verifyCurrent(auth, preference, current);
-            return new AssistantConversationalAnswers(model, faq.getIfAvailable(), reads)
-                    .evaluate(auth.getName(), redact(auth, text), turnId, topics, context, true, current, current);
-        } catch (AssistantGeminiTurn.AccessChangedException
-                | AssistantPersonalDataTools.PersonalDataAccessDeniedException changed) {
-            requireCurrent(auth, preference);
-            throw conflict();
+        var writeTurns = recent.stream().limit(MAX_WRITE_CONTEXT_TURNS)
+                .takeWhile(turn -> !completedJournalAction(turn)).toList();
+        List<Message> writeContext = new ArrayList<>();
+        for (var turn : writeTurns.reversed()) {
+            if (turn.reply().parts().stream().anyMatch(part -> part.source() != null)) continue;
+            String reply = turn.reply().parts().stream().map(AssistantCourseAnswers.Part::text)
+                    .filter(part -> part != null && !part.isBlank()).findFirst().orElse("");
+            if (reply.isEmpty()) continue;
+            String safeReply = redact(auth, reply);
+            writeContext.add(new UserMessage(redact(auth, turn.text())));
+            int end = Math.min(safeReply.length(), MAX_CONTEXT_REPLY_CHARS);
+            writeContext.add(new AssistantMessage(safeReply.substring(0, end)));
         }
+        verifyCurrent(auth, preference, current);
+        return new AssistantConversationalAnswers(model, faq.getIfAvailable(), reads).answer(
+                auth.getName(), redact(auth, text), turnId, now, topics, context, writeContext, true, current,
+                journal, execution);
     }
 
-    private static List<AssistantConversation.Turn> pendingTurns(AssistantConversation row,
+    private static List<AssistantConversation.Turn> recentTurns(AssistantConversation row,
             AssistantAccountSettings.Preference preference, Instant now) {
-        var pending = new ArrayList<AssistantConversation.Turn>();
-        var today = now.atZone(AssistantVoiceActions.ZONE).toLocalDate();
+        var recent = new ArrayList<AssistantConversation.Turn>();
+        var today = now.atZone(AssistantJournalActions.ZONE).toLocalDate();
         for (var turn : row.turns().reversed()) {
-            if (pending.size() >= MAX_PENDING_TURNS || !"WRITE_CLARIFICATION".equals(turn.reply().outcome())
+            if (recent.size() >= MAX_CONTEXT_TURNS
                     || !Objects.equals(turn.generation(), preference.generation())
                     || !turn.at().plus(CONTEXT_AGE).isAfter(now)
-                    || !today.equals(turn.at().atZone(AssistantVoiceActions.ZONE).toLocalDate())) break;
-            pending.add(turn);
+                    || !today.equals(turn.at().atZone(AssistantJournalActions.ZONE).toLocalDate())) break;
+            recent.add(turn);
         }
-        Collections.reverse(pending);
-        return pending;
+        return recent;
+    }
+
+    private static boolean completedJournalAction(AssistantConversation.Turn turn) {
+        // Legacy canonical journal acknowledgements predate the journalAction marker.
+        return Boolean.TRUE.equals(turn.journalAction())
+                || turn.reply().parts().stream().anyMatch(part -> part.source() == null && part.text() != null
+                        && (part.text().startsWith("Đã ghi ") || part.text().equals(UNCERTAIN_WRITE)));
     }
 
     AssistantConversation createIfNew(Authentication auth, AssistantAccountSettings.Preference preference, UUID id) {
@@ -277,7 +408,24 @@ final class AssistantConversationTurns {
         return new OptimisticLockingFailureException("Assistant conversation or turn changed");
     }
 
+    static final String UNCERTAIN_WRITE =
+            "Chưa thể xác nhận thao tác ghi. Hãy kiểm tra nhật ký trước khi gửi yêu cầu mới.";
+
+    static final class UncertainWrite extends DataAccessResourceFailureException {
+        static final String CODE = "ASSISTANT_WRITE_UNCERTAIN";
+
+        UncertainWrite(RuntimeException cause) { super(UNCERTAIN_WRITE, cause); }
+    }
+
     @Document("assistant_turn_receipts")
     record Receipt(@Id String id, String conversationId, Long revision, String inputKey, long generation,
-            Instant at, Instant claimedAt, Instant expiresAt, AssistantCourseAnswers.Answer answer) {}
+            Instant at, Instant claimedAt, Instant expiresAt, AssistantCourseAnswers.Answer answer, Boolean journalAction) {
+        @org.springframework.data.annotation.PersistenceCreator
+        Receipt {}
+
+        Receipt(String id, String conversationId, Long revision, String inputKey, long generation,
+                Instant at, Instant claimedAt, Instant expiresAt, AssistantCourseAnswers.Answer answer) {
+            this(id, conversationId, revision, inputKey, generation, at, claimedAt, expiresAt, answer, false);
+        }
+    }
 }

@@ -17,13 +17,17 @@ Các đường dẫn trong bảng tương đối với `/api/assistant/mvp/conve
 
 `POST /` và `GET /{id}` trả `{id, updatedAt, personalAllowed, turns}`. `personalAllowed` phản ánh quyền tài khoản ở thời điểm đọc. Mỗi lượt có `{turnId, text, outcome, parts}`. Mỗi phần có `{status, text, source}`, với nguồn dạng `{id, version, title, route, from, to}`. Ngày ISO theo phạm vi của dữ liệu. Nguồn app-help không có ngày. Văn bản phản hồi là tiếng Việt.
 
-Text và bản chép lời đi qua cùng bộ xử lý hội thoại. Gemini có thể truy xuất READY FAQ, đọc Sleep/Water hoặc đề xuất ghi một bản ghi Water hay Main Sleep. Backend kiểm tra JWT, generation của quyền và revision hội thoại trước khi cung cấp dữ liệu, gửi yêu cầu mới hoặc ghi nhật ký. Phản hồi thành công của thao tác ghi dựa trên kết quả từ dịch vụ chủ quản.
+Text và bản chép lời đi qua cùng bộ xử lý hội thoại. Spring AI gọi các công cụ do Gemini chọn để tra READY FAQ, đọc Sleep/Water, điều hướng hoặc ghi một bản ghi Water hay Main Sleep. Backend kiểm tra JWT, generation của quyền, chủ sở hữu và revision hội thoại trước khi thực thi hoặc gửi dữ liệu. Backend kiểm tra an toàn và nguồn hỗ trợ trước khi công bố nội dung do Gemini soạn. Hướng dẫn sức khỏe cần đoạn trích đã duyệt và liên quan. So sánh sức khỏe cá nhân cần cả bằng chứng công khai và dữ liệu nhật ký mới đọc.
 
-Nếu ý định ghi chưa rõ hoặc còn thiếu tham số, lượt trả `outcome: "WRITE_CLARIFICATION"` và một câu hỏi trong `parts`. Người dùng có thể trả lời bằng text hoặc voice trong cùng hội thoại. Backend gửi tối đa ba lượt hỏi lại liên tiếp của cùng phiên bản quyền trong vòng 30 phút và trong cùng ngày tại `Asia/Ho_Chi_Minh`. Ngữ cảnh đọc dữ liệu gồm tối đa bốn chủ đề từ nguồn đã xác minh trong 30 phút. Backend đọc lại số liệu cần thiết theo lượt và loại thông tin định danh Auth/Profile khỏi payload.
+Nếu ý định ghi chưa rõ hoặc còn thiếu tham số, Assistant có thể hỏi lại bằng văn bản trong `parts` với `outcome: "ANSWERED"`. Người dùng có thể tiếp tục bằng text hoặc voice trong cùng hội thoại. Backend gửi tối đa năm lượt trước cho Gemini, theo thứ tự và đúng vai trò của người dùng và Assistant. Cửa sổ chỉ gồm các lượt trong 30 phút, cùng ngày tại `Asia/Ho_Chi_Minh` và cùng generation quyền. Nội dung hội thoại gồm phần văn bản đã hiển thị của các câu trả lời có nguồn. Backend lọc thông tin định danh và xác thực khỏi ngữ cảnh. Khi cần số liệu nhật ký, Assistant đọc bằng chứng mới trong lượt hiện tại.
 
-Gemini xác định ý định ghi và trích nguyên văn tham số từ lời người dùng. Backend đối chiếu lượng nước, ngày giờ, thời lượng và cảm nhận với các phát ngôn liên quan. Hệ thống chỉ thực thi tối đa một thao tác tạo mới mỗi lượt. Cùng UUID và đầu vào sẽ trả kết quả đã lưu khi có thể, kể cả trường hợp nhật ký đã ghi nhưng chưa lưu được lượt hội thoại. Khi chưa biết kết quả thao tác ghi, gửi lại cùng UUID để lấy trạng thái. Kiểm tra nhật ký trước khi gửi một yêu cầu mới cho cùng bản ghi.
+Xác minh ý định ghi dùng tối đa ba lượt theo cùng giới hạn thời gian và quyền. Backend loại các lượt có nguồn khỏi ngữ cảnh xác minh ghi và dừng tại hành động ghi đã thực thi. Các lượt lịch sử mang `WRITE_CLARIFICATION` và `PARTIAL` vẫn đọc được.
+
+Gemini chuẩn hóa lượng nước, ngày giờ, thời lượng và cảm nhận từ lời người dùng. Backend xác minh ý định, đặt biên nhận theo tài khoản và UUID lượt, rồi cho phép tối đa một thao tác tạo mới. Biên nhận lưu phản hồi từ dịch vụ chủ quản trước khi trả kết quả công cụ cho Gemini. Cùng UUID, hội thoại và đầu vào có thể nhận lại kết quả đã lưu, kể cả khi Gemini gặp lỗi sau khi ghi hoặc lượt hội thoại chưa lưu được. Khi kết quả chưa xác định, Backend giữ biên nhận để lần gửi lại cùng UUID không lặp thao tác ghi. Hãy kiểm tra nhật ký trước khi gửi yêu cầu mới cho cùng bản ghi.
 
 401 áp dụng cho JWT thiếu hoặc không hợp lệ. 403 áp dụng khi quyền tắt. 404 áp dụng cho hội thoại ngoại lai hoặc hết hạn. 409 áp dụng khi quyền thay đổi trong lượt, UUID bị tái dùng với nội dung khác hoặc ghi đồng thời. 503 áp dụng khi kho lưu trữ hoặc deployment cấu hình provider chưa khả dụng. Tình trạng lỗi provider không thay đổi công tắc tài khoản.
+
+Nếu thao tác ghi có thể đã tới dịch vụ chủ quản mà Backend chưa xác nhận được kết quả, 503 mang mã `ASSISTANT_WRITE_UNCERTAIN`. Hãy kiểm tra nhật ký trước khi gửi yêu cầu mới. Gửi lại cùng UUID có thể nhận 409 trong hai phút chờ biên nhận hoặc nhận kết quả đã lưu, tùy thời điểm.
 
 Các projection Sleep/Water chỉ dùng dịch vụ chủ quản. Gemini có thể yêu cầu giờ ngủ/thức hoặc từng lượng nước đã ghi khi cần. Dữ liệu không có bản ghi không được tính bằng 0. Các nguồn công khai và dữ liệu xác minh được kiểm tra trước khi trả lời. Ngày thống kê dùng `Asia/Ho_Chi_Minh`.
 
@@ -37,10 +41,11 @@ Backend gửi audio tới AssemblyAI US để chép lời tiếng Việt bằng 
 
 ## Ghi nhật ký từ Assistant
 
-Hai công cụ tạo mới dùng JWT subject và gọi trực tiếp dịch vụ Water hoặc Sleep Journal v2.
+Ba công cụ tạo mới dùng JWT subject và ghi qua biên nhận của lượt trước khi gọi dịch vụ Water hoặc Sleep Journal v2.
 
-- `recordWater` nhận lượng nước có đơn vị và thời điểm nếu người dùng nêu rõ. Mặc định thời điểm nhận lượt và dùng `Asia/Ho_Chi_Minh` cho giờ địa phương. Ví dụ “Nhập lượng nước 250ml tại thời điểm hiện tại cho tôi”.
-- `recordSleep` cần cảm nhận Tốt, Bình thường hoặc Mệt mỏi. Nêu thời lượng và ngày thức dậy hoặc hai mốc giờ có ngày. Ví dụ “Nhập 8 tiếng ngủ cho ngày 17/11, cảm giác tốt” hoặc “Nhập cho tôi thời gian ngủ từ 11h20 tối hôm qua đến 6h sáng hôm nay, cảm giác tốt”. Ngày không có năm dùng năm hiện tại. Giới hạn tuần, trùng ngày, trùng khoảng giờ và các kiểm tra khác của Sleep Journal v2 tiếp tục áp dụng.
+- `recordWater` nhận `amountMl` nguyên từ 1 đến 2000 và `loggedAt` tùy chọn ở dạng ISO kèm múi giờ. Nếu người dùng muốn ghi bây giờ hoặc không nêu ngày giờ, Backend dùng thời điểm nhận lượt.
+- `recordSleepDuration` nhận ngày thức dậy `sleepDate` ở dạng ISO, `durationMinutes` nguyên từ 1 đến 1440 và `feeling`. Ví dụ “Ghi giấc ngủ sáng nay, 6 tiếng rưỡi, cảm giác mệt mỏi”.
+- `recordSleepRange` nhận `start` và `end` ở dạng `YYYY-MM-DDTHH:mm` tại `Asia/Ho_Chi_Minh` và `feeling`. Khoảng qua nửa đêm tính vào ngày thức dậy. Cả hai công cụ Sleep yêu cầu `COMFORTABLE`, `NORMAL` hoặc `TIRED`. Ngày không có năm dùng năm của lượt. Giới hạn tuần, trùng ngày, trùng khoảng giờ và các quy tắc khác của Sleep Journal v2 tiếp tục áp dụng.
 
 Gửi lại cùng tài khoản, UUID, hội thoại và audio đã xử lý trả hội thoại đã lưu mà không gọi lại AssemblyAI/Gemini hoặc ghi thêm bản ghi. Khi retry, giữ nguyên `conversationId` đã gửi ở lần đầu, kể cả khi trường này bị bỏ trống. UUID dùng cho đầu vào hoặc hội thoại khác, lượt đồng thời hoặc lượt chưa xác định có thể trả 409.
 

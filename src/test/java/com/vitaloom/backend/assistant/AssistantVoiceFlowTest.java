@@ -10,7 +10,10 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static com.vitaloom.backend.assistant.AssistantScriptedChat.call;
+import static com.vitaloom.backend.assistant.AssistantScriptedChat.prose;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -18,8 +21,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.vitaloom.backend.sleep.service.SleepJournalService;
 import com.vitaloom.backend.statistics.service.SleepRecentStatisticsService;
 import com.vitaloom.backend.sleep.dto.response.SessionResponse;
+import com.vitaloom.backend.sleep.dto.request.SessionWrite;
 import com.vitaloom.backend.water.dto.response.WaterLogResponse;
 import com.vitaloom.backend.water.service.WaterService;
+import com.vitaloom.backend.water.exception.WaterLogDuplicateException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -29,8 +34,9 @@ import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.AssistantMessage.ToolCall;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DuplicateKeyException;
@@ -90,7 +96,7 @@ class AssistantVoiceFlowTest {
                     var fields = (org.bson.Document) update.getUpdateObject().get("$set");
                     receipts.put(id, new AssistantConversationTurns.Receipt(id, previous.conversationId(),
                             previous.revision(), previous.inputKey(), previous.generation(), previous.at(), previous.claimedAt(),
-                            previous.expiresAt(), (AssistantCourseAnswers.Answer) fields.get("answer")));
+                            previous.expiresAt(), (AssistantCourseAnswers.Answer) fields.get("answer"), previous.journalAction()));
                     return com.mongodb.client.result.UpdateResult.acknowledged(1, 1L, null);
                 });
         when(mongo.insert(any(AssistantConversation.class))).thenAnswer(invocation -> {
@@ -104,15 +110,21 @@ class AssistantVoiceFlowTest {
             return row != null && row.owner().equals(query.getQueryObject().getString("owner")) ? row : null;
         });
         when(mongo.exists(any(Query.class), eq(AssistantConversation.class))).thenReturn(true);
+        when(mongo.exists(any(Query.class), eq(AssistantConversationTurns.Receipt.class))).thenReturn(true);
         when(mongo.save(any(AssistantConversation.class))).thenAnswer(invocation -> {
             AssistantConversation row = invocation.getArgument(0);
             conversations.put(row.id(), row);
             return row;
         });
-        when(model.converse(anyList(), anyList(), any())).thenReturn(writeClarification("Bạn uống bao nhiêu ml?"));
+        when(model.converse(anyList(), anyList(), any(), any())).thenReturn("Bạn uống bao nhiêu ml?");
+        when(model.checkPolicy(anyList(), any())).thenReturn(AssistantScriptedChat.ALLOW);
+        configureControllers(model);
+    }
+
+    private void configureControllers(AssistantProvider selected) {
         var settings = new AssistantAccountSettings(mongo);
         var readiness = new AssistantGeminiReadiness(true);
-        var conversationTurns = conversationTurns(settings, readiness);
+        var conversationTurns = conversationTurns(settings, readiness, selected);
         var turns = new AssistantVoiceTurns(mongo, Clock.fixed(NOW, ZoneOffset.UTC), stt, conversationTurns, readiness);
         mvc = MockMvcBuilders.standaloneSetup(new AssistantVoiceController(turns, settings)).build();
         text = new AssistantCourseController(mongo, Clock.fixed(NOW, ZoneOffset.UTC), settings, conversationTurns);
@@ -122,8 +134,8 @@ class AssistantVoiceFlowTest {
     void acceptsMultipartAndReplaysConversationWithoutAnotherRecognitionOrWrite() throws Exception {
         String transcript = "Ghi 250 ml nước lúc này";
         when(stt.transcribe(AUDIO)).thenReturn(transcript);
-        when(model.converse(anyList(), anyList(), any())).thenReturn(action("recordWater",
-                "{\"amount\":\"250 ml\",\"when\":\"lúc này\"}"));
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(AssistantScriptedChat.tool("recordWater",
+                "{\"amountMl\":250}"));
         when(water.create(OWNER, 250, NOW.toString())).thenReturn(new WaterLogResponse("log", 250, NOW));
 
         for (int attempt = 0; attempt < 2; attempt++) {
@@ -136,7 +148,7 @@ class AssistantVoiceFlowTest {
         assertThat(conversations).hasSize(1);
         assertThat(conversations.values().iterator().next().owner()).isEqualTo(OWNER);
         verify(stt, times(1)).transcribe(AUDIO);
-        verify(model, times(1)).converse(anyList(), anyList(), any());
+        verify(model, times(1)).converse(anyList(), anyList(), any(), any());
         verify(water, times(1)).create(OWNER, 250, NOW.toString());
         mvc.perform(recording("true", "audio/mp4", new byte[] {2})).andExpect(status().isConflict());
         verify(stt, never()).transcribe(new byte[] {2});
@@ -150,10 +162,10 @@ class AssistantVoiceFlowTest {
         mvc.perform(recording("true", "audio/mp4", AUDIO))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.turns[0].text").value(transcript))
-                .andExpect(jsonPath("$.turns[0].outcome").value("WRITE_CLARIFICATION"))
+                .andExpect(jsonPath("$.turns[0].outcome").value("ANSWERED"))
                 .andExpect(jsonPath("$.turns[0].parts[0].text")
                         .value(org.hamcrest.Matchers.containsString("bao nhiêu ml")));
-        verify(model).converse(anyList(), anyList(), any());
+        verify(model).converse(anyList(), anyList(), any(), any());
         verifyNoInteractions(water, sleep);
     }
 
@@ -184,7 +196,7 @@ class AssistantVoiceFlowTest {
         var settings = new AssistantAccountSettings(mongo);
         var readiness = new AssistantGeminiReadiness(false);
         var turns = new AssistantVoiceTurns(mongo, Clock.fixed(NOW, ZoneOffset.UTC), stt,
-                conversationTurns(settings, readiness), readiness);
+                conversationTurns(settings, readiness, model), readiness);
         var unavailable = MockMvcBuilders.standaloneSetup(
                 new AssistantVoiceController(turns, settings)).build();
 
@@ -205,9 +217,9 @@ class AssistantVoiceFlowTest {
         when(mongo.exists(any(Query.class), eq(AssistantAccountSettings.Preference.class)))
                 .thenAnswer(invocation -> !settingsChanged.get());
         when(stt.transcribe(AUDIO)).thenReturn(transcript);
-        when(model.converse(anyList(), anyList(), any())).thenAnswer(invocation -> {
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation -> {
             settingsChanged.set(true);
-            return action("recordWater", "{\"amount\":\"250 ml\"}");
+            return "Không được ghi.";
         });
 
         mvc.perform(recording("true", "audio/mp4", AUDIO)).andExpect(status().isConflict());
@@ -219,31 +231,244 @@ class AssistantVoiceFlowTest {
     @Test
     void appendsVoiceToTypedSleepClarificationAndRejectsCrossChannelTurnReuse() throws Exception {
         var id = UUID.fromString(text.create(auth(), null).getBody().id());
-        when(model.converse(anyList(), anyList(), any())).thenReturn(writeClarification("Bạn thấy thế nào khi thức dậy?"));
-        text.turn(auth(), id, new AssistantCourseController.Send(UUID.randomUUID(), "Ngủ 7 tiếng hôm nay", null));
-        when(stt.transcribe(AUDIO)).thenReturn("Bình thường");
-        when(model.converse(anyList(), anyList(), any())).thenAnswer(call -> {
+        when(model.converse(anyList(), anyList(), any(), any())).thenReturn("Bạn đã ngủ bao lâu?");
+        text.turn(auth(), id, new AssistantCourseController.Send(UUID.randomUUID(), "Ghi giấc ngủ sáng nay, cảm giác mệt mỏi.", null));
+        when(stt.transcribe(AUDIO)).thenReturn("6 tiếng rưỡi");
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(call -> {
             List<Message> messages = call.getArgument(0);
-            assertThat(messages.stream().skip(1).map(Message::getText)).containsExactly("Ngủ 7 tiếng hôm nay",
-                    "Bạn thấy thế nào khi thức dậy?", "Bình thường");
-            return action("recordSleep", "{\"duration\":\"7 tiếng\",\"day\":\"hôm nay\",\"feeling\":\"Bình thường\"}");
+            assertThat(messages.stream().skip(1).map(Message::getText)).containsExactly("Ghi giấc ngủ sáng nay, cảm giác mệt mỏi.",
+                    "Bạn đã ngủ bao lâu?", "6 tiếng rưỡi");
+            return AssistantScriptedChat.tool("recordSleepDuration", "{\"sleepDate\":\"2026-11-18\",\"durationMinutes\":390,\"feeling\":\"TIRED\"}").answer(call);
         });
-        when(sleep.create(eq(OWNER), any())).thenReturn(new SessionResponse("sleep", NOW, "MAIN", null, null,
-                "2026-11-18", 420, null, null, null, null, null, true));
+        when(sleep.create(eq(OWNER), any())).thenReturn(new SessionResponse("sleep", NOW, "MAIN", "DURATION", "TIRED",
+                "2026-11-18", 390, null, null, null, null, null, true));
         mvc.perform(recording("true", "audio/mp4", AUDIO).param("conversationId", id.toString()))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(id.toString()))
                 .andExpect(jsonPath("$.turns.length()").value(2))
-                .andExpect(jsonPath("$.turns[1].parts[0].text").value(org.hamcrest.Matchers.containsString("420 phút")));
+                .andExpect(jsonPath("$.turns[1].parts[0].text").value(org.hamcrest.Matchers.containsString("390 phút")));
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> text.turn(auth(), id,
-                new AssistantCourseController.Send(turnId, "Bình thường", null)))
+                new AssistantCourseController.Send(turnId, "6 tiếng rưỡi", null)))
                 .isInstanceOf(org.springframework.dao.OptimisticLockingFailureException.class);
         verify(sleep).create(eq(OWNER), any());
     }
 
     @Test
+    void sleepDurationFromSpokenUnitsArrivesAs390NormalizedMinutes() {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(
+                AssistantScriptedChat.tool("recordSleepDuration", """
+                        {"sleepDate":"2026-11-18","durationMinutes":390,"feeling":"TIRED"}
+                        """));
+        stubSleepResult();
+        var send = new AssistantCourseController.Send(turnId,
+                "Ghi giấc ngủ sáng nay, 6 tiếng 30p, cảm giác mệt mỏi.", null);
+
+        assertThat(text.turn(auth(), id, send).turns().getFirst().parts().getFirst().text()).contains("390 phút");
+        verifySleepDuration();
+    }
+
+    @Test
+    void permissionRevokedDuringTheWritePolicyPreventsReservation() {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        when(model.converse(anyList(), anyList(), any(), any()))
+                .thenAnswer(AssistantScriptedChat.tool("recordWater", "{\"amountMl\":250}"));
+        when(model.checkPolicy(anyList(), any())).thenAnswer(invocation -> {
+            when(mongo.exists(any(Query.class), eq(AssistantAccountSettings.Preference.class))).thenReturn(false);
+            return AssistantScriptedChat.ALLOW;
+        });
+        var send = new AssistantCourseController.Send(turnId, "Ghi 250 ml nước", null);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> text.turn(auth(), id, send))
+                .isInstanceOf(AssistantCourseController.AccountSettingChangedException.class);
+        assertThat(receipts).isEmpty();
+        verifyNoInteractions(water, sleep);
+    }
+
+    @Test
+    void cancelledRequestReachesThePolicyWithItsActualRoles() {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        when(model.converse(anyList(), anyList(), any(), any())).thenReturn("Bạn đã ngủ bao lâu?");
+        text.turn(auth(), id, new AssistantCourseController.Send(UUID.randomUUID(),
+                "Ghi giấc ngủ sáng nay, cảm giác mệt mỏi", null));
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(
+                AssistantScriptedChat.tool("recordSleepDuration", """
+                        {"sleepDate":"2026-11-18","durationMinutes":390,"feeling":"TIRED"}
+                        """));
+        when(model.checkPolicy(anyList(), any())).thenAnswer(invocation -> {
+            List<Message> messages = invocation.getArgument(0);
+            assertThat(messages.getLast().getText())
+                    .contains("Ghi giấc ngủ sáng nay", "Bạn đã ngủ bao lâu?", "6 tiếng rưỡi nhưng đừng ghi", "USER", "ASSISTANT");
+            return "{\"verdict\":\"UNSUPPORTED\",\"sources\":[]}";
+        });
+
+        var send = new AssistantCourseController.Send(turnId, "6 tiếng rưỡi nhưng đừng ghi", null);
+        assertThat(text.turn(auth(), id, send).turns().getLast().outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        verifyNoInteractions(water, sleep);
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "ASSISTANT_SYNTHETIC_E2E", matches = "true")
+    void realGeminiContinuesAClarificationFromTextToVoice() throws Exception {
+        try (var gemini = liveProvider()) {
+            configureControllers(gemini);
+            stubSleepResult();
+            var id = UUID.fromString(text.create(auth(), null).getBody().id());
+            var question = text.turn(auth(), id, new AssistantCourseController.Send(UUID.randomUUID(),
+                    "Ghi giấc ngủ sáng nay, cảm giác mệt mỏi.", null)).turns().getFirst();
+            assertThat(question.parts().getFirst().text()).contains("?");
+            verifyNoInteractions(sleep, water);
+            when(stt.transcribe(AUDIO)).thenReturn("6 tiếng rưỡi");
+            mvc.perform(recording("true", "audio/mp4", AUDIO).param("conversationId", id.toString()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.turns[1].parts[0].text").value(org.hamcrest.Matchers.containsString("390 phút")));
+            verifySleepDuration();
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "ASSISTANT_SYNTHETIC_E2E", matches = "true")
+    void realGeminiNormalizesDateAndTimeForAnOvernightVoiceRecord() throws Exception {
+        try (var gemini = liveProvider()) {
+            configureControllers(gemini);
+            when(sleep.create(eq(OWNER), any())).thenReturn(new SessionResponse("synthetic", NOW, "MAIN", "RANGE",
+                    "TIRED", "2026-11-18", 390, null, null, null, null, null, true));
+            when(stt.transcribe(AUDIO)).thenReturn("Ghi giấc ngủ từ 11 giờ 41 tối ngày 17 tháng 11 năm 2026 "
+                    + "đến 6 giờ 11 sáng ngày 18 tháng 11 năm 2026, cảm giác mệt mỏi.");
+            mvc.perform(recording("true", "audio/mp4", AUDIO)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.turns[0].parts[0].text").value(org.hamcrest.Matchers.containsString("390 phút")));
+            var write = ArgumentCaptor.forClass(SessionWrite.class);
+            verify(sleep).create(eq(OWNER), write.capture());
+            assertThat(write.getValue()).isEqualTo(new SessionWrite("MAIN", "RANGE", "TIRED", "Asia/Ho_Chi_Minh",
+                    new SessionWrite.CivilTime("2026-11-17", "23", "41", null),
+                    new SessionWrite.CivilTime("2026-11-18", "06", "11", null), null, null));
+        }
+    }
+
+    private void stubSleepResult() {
+        when(sleep.create(eq(OWNER), any())).thenReturn(new SessionResponse("synthetic", NOW, "MAIN", "DURATION",
+                "TIRED", "2026-11-18", 390, null, null, null, null, null, true));
+    }
+
+    private void verifySleepDuration() {
+        var write = ArgumentCaptor.forClass(SessionWrite.class);
+        verify(sleep).create(eq(OWNER), write.capture());
+        assertThat(write.getValue()).isEqualTo(new SessionWrite("MAIN", "DURATION", "TIRED", null,
+                null, null, "2026-11-18", tools.jackson.databind.node.IntNode.valueOf(390)));
+    }
+
+    private static GeminiAssistantProvider liveProvider() {
+        String key = System.getenv("ASSISTANT_GEMINI_API_KEY");
+        org.junit.jupiter.api.Assumptions.assumeTrue(key != null && !key.isBlank(), "Missing configured Gemini key");
+        return new GeminiAssistantProvider(key,
+                System.getenv().getOrDefault("ASSISTANT_GEMINI_CHAT_MODEL", "gemini-3.1-flash-lite"));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void preservesTheReceiptWhenGeminiTimesOutOrMisstatesTheSavedAmount(boolean timeout) {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        when(water.create(OWNER, 250, NOW.toString())).thenReturn(new WaterLogResponse("log", 250, NOW));
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation, List.of(call("recordWater", "{\"amountMl\":250}")), prompt -> {
+                    assertThat(receipts.get(OWNER + ":" + turnId).answer().parts().getFirst().text())
+                            .contains("Đã ghi 250 ml");
+                    if (timeout) throw new IllegalStateException("simulated provider timeout");
+                    return prose("Đã ghi 900 ml.");
+                }));
+        var send = new AssistantCourseController.Send(turnId, "Ghi giúp mình 250 ml", null);
+
+        assertThat(text.turn(auth(), id, send).turns().getFirst().parts().getFirst().text())
+                .contains("Đã ghi 250 ml").doesNotContain("900");
+        assertThat(text.turn(auth(), id, send).turns()).hasSize(1);
+        verify(water).create(OWNER, 250, NOW.toString());
+    }
+
+    @Test
+    void keepsTheKnownRejectionEvenIfGeminiClaimsSuccess() {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        when(water.create(OWNER, 250, NOW.toString())).thenThrow(new WaterLogDuplicateException());
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation, List.of(call("recordWater", "{\"amountMl\":250}")), prompt ->
+                        prose("Đã ghi 250 ml.")));
+
+        var turn = text.turn(auth(), id, new AssistantCourseController.Send(turnId, "Ghi 250 ml", null))
+                .turns().getFirst();
+        assertThat(turn.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(turn.parts().getFirst().text()).contains("đã có bản ghi").doesNotContain("Đã ghi 250 ml");
+        verify(water).create(OWNER, 250, NOW.toString());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void medicalSafetyTakesPrecedenceOverMalformedOrMixedWriteFeedback(boolean mixed) {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        var calls = mixed ? List.of(call("recordWater", "{\"amountMl\":250}"), call("readWaterDay", "{}"))
+                : List.of(call("recordSleepDuration", "{\"sleepDate\":\"2026-11-18\",\"durationMinutes\":390}"));
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation, calls, prompt -> prose("Mình đã nhận yêu cầu.")));
+        when(model.checkPolicy(anyList(), any())).thenReturn("{\"verdict\":\"URGENT\",\"sources\":[]}");
+
+        var send = new AssistantCourseController.Send(turnId, "Tôi đau ngực và rất khó thở, ghi nhật ký giúp tôi", null);
+        var result = text.turn(auth(), id, send).turns().getFirst();
+
+        assertThat(result.outcome()).isEqualTo("SAFETY");
+        assertThat(result.parts().getFirst().text()).contains("cấp cứu");
+        verifyNoInteractions(water, sleep);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"recordWater", "readWaterDay"})
+    void rejectsAnEntireMixedOrMultipleWriteBatch(String secondTool) {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation,
+                        List.of(call("recordWater", "{\"amountMl\":250}"), call(secondTool, "{}")),
+                        prompt -> { throw new AssertionError("Batch should never execute"); }));
+
+        var turn = text.turn(auth(), id, new AssistantCourseController.Send(turnId, "Ghi và xem lượng nước", null))
+                .turns().getFirst();
+        assertThat(turn.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        verifyNoInteractions(water, sleep);
+    }
+
+    @Test
+    void aSecondWriteInALaterNativeRoundCannotOverrideTheFirst() {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        when(water.create(OWNER, 250, NOW.toString())).thenReturn(new WaterLogResponse("log", 250, NOW));
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation, List.of(call("recordWater", "{\"amountMl\":250}")), prompt ->
+                        AssistantScriptedChat.response(List.of(call("recordSleepDuration", "{}")), "")));
+
+        assertThat(text.turn(auth(), id, new AssistantCourseController.Send(turnId, "Ghi 250 ml", null))
+                .turns().getFirst().parts().getFirst().text()).contains("Đã ghi 250 ml");
+        verify(water).create(OWNER, 250, NOW.toString());
+        verifyNoInteractions(sleep);
+    }
+
+    @Test
+    void aDatabaseFailureAfterReservationNeverResubmitsTheDomainCreate() throws Exception {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        when(water.create(OWNER, 250, NOW.toString()))
+                .thenThrow(new DataAccessResourceFailureException("create acknowledgement missing"));
+        when(model.converse(anyList(), anyList(), any(), any()))
+                .thenAnswer(AssistantScriptedChat.tool("recordWater", "{\"amountMl\":250}"));
+        var http = MockMvcBuilders.standaloneSetup(text).build();
+        var send = post("/api/assistant/mvp/conversations/" + id + "/turns").principal(auth())
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"turnId\":\"" + turnId + "\",\"text\":\"Ghi 250 ml\"}");
+        http.perform(send).andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("ASSISTANT_WRITE_UNCERTAIN"))
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("kiểm tra nhật ký")));
+        http.perform(send).andExpect(status().isConflict());
+        assertThat(receipts.get(OWNER + ":" + turnId).answer()).isNull();
+        verify(water).create(OWNER, 250, NOW.toString());
+        verify(model).converse(anyList(), anyList(), any(), any());
+    }
+
+    @Test
     void recoversTextWriteAfterFailedConversationSaveWithoutAnotherMetricWrite() {
         var id = UUID.fromString(text.create(auth(), null).getBody().id());
-        when(model.converse(anyList(), anyList(), any())).thenReturn(action("recordWater", "{\"amount\":\"250 ml\"}"));
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(AssistantScriptedChat.tool("recordWater", "{\"amountMl\":250}"));
         when(water.create(OWNER, 250, NOW.toString())).thenReturn(new WaterLogResponse("log", 250, NOW));
         when(mongo.save(any(AssistantConversation.class))).thenThrow(new DataAccessResourceFailureException("retry"))
                 .thenAnswer(invocation -> {
@@ -256,47 +481,79 @@ class AssistantVoiceFlowTest {
                 .isInstanceOf(DataAccessResourceFailureException.class);
         assertThat(text.turn(auth(), id, send).turns().getFirst().parts().getFirst().text()).contains("250 ml");
         verify(water).create(OWNER, 250, NOW.toString());
-        verify(model).converse(anyList(), anyList(), any());
+        verify(model).converse(anyList(), anyList(), any(), any());
     }
 
     @Test
-    void closesAnIndeterminateTurnWithoutReexecutingIt() {
+    void doesNotCreateIfReceiptReservationFails() {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(AssistantScriptedChat.tool("recordWater", "{\"amountMl\":250}"));
+        when(mongo.insert(any(AssistantConversationTurns.Receipt.class)))
+                .thenThrow(new DataAccessResourceFailureException("reservation unavailable"));
+        var send = new AssistantCourseController.Send(turnId, "Log giúp mình 250 ml", null);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> text.turn(auth(), id, send))
+                .isInstanceOf(DataAccessResourceFailureException.class);
+        verifyNoInteractions(water, sleep);
+    }
+
+    @Test
+    void recoversTheReceiptWhenSettlementAcknowledgementIsLost() {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(AssistantScriptedChat.tool("recordWater", "{\"amountMl\":250}"));
+        when(water.create(OWNER, 250, NOW.toString())).thenReturn(new WaterLogResponse("log", 250, NOW));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            var receiptId = OWNER + ":" + turnId;
+            var claim = receipts.get(receiptId);
+            org.springframework.data.mongodb.core.query.Update update = invocation.getArgument(1);
+            var fields = (org.bson.Document) update.getUpdateObject().get("$set");
+            receipts.put(receiptId, new AssistantConversationTurns.Receipt(claim.id(), claim.conversationId(),
+                    claim.revision(), claim.inputKey(), claim.generation(), claim.at(), claim.claimedAt(),
+                    claim.expiresAt(), (AssistantCourseAnswers.Answer) fields.get("answer"), claim.journalAction()));
+            throw new DataAccessResourceFailureException("settlement acknowledgement lost");
+        }).when(mongo).updateFirst(any(Query.class), any(), eq(AssistantConversationTurns.Receipt.class));
+        var send = new AssistantCourseController.Send(turnId, "Log giúp mình 250 ml", null);
+
+        assertThat(text.turn(auth(), id, send).turns().getFirst().parts().getFirst().text()).contains("Đã ghi 250 ml");
+        assertThat(text.turn(auth(), id, send).turns()).hasSize(1);
+        verify(water).create(OWNER, 250, NOW.toString());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void closesAnIndeterminateTurnWithoutReexecutingIt(Boolean journalAction) {
         var id = UUID.fromString(text.create(auth(), null).getBody().id());
         String originalText = "Log giúp mình 250 ml";
         String receiptId = OWNER + ":" + turnId;
         receipts.put(receiptId, new AssistantConversationTurns.Receipt(receiptId, id.toString(), null,
                 AssistantConversationTurns.textKey(originalText), 1L, NOW.minusSeconds(200), NOW.minusSeconds(190),
-                NOW.plusSeconds(60), null));
+                NOW.plusSeconds(60), null, journalAction));
 
         var answer = text.turn(auth(), id, new AssistantCourseController.Send(turnId, originalText, null));
 
         assertThat(answer.turns().getFirst().outcome()).isEqualTo("DEPENDENCY_UNAVAILABLE");
-        assertThat(answer.turns().getFirst().parts().getFirst().text()).contains("kiểm tra nhật ký");
+        String text = answer.turns().getFirst().parts().getFirst().text();
+        if (Boolean.FALSE.equals(journalAction)) {
+            assertThat(text).contains("thử lại sau").doesNotContain("kiểm tra nhật ký");
+        } else {
+            assertThat(text).contains("kiểm tra nhật ký");
+        }
         verifyNoInteractions(model, water, sleep);
     }
 
-    private AssistantConversationTurns conversationTurns(AssistantAccountSettings settings, AssistantGeminiReadiness readiness) {
+    private AssistantConversationTurns conversationTurns(AssistantAccountSettings settings, AssistantGeminiReadiness readiness,
+            AssistantProvider selected) {
         var clock = Clock.fixed(NOW, ZoneOffset.UTC);
         return new AssistantConversationTurns(mongo, clock,
                 new AssistantCourseAnswers(sleep, mock(SleepRecentStatisticsService.class), water, clock),
-                providerOf(null), providerOf(model), readiness, settings, water, sleep);
+                providerOf(null), providerOf(selected), readiness, settings, water, sleep);
     }
 
     private static <T> ObjectProvider<T> providerOf(T value) {
         return new ObjectProvider<>() {
             @Override public T getIfAvailable() { return value; }
         };
-    }
-
-    private static AssistantGeminiTurn.Result writeClarification(String question) {
-        return new AssistantGeminiTurn.Result("""
-                {"parts":[{"kind":"WRITE_CLARIFICATION","text":"%s","sources":[]}]}
-                """.formatted(question), AssistantGeminiTurn.Grounding.OPEN);
-    }
-
-    private static AssistantGeminiTurn.Result action(String name, String arguments) {
-        return new AssistantGeminiTurn.Result(null, AssistantGeminiTurn.Grounding.OPEN,
-                new ToolCall("id", "function", name, arguments));
     }
 
     private static TestingAuthenticationToken auth() {

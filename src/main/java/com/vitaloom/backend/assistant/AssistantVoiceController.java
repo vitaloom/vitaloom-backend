@@ -71,7 +71,11 @@ class AssistantVoiceController {
     }
 
     @ExceptionHandler(DataAccessException.class)
-    ResponseEntity<ProblemDetail> storeUnavailable() {
+    ResponseEntity<ProblemDetail> storeUnavailable(DataAccessException failure) {
+        if (failure instanceof AssistantConversationTurns.UncertainWrite) {
+            return ProblemDetails.response(HttpStatus.SERVICE_UNAVAILABLE, AssistantConversationTurns.UncertainWrite.CODE,
+                    AssistantConversationTurns.UNCERTAIN_WRITE);
+        }
         return ProblemDetails.response(HttpStatus.SERVICE_UNAVAILABLE, "ASSISTANT_UNAVAILABLE",
                 "The Assistant is temporarily unavailable.");
     }

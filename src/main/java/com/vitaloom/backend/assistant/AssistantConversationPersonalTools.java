@@ -143,12 +143,14 @@ final class AssistantConversationPersonalTools {
         try {
             var result = operation.get();
             requireCurrent();
+            if ("UNAVAILABLE".equals(result.status())) evidence.markPersonalUnavailable();
             return result;
         } catch (IllegalArgumentException | DateTimeException invalid) {
             return Result.status("INVALID_ARGUMENTS");
-        } catch (AssistantPersonalDataTools.PersonalDataAccessDeniedException changed) {
+        } catch (AssistantNativeChat.AccessChanged changed) {
             throw changed;
         } catch (RuntimeException failure) {
+            evidence.markPersonalUnavailable();
             LoggerFactory.getLogger(AssistantConversationPersonalTools.class).atWarn()
                     .addKeyValue("error_type", failure.getClass().getSimpleName())
                     .log("Assistant personal evidence unavailable");
@@ -157,7 +159,7 @@ final class AssistantConversationPersonalTools {
     }
 
     private void requireCurrent() {
-        if (!current.getAsBoolean()) throw new AssistantPersonalDataTools.PersonalDataAccessDeniedException();
+        if (!current.getAsBoolean()) throw new AssistantNativeChat.AccessChanged();
     }
 
     private LocalDate requireDate(String date) {
@@ -169,7 +171,7 @@ final class AssistantConversationPersonalTools {
 
     private Result publish(String status, AssistantCourseAnswers.Source source, Object facts) {
         requireCurrent();
-        return new Result(status, evidence.add(source, facts, current));
+        return new Result(status, evidence.addPersonal(status, source, facts, current));
     }
 
     private static AssistantCourseAnswers.Source source(String id, String title, String route, String from, String to) {
