@@ -9,7 +9,7 @@ public final class AuthMapper {
     private AuthMapper() {}
 
     public static UserResponse toUserResponse(User user) {
-        return new UserResponse(user.getId(), user.getEmail());
+        return new UserResponse(user.getId(), user.getEmail(), user.getProfileInvitation());
     }
 
     public static AuthResponse toAuthResponse(UserResponse user, JwtTokenService.TokenPair tokens) {
