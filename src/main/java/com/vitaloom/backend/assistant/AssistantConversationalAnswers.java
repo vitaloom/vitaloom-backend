@@ -85,6 +85,7 @@ final class AssistantConversationalAnswers {
                 if (execution != null && execution.outcome() != null) throw new AssistantNativeChat.InvalidResponse();
                 if (calls.stream().anyMatch(call -> AssistantJournalTools.NAMES.contains(call.name()))) {
                     if (calls.size() != 1) {
+                        policy.checkSafety();
                         throw new AssistantResponsePolicy.Rejected(AssistantResponsePolicy.message("INSUFFICIENT_EVIDENCE",
                                 "Bạn muốn ghi mục nào trước? Trợ lý chỉ ghi một mục mỗi lượt."));
                     }
@@ -108,8 +109,7 @@ final class AssistantConversationalAnswers {
             if (execution != null && execution.outcome() != null) return execution.outcome();
             LOG.atWarn().addKeyValue("turn_id", turnId).addKeyValue("error_type", failure.getClass().getSimpleName())
                     .log("Assistant native conversation failed");
-            return AssistantResponsePolicy.message("DEPENDENCY_UNAVAILABLE",
-                    "Trợ lý đang tạm thời không khả dụng. Bạn có thể thử lại sau.");
+            return AssistantResponsePolicy.unavailable();
         }
     }
 

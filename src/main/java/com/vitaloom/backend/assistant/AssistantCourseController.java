@@ -151,9 +151,12 @@ class AssistantCourseController {
 
     @ExceptionHandler(DataAccessException.class)
     ResponseEntity<?> storeUnavailable(DataAccessException failure) {
+        if (failure instanceof AssistantConversationTurns.UncertainWrite) {
+            return ProblemDetails.response(HttpStatus.SERVICE_UNAVAILABLE, AssistantConversationTurns.UncertainWrite.CODE,
+                    AssistantConversationTurns.UNCERTAIN_WRITE);
+        }
         return ProblemDetails.response(HttpStatus.SERVICE_UNAVAILABLE, "ASSISTANT_UNAVAILABLE",
-                failure instanceof AssistantConversationTurns.UncertainWrite ? AssistantConversationTurns.UNCERTAIN_WRITE
-                        : "The Assistant is temporarily unavailable.");
+                "The Assistant is temporarily unavailable.");
     }
 
     private String subject(Authentication auth) {

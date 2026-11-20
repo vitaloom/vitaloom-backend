@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -89,7 +90,9 @@ class AssistantStructuredJournalToolsTest {
     void refusesMalformedWaterBeforeIntentReviewOrCreate(String input) {
         assertThat(call("recordWater", input)).contains("INVALID_ARGUMENTS");
         verify(execution).begin();
-        verifyNoInteractions(policy, water, sleep);
+        verify(policy).checkSafety();
+        verify(policy, never()).permitsWrite(any(), any());
+        verifyNoInteractions(water, sleep);
     }
 
     @Test
@@ -105,7 +108,9 @@ class AssistantStructuredJournalToolsTest {
     void refusesMissingFeeling() {
         assertThat(call("recordSleepDuration", "{\"sleepDate\":\"2026-11-20\",\"durationMinutes\":390}"))
                 .contains("INVALID_ARGUMENTS", "\"field\":\"feeling\"");
-        verifyNoInteractions(policy, sleep, water);
+        verify(policy).checkSafety();
+        verify(policy, never()).permitsWrite(any(), any());
+        verifyNoInteractions(sleep, water);
     }
 
     private String call(String name, String arguments) {

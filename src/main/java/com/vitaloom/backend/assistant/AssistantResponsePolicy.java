@@ -79,6 +79,14 @@ final class AssistantResponsePolicy {
         }
     }
 
+    void checkSafety() {
+        var decision = check("""
+                Check only the current message's medical safety. For an ordinary request, return ALLOW even
+                if the journal details or intended operation are unclear. No operation will be executed here.
+                """, Map.of(), Map.of());
+        if (decision.verdict() != Verdict.ALLOW) throw new AssistantNativeChat.InvalidResponse();
+    }
+
     boolean permitsWrite(String tool, Map<String, Object> arguments) {
         return check(WRITE, Map.of("name", tool, "arguments", arguments), Map.of()).verdict() == Verdict.ALLOW;
     }
@@ -144,6 +152,10 @@ final class AssistantResponsePolicy {
 
     static AssistantCourseAnswers.Answer limitation() {
         return message("INSUFFICIENT_EVIDENCE", "Trợ lý chưa có đủ thông tin đã xác minh để trả lời câu hỏi này.");
+    }
+
+    static AssistantCourseAnswers.Answer unavailable() {
+        return message("DEPENDENCY_UNAVAILABLE", "Trợ lý đang tạm thời không khả dụng. Bạn có thể thử lại sau.");
     }
 
     private static AssistantCourseAnswers.Answer unavailableEvidence(AssistantConversationTools evidence) {

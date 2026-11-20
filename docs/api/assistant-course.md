@@ -25,6 +25,8 @@ Gemini chuẩn hóa lượng nước, ngày giờ, thời lượng và cảm nh�
 
 401 áp dụng cho JWT thiếu hoặc không hợp lệ. 403 áp dụng khi quyền tắt. 404 áp dụng cho hội thoại ngoại lai hoặc hết hạn. 409 áp dụng khi quyền thay đổi trong lượt, UUID bị tái dùng với nội dung khác hoặc ghi đồng thời. 503 áp dụng khi kho lưu trữ hoặc deployment cấu hình provider chưa khả dụng. Tình trạng lỗi provider không thay đổi công tắc tài khoản.
 
+Nếu thao tác ghi có thể đã tới dịch vụ chủ quản mà Backend chưa xác nhận được kết quả, 503 mang mã `ASSISTANT_WRITE_UNCERTAIN`. Hãy kiểm tra nhật ký trước khi gửi yêu cầu mới. Gửi lại cùng UUID có thể nhận 409 trong hai phút chờ biên nhận hoặc nhận kết quả đã lưu, tùy thời điểm.
+
 Các projection Sleep/Water chỉ dùng dịch vụ chủ quản. Gemini có thể yêu cầu giờ ngủ/thức hoặc từng lượng nước đã ghi khi cần. Dữ liệu không có bản ghi không được tính bằng 0. Các nguồn công khai và dữ liệu xác minh được kiểm tra trước khi trả lời. Ngày thống kê dùng `Asia/Ho_Chi_Minh`.
 
 Xem [điều kiện kích hoạt Gemini và Atlas](assistant-ready-faq-live.md) và [sandbox fixture](assistant-sandbox.md) dành cho thử nghiệm tổng hợp.

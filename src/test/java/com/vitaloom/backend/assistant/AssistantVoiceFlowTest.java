@@ -13,6 +13,7 @@ import static org.mockito.Mockito.when;
 import static com.vitaloom.backend.assistant.AssistantScriptedChat.call;
 import static com.vitaloom.backend.assistant.AssistantScriptedChat.prose;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -398,6 +399,24 @@ class AssistantVoiceFlowTest {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void medicalSafetyTakesPrecedenceOverMalformedOrMixedWriteFeedback(boolean mixed) {
+        var id = UUID.fromString(text.create(auth(), null).getBody().id());
+        var calls = mixed ? List.of(call("recordWater", "{\"amountMl\":250}"), call("readWaterDay", "{}"))
+                : List.of(call("recordSleepDuration", "{\"sleepDate\":\"2026-11-18\",\"durationMinutes\":390}"));
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(invocation ->
+                AssistantScriptedChat.run(invocation, calls, prompt -> prose("Mình đã nhận yêu cầu.")));
+        when(model.checkPolicy(anyList(), any())).thenReturn("{\"verdict\":\"URGENT\",\"sources\":[]}");
+
+        var send = new AssistantCourseController.Send(turnId, "Tôi đau ngực và rất khó thở, ghi nhật ký giúp tôi", null);
+        var result = text.turn(auth(), id, send).turns().getFirst();
+
+        assertThat(result.outcome()).isEqualTo("SAFETY");
+        assertThat(result.parts().getFirst().text()).contains("cấp cứu");
+        verifyNoInteractions(water, sleep);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"recordWater", "readWaterDay"})
     void rejectsAnEntireMixedOrMultipleWriteBatch(String secondTool) {
         var id = UUID.fromString(text.create(auth(), null).getBody().id());
@@ -427,18 +446,20 @@ class AssistantVoiceFlowTest {
     }
 
     @Test
-    void aDatabaseFailureAfterReservationNeverResubmitsTheDomainCreate() {
+    void aDatabaseFailureAfterReservationNeverResubmitsTheDomainCreate() throws Exception {
         var id = UUID.fromString(text.create(auth(), null).getBody().id());
         when(water.create(OWNER, 250, NOW.toString()))
                 .thenThrow(new DataAccessResourceFailureException("create acknowledgement missing"));
         when(model.converse(anyList(), anyList(), any(), any()))
                 .thenAnswer(AssistantScriptedChat.tool("recordWater", "{\"amountMl\":250}"));
-        var send = new AssistantCourseController.Send(turnId, "Ghi 250 ml", null);
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> text.turn(auth(), id, send))
-                .isInstanceOf(AssistantConversationTurns.UncertainWrite.class).hasMessageContaining("kiểm tra nhật ký");
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> text.turn(auth(), id, send))
-                .isInstanceOf(org.springframework.dao.OptimisticLockingFailureException.class);
+        var http = MockMvcBuilders.standaloneSetup(text).build();
+        var send = post("/api/assistant/mvp/conversations/" + id + "/turns").principal(auth())
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"turnId\":\"" + turnId + "\",\"text\":\"Ghi 250 ml\"}");
+        http.perform(send).andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("ASSISTANT_WRITE_UNCERTAIN"))
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("kiểm tra nhật ký")));
+        http.perform(send).andExpect(status().isConflict());
         assertThat(receipts.get(OWNER + ":" + turnId).answer()).isNull();
         verify(water).create(OWNER, 250, NOW.toString());
         verify(model).converse(anyList(), anyList(), any(), any());
@@ -498,19 +519,26 @@ class AssistantVoiceFlowTest {
         verify(water).create(OWNER, 250, NOW.toString());
     }
 
-    @Test
-    void closesAnIndeterminateTurnWithoutReexecutingIt() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void closesAnIndeterminateTurnWithoutReexecutingIt(Boolean journalAction) {
         var id = UUID.fromString(text.create(auth(), null).getBody().id());
         String originalText = "Log giúp mình 250 ml";
         String receiptId = OWNER + ":" + turnId;
         receipts.put(receiptId, new AssistantConversationTurns.Receipt(receiptId, id.toString(), null,
                 AssistantConversationTurns.textKey(originalText), 1L, NOW.minusSeconds(200), NOW.minusSeconds(190),
-                NOW.plusSeconds(60), null));
+                NOW.plusSeconds(60), null, journalAction));
 
         var answer = text.turn(auth(), id, new AssistantCourseController.Send(turnId, originalText, null));
 
         assertThat(answer.turns().getFirst().outcome()).isEqualTo("DEPENDENCY_UNAVAILABLE");
-        assertThat(answer.turns().getFirst().parts().getFirst().text()).contains("kiểm tra nhật ký");
+        String text = answer.turns().getFirst().parts().getFirst().text();
+        if (Boolean.FALSE.equals(journalAction)) {
+            assertThat(text).contains("thử lại sau").doesNotContain("kiểm tra nhật ký");
+        } else {
+            assertThat(text).contains("kiểm tra nhật ký");
+        }
         verifyNoInteractions(model, water, sleep);
     }
 

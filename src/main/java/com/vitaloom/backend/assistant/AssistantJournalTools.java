@@ -96,8 +96,10 @@ final class AssistantJournalTools {
                 default -> throw new IllegalStateException("Unregistered journal callback");
             };
         } catch (InvalidArgument invalid) {
+            policy.checkSafety();
             return reject(name, invalid.field);
         } catch (JacksonException invalid) {
+            policy.checkSafety();
             return reject(name, "arguments");
         }
         if (!policy.permitsWrite(name, write.arguments())) return reject(name, "intent");

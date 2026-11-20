@@ -159,8 +159,10 @@ final class AssistantConversationTurns {
     private AssistantCourseAnswers.Answer recoverAnswer(Receipt receipt) {
         if (receipt.answer() != null) return receipt.answer();
         if (receipt.claimedAt().plus(WRITE_SETTLEMENT_TIME).isAfter(clock.instant())) throw conflict();
-        var uncertain = AssistantResponsePolicy.message("DEPENDENCY_UNAVAILABLE", UNCERTAIN_WRITE);
-        return settle(receipt, uncertain);
+        var answer = Boolean.FALSE.equals(receipt.journalAction())
+                ? AssistantResponsePolicy.unavailable()
+                : AssistantResponsePolicy.message("DEPENDENCY_UNAVAILABLE", UNCERTAIN_WRITE);
+        return settle(receipt, answer);
     }
 
     private AssistantCourseAnswers.Answer settle(Receipt claim, AssistantCourseAnswers.Answer answer) {
@@ -390,6 +392,8 @@ final class AssistantConversationTurns {
             "Chưa thể xác nhận thao tác ghi. Hãy kiểm tra nhật ký trước khi gửi yêu cầu mới.";
 
     static final class UncertainWrite extends DataAccessResourceFailureException {
+        static final String CODE = "ASSISTANT_WRITE_UNCERTAIN";
+
         UncertainWrite(RuntimeException cause) { super(UNCERTAIN_WRITE, cause); }
     }
 
