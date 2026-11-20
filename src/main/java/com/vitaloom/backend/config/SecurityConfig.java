@@ -43,6 +43,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/heart-rate/**", "/api/statistics/heart-rate/**",
                                 "/api/steps/**", "/api/statistics/steps/**").authenticated()
                         .requestMatchers("/api/auth/me").authenticated()
+                        .requestMatchers("/api/me/health-profile", "/api/me/profile-invitation").authenticated()
                         .requestMatchers("/api/water/**").authenticated()
                         .requestMatchers("/api/sleep/recent", "/api/sleep/insights", "/api/sleep/insights/**").authenticated()
                         .requestMatchers("/api/sleep/goal").authenticated()
