@@ -364,6 +364,47 @@ class HealthProfileServiceTest {
         verify(profiles, times(1)).updateIfRevision(eq(USER_ID), eq("0"), anyMap());
     }
 
+    @Test
+    void readsSuccessReceiptWithoutPartialFieldsAndHandlesEmptyProfileVerification() {
+        User empty = userWithProfile(null);
+        User saved = userWithProfile(profile("r1", Map.of("displayName", "Linh"),
+                Map.of("attemptId", "create", "kind", "success")));
+        when(profiles.findUser(USER_ID)).thenReturn(empty, saved);
+
+        assertThat(service.read(USER_ID, "create").attempt()).isNull();
+
+        ProfileResponses.Result result = service.read(USER_ID, "create");
+        assertThat(result.attempt()).isEqualTo(Map.of("kind", "success", "snapshot", result.snapshot()));
+    }
+
+    @Test
+    void distinguishesMissingCreateFieldsFromMissingUpdateRequest() {
+        givenUserProfile(null);
+        when(profiles.decide(USER_ID, "skipped")).thenReturn("skipped");
+
+        assertThat(service.create(USER_ID, new ProfileRequests.Create(null, null)).kind()).isEqualTo("skipped");
+        assertThat(service.update(USER_ID, null).kind()).isEqualTo("validation-error");
+        verify(profiles).decide(USER_ID, "skipped");
+        verify(profiles, never()).createIfAbsent(eq(USER_ID), anyMap());
+        verify(profiles, never()).updateIfRevision(eq(USER_ID), eq("0"), anyMap());
+    }
+
+    @Test
+    void rejectsUnknownFieldsAndInvalidNumericSyntaxOrOverflowBeforeCreating() {
+        givenUserProfile(null);
+
+        ProfileResponses.Result overflow = service.create(USER_ID, new ProfileRequests.Create(Map.of(
+                "displayName", "x".repeat(51), "birthYear", "9".repeat(20), "heightCm", "9".repeat(400),
+                "weightKg", "1e2", "unsupported", "value"), null));
+        ProfileResponses.Result outOfRangeYear = service.create(USER_ID,
+                new ProfileRequests.Create(Map.of("birthYear", "1899"), null));
+
+        assertThat(overflow.kind()).isEqualTo("validation-error");
+        assertThat(overflow.errors()).containsOnlyKeys("displayName", "birthYear", "heightCm", "weightKg", "unsupported");
+        assertThat(outOfRangeYear.errors()).containsEntry("birthYear", "INVALID_VALUE");
+        verify(profiles, never()).createIfAbsent(eq(USER_ID), anyMap());
+    }
+
     private static User userWithProfile(Map<String, Object> healthProfile) {
         User user = mock(User.class);
         when(user.getHealthProfile()).thenReturn(healthProfile);
