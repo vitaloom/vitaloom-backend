@@ -50,6 +50,7 @@ class AssistantCourseAccountPermissionTest {
 
     @BeforeEach
     void setUp() {
+        when(model.checkPolicy(anyList(), any())).thenReturn(AssistantScriptedChat.ALLOW);
         when(auth.getName()).thenReturn(OWNER);
         when(settings.requireEnabled(OWNER)).thenAnswer(call -> {
             if (!enabled.get()) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
@@ -86,20 +87,25 @@ class AssistantCourseAccountPermissionTest {
         var priorSource = new AssistantCourseAnswers.Source("sleep-recent", 1, "Giấc ngủ", "/sleep/recent", null, null);
         var previous = new AssistantCourseAnswers.Answer("ANSWERED",
                 List.of(new AssistantCourseAnswers.Part("ANSWERED", "Previous response", priorSource)), null);
-        stubConversation(List.of(new AssistantConversation.Turn(UUID.randomUUID().toString(), "Previous raw prompt",
-                NOW.minus(Duration.ofMinutes(1)), previous, null, null)));
+        var old = new AssistantCourseAnswers.Answer("ANSWERED", List.of(new AssistantCourseAnswers.Part("ANSWERED",
+                "Old reply", new AssistantCourseAnswers.Source("water-day", 1, "Water", "/water/progress",
+                "2026-11-18", "2026-11-18"))), null);
+        stubConversation(List.of(
+                new AssistantConversation.Turn(UUID.randomUUID().toString(), "Old grant",
+                        NOW.minus(Duration.ofMinutes(2)), old, null, 2L),
+                new AssistantConversation.Turn(UUID.randomUUID().toString(), "Previous raw prompt",
+                        NOW.minus(Duration.ofMinutes(1)), previous, null, 3L)));
         when(mongo.indexOps(AssistantConversationTurns.Receipt.class)).thenReturn(mock(IndexOperations.class));
         when(mongo.updateFirst(any(Query.class), any(), eq(AssistantConversationTurns.Receipt.class)))
                 .thenReturn(com.mongodb.client.result.UpdateResult.acknowledged(1, 1L, null));
         when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> call.getArgument(0));
-        when(model.converse(anyList(), anyList(), any())).thenAnswer(call -> {
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(call -> {
             List<org.springframework.ai.chat.messages.Message> messages = call.getArgument(0);
             assertThat(messages.getFirst().getText()).contains("Main Sleep duration in the rolling seven-day window")
-                    .doesNotContain(OWNER, "Previous raw prompt", "Previous response");
+                    .doesNotContain(OWNER, "Previous raw prompt", "Previous response", "Old reply",
+                            "Water saved in the journal");
             assertThat(messages.getLast().getText()).isEqualTo("Cảm ơn");
-            return new AssistantGeminiTurn.Result("""
-                    {"parts":[{"kind":"CONVERSATION","text":"Mình luôn sẵn sàng hỗ trợ bạn.","sources":[]}]}
-                    """, AssistantGeminiTurn.Grounding.OPEN);
+            return "Mình luôn sẵn sàng hỗ trợ bạn.";
         });
 
         var response = controller.turn(auth, conversationId, new AssistantCourseController.Send(turnId, "Cảm ơn", false));
@@ -111,12 +117,12 @@ class AssistantCourseAccountPermissionTest {
     @Test
     void revocationDuringProviderWorkPreventsPublicationAndPersistence() {
         stubConversation(List.of());
-        when(model.converse(anyList(), anyList(), any())).thenAnswer(call -> {
+        when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(call -> {
             BooleanSupplier current = call.getArgument(2);
             assertThat(current.getAsBoolean()).isTrue();
             enabled.set(false);
             assertThat(current.getAsBoolean()).isFalse();
-            return new AssistantGeminiTurn.Result("", AssistantGeminiTurn.Grounding.OPEN);
+            return "";
         });
 
         assertThatThrownBy(() -> controller.turn(auth, conversationId,

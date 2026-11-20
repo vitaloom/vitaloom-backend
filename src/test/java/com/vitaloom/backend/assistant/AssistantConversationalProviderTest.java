@@ -213,8 +213,8 @@ class AssistantConversationalProviderTest {
         }
 
         AssistantCourseAnswers.Answer ask(String scenario, String question, boolean allowed, List<String> history) {
-            var answer = answers.answer(OWNER, question, UUID.randomUUID(), history, allowed, () -> true,
-                    () -> allowed);
+            var answer = answers.answer(OWNER, question, UUID.randomUUID(), NOW, history, List.of(),
+                    allowed, () -> true, null, null);
             System.out.println(scenario + " " + answer.outcome() + " " + sourceIds(answer) + " " + text(answer));
             assertThat(answer.outcome()).as(scenario).isNotEqualTo("DEPENDENCY_UNAVAILABLE");
             assertThat(text(answer)).doesNotContain("PERMISSION_REQUIRED", "NO_MATCH", "UNAVAILABLE");

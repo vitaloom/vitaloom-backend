@@ -15,5 +15,13 @@ record AssistantConversation(@Id String id, String owner, @Version Long revision
     }
 
     record Turn(String turnId, String text, Instant at, AssistantCourseAnswers.Answer reply,
-            String inputKey, Long generation) {}
+            String inputKey, Long generation, Boolean journalAction) {
+        @org.springframework.data.annotation.PersistenceCreator
+        Turn {}
+
+        Turn(String turnId, String text, Instant at, AssistantCourseAnswers.Answer reply,
+                String inputKey, Long generation) {
+            this(turnId, text, at, reply, inputKey, generation, false);
+        }
+    }
 }

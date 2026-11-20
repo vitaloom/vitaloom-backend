@@ -16,3 +16,4 @@ This directory records significant architecture decisions for VitaLoom Backend s
 | ADR | Decision | Status |
 |---|---|---|
 | [ADR-001](./ADR-001-statistics-owns-aggregate-read-models.md) | Statistics owns derived aggregate calculations and read models; the MVP calculates on read | Accepted |
+| [ADR-002](./ADR-002-assistant-native-tool-calling.md) | Spring AI owns Assistant tool round trips and Backend receipts own journal outcomes | Accepted |

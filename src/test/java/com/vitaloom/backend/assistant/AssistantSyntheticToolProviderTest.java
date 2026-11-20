@@ -16,6 +16,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.support.ToolCallbacks;
+import org.springframework.ai.tool.annotation.Tool;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,6 +32,8 @@ class AssistantSyntheticToolProviderTest {
     private final List<Document> requests = new ArrayList<>();
     private final AtomicInteger checks = new AtomicInteger();
     private volatile String firstParts;
+    private volatile String finalParts = "{\"text\":\"423\"}";
+    private volatile String finishReason = "STOP";
     private HttpServer server;
     private GeminiAssistantProvider provider;
 
@@ -44,9 +49,10 @@ class AssistantSyntheticToolProviderTest {
                     requests.add(request);
                     index = requests.size();
                 }
-                String parts = index == 1 ? firstParts : "{\"text\":\"423\"}";
+                String parts = index == 1 ? firstParts : finalParts;
                 response = ("{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[" + parts
-                        + "]},\"finishReason\":\"STOP\"}],\"modelVersion\":\"gemini-3.1-flash-lite\"}").getBytes(StandardCharsets.UTF_8);
+                        + "]},\"finishReason\":\"" + finishReason + "\"}],\"modelVersion\":\"gemini-3.1-flash-lite\"}")
+                        .getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 exchange.sendResponseHeaders(200, response.length);
                 exchange.getResponseBody().write(response);
@@ -63,6 +69,75 @@ class AssistantSyntheticToolProviderTest {
     void stop() {
         if (provider != null) provider.close();
         if (server != null) server.stop(0);
+    }
+
+    @Test
+    void nativeAdvisorReturnsVisibleProseAndPreservesTheGoogleFunctionResult() {
+        firstParts = """
+                {"text":"Thought only","thought":true},
+                {"text":"Stale prose"},
+                {"functionCall":{"name":"readExample","args":{"amountMl":250}},"thoughtSignature":"dGVzdA=="}
+                """;
+        finalParts = "{\"text\":\"Hidden\",\"thought\":true},{\"text\":\"Đã đọc dữ liệu.\"}";
+        var tool = new ExampleRead();
+
+        String prose = provider.converse(List.of(new UserMessage("Đọc ví dụ")), List.of(ToolCallbacks.from(tool)),
+                () -> true, calls -> {
+                    assertThat(calls).hasSize(1);
+                    assertThat(org.bson.Document.parse(calls.getFirst().arguments()).get("amountMl")).isEqualTo(250);
+                });
+
+        assertThat(prose).isEqualTo("Đã đọc dữ liệu.");
+        assertThat(tool.calls).isEqualTo(1);
+        assertThat(requests).hasSize(2);
+        assertThat(choice(requests.getFirst()).getString("mode")).isEqualTo("AUTO");
+        var contents = requests.getLast().getList("contents", Document.class);
+        assertThat(contents.get(1).getList("parts", Document.class).getFirst().getString("thoughtSignature"))
+                .isEqualTo("dGVzdA==");
+        var response = contents.get(2).getList("parts", Document.class).getFirst().get("functionResponse", Document.class);
+        assertThat(response.get("response", Document.class)).containsEntry("amountMl", 250);
+    }
+
+    @Test
+    void nativeAdvisorAcceptsAGreetingWithoutTools() {
+        firstParts = "{\"text\":\"Chào bạn!\"}";
+        var tool = new ExampleRead();
+
+        assertThat(provider.converse(List.of(new UserMessage("Chào")), List.of(ToolCallbacks.from(tool)),
+                () -> true, calls -> org.junit.jupiter.api.Assertions.fail("Unexpected tool batch")))
+                .isEqualTo("Chào bạn!");
+        assertThat(tool.calls).isZero();
+        assertThat(requests).hasSize(1);
+    }
+
+    private static final class ExampleRead {
+        private int calls;
+
+        @Tool(description = "Read the synthetic example")
+        public java.util.Map<String, Object> readExample(int amountMl) {
+            calls++;
+            return java.util.Map.of("amountMl", amountMl);
+        }
+    }
+
+    @Test
+    void policyCheckUsesToolFreeGoogleOptions() {
+        firstParts = "{\"text\":\"{\\\"verdict\\\":\\\"ALLOW\\\",\\\"sources\\\":[]}\"}";
+        assertThat(provider.checkPolicy(List.of(new UserMessage("Check synthetic prose")), () -> true))
+                .isEqualTo(AssistantScriptedChat.ALLOW);
+        assertThat(requests).hasSize(1);
+        assertThat(requests.getFirst()).doesNotContainKey("tools");
+        assertThat(requests.getFirst().get("generationConfig", Document.class).getString("responseMimeType"))
+                .isEqualTo("application/json");
+    }
+
+    @Test
+    void nativeAdvisorVetoesTruncatedOutput() {
+        firstParts = "{\"text\":\"Incomplete answer\"}";
+        finishReason = "MAX_TOKENS";
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                provider.converse(List.of(new UserMessage("Chào")), List.of(), () -> true, calls -> {}))
+                .isInstanceOf(AssistantNativeChat.InvalidResponse.class);
     }
 
     @Test

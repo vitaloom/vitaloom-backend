@@ -8,9 +8,11 @@ import com.google.genai.types.HttpRetryOptions;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.AssistantMessage.ToolCall;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.google.genai.GoogleGenAiChatModel;
@@ -39,6 +41,7 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
     private final Client client;
     private final GoogleGenAiChatModel model;
     private final String chatModel;
+    private final AssistantNativeChat conversation;
 
     GeminiAssistantProvider(String key, String chatModel) {
         this(Client.builder().vertexAI(false).apiKey(key)
@@ -62,6 +65,7 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
                         .build())
                 .retryTemplate(new RetryTemplate(RetryPolicy.builder().maxRetries(0).build()))
                 .build();
+        conversation = new AssistantNativeChat(model, chatModel);
     }
 
     @Override
@@ -78,9 +82,20 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
     }
 
     @Override
-    public AssistantGeminiTurn.Result converse(List<Message> messages, List<ToolCallback> tools,
-            BooleanSupplier current) {
-        return call(() -> new AssistantGeminiTurn(model, chatModel).run(messages, tools, current));
+    public String converse(List<Message> messages, List<ToolCallback> tools, BooleanSupplier current,
+            Consumer<List<ToolCall>> beforeTools) {
+        return call(() -> conversation.call(messages, tools, current, beforeTools));
+    }
+
+    @Override
+    public String checkPolicy(List<Message> messages, BooleanSupplier current) {
+        AssistantNativeChat.requireCurrent(current);
+        var options = GoogleGenAiChatOptions.builder().model(chatModel).candidateCount(1)
+                .maxOutputTokens(768).googleSearchRetrieval(false).responseMimeType("application/json")
+                .toolChoice(new ToolChoice(ToolChoice.Mode.NONE, List.of())).build();
+        var response = call(() -> model.call(new Prompt(messages, options)));
+        AssistantNativeChat.requireCurrent(current);
+        return AssistantNativeChat.visibleText(response);
     }
 
     @Override
