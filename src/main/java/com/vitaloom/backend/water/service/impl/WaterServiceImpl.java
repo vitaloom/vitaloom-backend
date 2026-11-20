@@ -15,10 +15,12 @@ import java.util.Map;
 import com.vitaloom.backend.water.dto.response.DailyWaterSummaryResponse;
 import com.vitaloom.backend.water.dto.response.WaterLogResponse;
 import com.vitaloom.backend.water.dto.response.WeeklyWaterProgressResponse;
+import com.vitaloom.backend.water.exception.WaterLogDuplicateException;
 import com.vitaloom.backend.water.exception.WaterValidationException;
 import com.vitaloom.backend.water.model.WaterLog;
 import com.vitaloom.backend.water.repository.WaterLogRepository;
 import com.vitaloom.backend.water.service.WaterService;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import lombok.RequiredArgsConstructor;
 
@@ -82,7 +84,18 @@ public class WaterServiceImpl implements WaterService {
                 throw new WaterValidationException("loggedAt cannot be in the future.");
             }
         }
-        return WaterLogResponse.from(logs.save(new WaterLog(userId, amountMl, loggedAt)));
+        try {
+            return WaterLogResponse.from(logs.save(new WaterLog(userId, amountMl, loggedAt)));
+        } catch (DuplicateKeyException exception) {
+            // The driver places the index name before the duplicate key values.
+            String message = exception.getMessage();
+            int keyValues = message == null ? -1 : message.indexOf(" dup key");
+            if (keyValues >= 0 && message.substring(0, keyValues)
+                    .endsWith(" index: " + WaterLog.USER_LOGGED_AT_UNIQUE_INDEX)) {
+                throw new WaterLogDuplicateException();
+            }
+            throw exception;
+        }
     }
 
     private static LocalDate parseDate(String value) {

@@ -23,4 +23,13 @@ class WaterExceptionHandlerTest {
         assertThat(problem.getDetail()).isEqualTo("loggedAt cannot be in the future.");
         assertThat(problem.getProperties()).containsEntry("code", "VALIDATION_ERROR");
     }
+
+    @Test void duplicateWaterLogUsesConflictProblemDetails() {
+        var response = handler.duplicateLog(new WaterLogDuplicateException());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PROBLEM_JSON);
+        assertThat(response.getBody().getStatus()).isEqualTo(409);
+        assertThat(response.getBody().getProperties()).containsEntry("code", "WATER_LOG_DUPLICATE");
+    }
 }

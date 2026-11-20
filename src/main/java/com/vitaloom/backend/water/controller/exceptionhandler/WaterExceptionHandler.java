@@ -2,6 +2,7 @@ package com.vitaloom.backend.water.controller.exceptionhandler;
 
 import com.vitaloom.backend.water.controller.WaterController;
 import com.vitaloom.backend.water.exception.WaterValidationException;
+import com.vitaloom.backend.water.exception.WaterLogDuplicateException;
 import com.vitaloom.backend.shared.web.ProblemDetailExceptionHandler;
 import com.vitaloom.backend.shared.web.ProblemDetails;
 import org.springframework.core.Ordered;
@@ -30,5 +31,10 @@ public class WaterExceptionHandler extends ProblemDetailExceptionHandler {
     @ExceptionHandler(WaterValidationException.class)
     public ResponseEntity<ProblemDetail> invalidRequest(WaterValidationException exception) {
         return ProblemDetails.response(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", exception.getMessage());
+    }
+
+    @ExceptionHandler(WaterLogDuplicateException.class)
+    public ResponseEntity<ProblemDetail> duplicateLog(WaterLogDuplicateException exception) {
+        return ProblemDetails.response(HttpStatus.CONFLICT, "WATER_LOG_DUPLICATE", exception.getMessage());
     }
 }
