@@ -13,6 +13,9 @@ import com.vitaloom.backend.water.model.WaterLog;
 import com.vitaloom.backend.water.repository.WaterLogRepository;
 import com.vitaloom.backend.water.service.impl.WaterServiceImpl;
 import com.vitaloom.backend.water.exception.WaterValidationException;
+import com.vitaloom.backend.water.exception.WaterLogDuplicateException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DuplicateKeyException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -88,7 +91,10 @@ class WaterServiceTest {
         assertThat(created.amountMl()).isEqualTo(250);
         assertThat(created.loggedAt()).isEqualTo(Instant.parse("2026-11-06T02:15:00Z"));
         assertThat(stored.get(0).getUserId()).isEqualTo("u1");
+        assertThat(stored.get(0).getLoggedAt()).isEqualTo(Instant.parse("2026-11-06T02:15:00Z"));
         assertThatThrownBy(() -> service.create("u1", 0, "2026-11-06T09:00:00Z"))
+                .isInstanceOf(WaterValidationException.class);
+        assertThatThrownBy(() -> service.create("u1", 2001, "2026-11-06T09:00:00Z"))
                 .isInstanceOf(WaterValidationException.class);
         assertThatThrownBy(() -> service.create("u1", 250, "2026-11-06T10:00:01Z"))
                 .isInstanceOf(WaterValidationException.class);
@@ -97,10 +103,12 @@ class WaterServiceTest {
 
     @Test void omittedTimestampUsesServerClockAndExplicitTimestampIsPreserved() {
         var createdNow = service.create("u1", 250, null);
-        var createdAtBoundary = service.create("u1", 100, "2026-11-06T10:00:00Z");
+        var createdExplicit = service.create("u1", 100, "2026-11-06T09:59:59.987654321Z");
 
         assertThat(createdNow.loggedAt()).isEqualTo(Instant.parse("2026-11-06T10:00:00Z"));
-        assertThat(createdAtBoundary.loggedAt()).isEqualTo(Instant.parse("2026-11-06T10:00:00Z"));
+        var explicit = Instant.parse("2026-11-06T09:59:59.987654321Z");
+        assertThat(createdExplicit.loggedAt()).isEqualTo(explicit);
+        assertThat(stored.get(1).getLoggedAt()).isEqualTo(explicit);
         assertThat(stored).hasSize(2);
     }
 
@@ -116,5 +124,48 @@ class WaterServiceTest {
         assertThatThrownBy(() -> service.create("u1", 250, "2026-11-06T10:00:00.001Z"))
                 .isInstanceOf(WaterValidationException.class)
                 .hasMessage("loggedAt cannot be in the future.");
+    }
+
+    @Test void createMapsOnlyDuplicateFromWaterUniqueIndex() {
+        WaterLogRepository duplicateLogs = (WaterLogRepository) Proxy.newProxyInstance(
+                WaterLogRepository.class.getClassLoader(), new Class<?>[]{WaterLogRepository.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("save")) {
+                        throw new DuplicateKeyException("E11000 index: user_logged_at_unique_idx dup key");
+                    }
+                    throw new UnsupportedOperationException(method.getName());
+                });
+        service = new WaterServiceImpl(duplicateLogs, clock);
+
+        assertThatThrownBy(() -> service.create("u1", 250, "2026-11-06T09:15:00+07:00"))
+                .isInstanceOf(WaterLogDuplicateException.class);
+    }
+
+    @Test void createPropagatesUnrelatedDuplicateAndDatabaseErrors() {
+        for (RuntimeException failure : List.of(
+                new DuplicateKeyException("E11000 index: another_unique_idx dup key"),
+                new DuplicateKeyException("E11000 index: _id_ dup key: { _id: index: user_logged_at_unique_idx dup key }"),
+                new DataAccessResourceFailureException("database unavailable"))) {
+            WaterLogRepository failingLogs = (WaterLogRepository) Proxy.newProxyInstance(
+                    WaterLogRepository.class.getClassLoader(), new Class<?>[]{WaterLogRepository.class},
+                    (proxy, method, args) -> {
+                        if (method.getName().equals("save")) throw failure;
+                        throw new UnsupportedOperationException(method.getName());
+                    });
+            service = new WaterServiceImpl(failingLogs, clock);
+
+            assertThatThrownBy(() -> service.create("u1", 250, "2026-11-06T09:15:00+07:00"))
+                    .isSameAs(failure);
+        }
+    }
+
+    @Test void waterLogDeclaresUniqueCompoundIndexMetadata() {
+        var annotation = WaterLog.class.getAnnotation(org.springframework.data.mongodb.core.index.CompoundIndexes.class);
+        assertThat(annotation).isNotNull();
+        assertThat(annotation.value()).anySatisfy(index -> {
+            assertThat(index.name()).isEqualTo(WaterLog.USER_LOGGED_AT_UNIQUE_INDEX);
+            assertThat(index.def()).isEqualTo("{'user_id': 1, 'logged_at': 1}");
+            assertThat(index.unique()).isTrue();
+        });
     }
 }
