@@ -45,7 +45,9 @@ final class AssistantResponsePolicy {
             or specifies no time or date. A past day without a clear time is insufficient.
             """;
     private static final String PROSE = """
-            Check the proposed prose without rewriting it. Prohibit any claim or implication that a journal
+            Check the proposed prose without rewriting it. It must respond to the latest USER message in
+            context. Reject a reply that ignores that message and answers an earlier request instead.
+            Prohibit any claim or implication that a journal
             record was created, updated or deleted, even when the user asked for it. Ordinary conversation
             and questions may be allowed with no sources. Verify each factual health claim, recommendation,
             and personal health comparison against relevant HEALTH_EDUCATION excerpts, including numbers and
@@ -60,27 +62,33 @@ final class AssistantResponsePolicy {
 
     private final AssistantProvider provider;
     private final List<Map<String, String>> conversation;
+    private final List<Map<String, String>> writeConversation;
     private final Instant receivedAt;
     private final BooleanSupplier current;
 
-    AssistantResponsePolicy(AssistantProvider provider, List<Message> messages, Instant receivedAt,
-            BooleanSupplier current) {
+    AssistantResponsePolicy(AssistantProvider provider, List<Message> messages, List<Message> writeMessages,
+            Instant receivedAt, BooleanSupplier current) {
         this.provider = provider;
-        conversation = messages.stream().map(message ->
-                Map.of("role", message.getMessageType().name(), "text", message.getText())).toList();
+        this.conversation = policyMessages(messages);
+        this.writeConversation = policyMessages(writeMessages);
         this.receivedAt = receivedAt;
         this.current = current;
     }
 
+    private static List<Map<String, String>> policyMessages(List<Message> messages) {
+        return messages.stream().map(message ->
+                Map.of("role", message.getMessageType().name(), "text", message.getText())).toList();
+    }
+
     void checkReads(List<ToolCall> calls) {
         var candidates = calls.stream().map(call -> Map.of("name", call.name(), "arguments", call.arguments())).toList();
-        if (check(READ, candidates, Map.of()).verdict() != Verdict.ALLOW) {
+        if (check(conversation, READ, candidates, Map.of()).verdict() != Verdict.ALLOW) {
             throw new Rejected(limitation());
         }
     }
 
     void checkSafety() {
-        var decision = check("""
+        var decision = check(conversation, """
                 Check only the current message's medical safety. For an ordinary request, return ALLOW even
                 if the journal details or intended operation are unclear. No operation will be executed here.
                 """, Map.of(), Map.of());
@@ -88,7 +96,8 @@ final class AssistantResponsePolicy {
     }
 
     boolean permitsWrite(String tool, Map<String, Object> arguments) {
-        return check(WRITE, Map.of("name", tool, "arguments", arguments), Map.of()).verdict() == Verdict.ALLOW;
+        return check(writeConversation, WRITE, Map.of("name", tool, "arguments", arguments), Map.of()).verdict()
+                == Verdict.ALLOW;
     }
 
     AssistantCourseAnswers.Answer publish(String prose, AssistantConversationTools evidence) {
@@ -99,7 +108,7 @@ final class AssistantResponsePolicy {
             if (item.current().getAsBoolean()) facts.put(key,
                     Map.of("kind", item.kind().name(), "title", item.source().title(), "facts", item.facts()));
         });
-        var decision = check(PROSE, prose, facts);
+        var decision = check(conversation, PROSE, prose, facts);
         if (decision.verdict() != Verdict.ALLOW || decision.sources().stream().anyMatch(key ->
                 !facts.containsKey(key) || !collected.get(key).current().getAsBoolean())) {
             return unavailableEvidence(evidence);
@@ -120,9 +129,10 @@ final class AssistantResponsePolicy {
         return new AssistantCourseAnswers.Answer("ANSWERED", List.copyOf(parts), null);
     }
 
-    private Decision check(String instruction, Object candidate, Map<String, Object> evidence) {
+    private Decision check(List<Map<String, String>> context, String instruction, Object candidate,
+            Map<String, Object> evidence) {
         AssistantNativeChat.requireCurrent(current);
-        String payload = JSON.writeValueAsString(Map.of("conversation", conversation, "candidate", candidate,
+        String payload = JSON.writeValueAsString(Map.of("conversation", context, "candidate", candidate,
                 "evidence", evidence, "referenceTime", receivedAt.atZone(AssistantJournalActions.ZONE).toString()));
         String output = provider.checkPolicy(List.of(new SystemMessage(POLICY + "\n" + instruction),
                 new UserMessage(payload)), current);

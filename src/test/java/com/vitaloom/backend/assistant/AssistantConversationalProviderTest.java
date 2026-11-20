@@ -22,6 +22,9 @@ import java.util.UUID;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.data.mongodb.core.MongoTemplate;
 
 @EnabledIfEnvironmentVariable(named = "ASSISTANT_SYNTHETIC_E2E", matches = "true")
@@ -29,6 +32,20 @@ class AssistantConversationalProviderTest {
     private static final String OWNER = "synthetic-conversation-fixture";
     private static final Instant NOW = Instant.parse("2026-11-18T05:00:00Z");
     private static final LocalDate TODAY = LocalDate.parse("2026-11-18");
+
+    @Test
+    void shortAnswerUsesThePreviousAssistantQuestion() {
+        try (var scenario = new Scenario()) {
+            List<Message> dialogue = List.of(new UserMessage("Giấc ngủ gần đây của tôi như thế nào?"),
+                    new AssistantMessage("Bạn có 4 đêm ghi nhận giấc ngủ trong 7 ngày qua.\n\n"
+                            + "Đêm nay bạn định đi ngủ lúc mấy giờ?"));
+            var reply = scenario.ask("bedtime-follow-up", "khoảng 12h30", true, List.of("SLEEP_RECENT"), dialogue);
+            assertThat(reply.outcome()).isEqualTo("ANSWERED");
+            assertThat(text(reply)).containsPattern("(?iu)(đi ngủ|giờ ngủ)")
+                    .containsPattern("(?iu)(0[h:]30|12[h:]30|0 giờ 30|12 giờ 30)");
+            verifyNoInteractions(scenario.water, scenario.journal);
+        }
+    }
 
     @Test
     void recentSleepAndHybridFollowUp() {
@@ -117,6 +134,31 @@ class AssistantConversationalProviderTest {
                         assertThat(sourceIds(both)).contains("sleep-recent", "water-day");
                         assertThat(text(both)).containsPattern("(?iu)(1[., ]?250|1[.,]25)");
                     });
+        }
+    }
+
+    @Test
+    void readsRecentSleepForReportedQuestion() {
+        try (var scenario = new Scenario()) {
+            var recent = scenario.ask("device-recent", "Gần đây tôi ngủ có tốt không?", true, List.of());
+            assertThat(sourceIds(recent)).contains("sleep-recent");
+        }
+    }
+
+    @Test
+    void readsCurrentWeekSleepForReportedQuestion() {
+        try (var scenario = new Scenario()) {
+            var week = scenario.ask("device-week", "Tuần này lịch sử giấc ngủ của tôi như thế nào?", true, List.of());
+            assertThat(sourceIds(week)).contains("sleep-week-to-date");
+        }
+    }
+
+    @Test
+    void readsTodaysWaterForReportedQuestion() {
+        try (var scenario = new Scenario()) {
+            var water = scenario.ask("device-water", "Hôm nay tôi đã uống đủ nước chưa?", true, List.of());
+            assertThat(sourceIds(water)).contains("water-day");
+            assertThat(text(water)).containsPattern("(?iu)(1[., ]?250|1[.,]25)");
         }
     }
 
@@ -213,7 +255,12 @@ class AssistantConversationalProviderTest {
         }
 
         AssistantCourseAnswers.Answer ask(String scenario, String question, boolean allowed, List<String> history) {
-            var answer = answers.answer(OWNER, question, UUID.randomUUID(), NOW, history, List.of(),
+            return ask(scenario, question, allowed, history, List.of());
+        }
+
+        AssistantCourseAnswers.Answer ask(String scenario, String question, boolean allowed, List<String> history,
+                List<Message> dialogue) {
+            var answer = answers.answer(OWNER, question, UUID.randomUUID(), NOW, history, dialogue, List.of(),
                     allowed, () -> true, null, null);
             System.out.println(scenario + " " + answer.outcome() + " " + sourceIds(answer) + " " + text(answer));
             assertThat(answer.outcome()).as(scenario).isNotEqualTo("DEPENDENCY_UNAVAILABLE");

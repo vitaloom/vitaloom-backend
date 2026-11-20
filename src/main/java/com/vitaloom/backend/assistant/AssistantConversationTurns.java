@@ -16,6 +16,7 @@ import java.util.UUID;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -46,7 +47,9 @@ final class AssistantConversationTurns {
     private static final Duration CONTEXT_AGE = Duration.ofMinutes(30);
     private static final Duration WRITE_SETTLEMENT_TIME = Duration.ofMinutes(2);
     private static final Pattern JWT = Pattern.compile("\\beyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\b");
-    private static final int MAX_CONTEXT_TURNS = 3;
+    private static final int MAX_CONTEXT_TURNS = 5;
+    private static final int MAX_WRITE_CONTEXT_TURNS = 3;
+    private static final int MAX_CONTEXT_REPLY_CHARS = 1800;
     private static final int MAX_TURNS = 50;
     private final MongoTemplate mongo;
     private final Clock clock;
@@ -265,17 +268,30 @@ final class AssistantConversationTurns {
                 .distinct().limit(4).toList();
         List<Message> context = new ArrayList<>();
         for (var turn : recent.reversed()) {
-            // Source-backed replies contribute topics only. Every personal answer starts with a fresh lookup.
+            String reply = turn.reply().parts().stream().map(AssistantCourseAnswers.Part::text)
+                    .filter(part -> part != null && !part.isBlank()).collect(Collectors.joining("\n\n"));
+            if (reply.isEmpty()) continue;
+            String safeReply = redact(auth, reply);
+            context.add(new UserMessage(redact(auth, turn.text())));
+            int start = Math.max(0, safeReply.length() - MAX_CONTEXT_REPLY_CHARS);
+            context.add(new AssistantMessage(safeReply.substring(start)));
+        }
+        var writeTurns = recent.stream().limit(MAX_WRITE_CONTEXT_TURNS)
+                .takeWhile(turn -> !completedJournalAction(turn)).toList();
+        List<Message> writeContext = new ArrayList<>();
+        for (var turn : writeTurns.reversed()) {
             if (turn.reply().parts().stream().anyMatch(part -> part.source() != null)) continue;
             String reply = turn.reply().parts().stream().map(AssistantCourseAnswers.Part::text)
                     .filter(part -> part != null && !part.isBlank()).findFirst().orElse("");
             if (reply.isEmpty()) continue;
-            context.add(new UserMessage(redact(auth, turn.text())));
-            context.add(new AssistantMessage(redact(auth, reply.substring(0, Math.min(reply.length(), 1800)))));
+            String safeReply = redact(auth, reply);
+            writeContext.add(new UserMessage(redact(auth, turn.text())));
+            int end = Math.min(safeReply.length(), MAX_CONTEXT_REPLY_CHARS);
+            writeContext.add(new AssistantMessage(safeReply.substring(0, end)));
         }
         verifyCurrent(auth, preference, current);
         return new AssistantConversationalAnswers(model, faq.getIfAvailable(), reads).answer(
-                auth.getName(), redact(auth, text), turnId, now, topics, context, true, current,
+                auth.getName(), redact(auth, text), turnId, now, topics, context, writeContext, true, current,
                 journal, execution);
     }
 
@@ -284,16 +300,20 @@ final class AssistantConversationTurns {
         var recent = new ArrayList<AssistantConversation.Turn>();
         var today = now.atZone(AssistantJournalActions.ZONE).toLocalDate();
         for (var turn : row.turns().reversed()) {
-            if (recent.size() >= MAX_CONTEXT_TURNS || Boolean.TRUE.equals(turn.journalAction())
+            if (recent.size() >= MAX_CONTEXT_TURNS
                     || !Objects.equals(turn.generation(), preference.generation())
                     || !turn.at().plus(CONTEXT_AGE).isAfter(now)
                     || !today.equals(turn.at().atZone(AssistantJournalActions.ZONE).toLocalDate())) break;
-            // Legacy canonical journal acknowledgements predate the journalAction marker.
-            if (turn.reply().parts().stream().anyMatch(part -> part.source() == null && part.text() != null
-                    && (part.text().startsWith("Đã ghi ") || part.text().equals(UNCERTAIN_WRITE)))) break;
             recent.add(turn);
         }
         return recent;
+    }
+
+    private static boolean completedJournalAction(AssistantConversation.Turn turn) {
+        // Legacy canonical journal acknowledgements predate the journalAction marker.
+        return Boolean.TRUE.equals(turn.journalAction())
+                || turn.reply().parts().stream().anyMatch(part -> part.source() == null && part.text() != null
+                        && (part.text().startsWith("Đã ghi ") || part.text().equals(UNCERTAIN_WRITE)));
     }
 
     AssistantConversation createIfNew(Authentication auth, AssistantAccountSettings.Preference preference, UUID id) {

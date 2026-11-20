@@ -101,10 +101,12 @@ class AssistantCourseAccountPermissionTest {
         when(mongo.save(any(AssistantConversation.class))).thenAnswer(call -> call.getArgument(0));
         when(model.converse(anyList(), anyList(), any(), any())).thenAnswer(call -> {
             List<org.springframework.ai.chat.messages.Message> messages = call.getArgument(0);
-            assertThat(messages.getFirst().getText()).contains("Main Sleep duration in the rolling seven-day window")
+            assertThat(messages.getFirst().getText())
                     .doesNotContain(OWNER, "Previous raw prompt", "Previous response", "Old reply",
                             "Water saved in the journal");
-            assertThat(messages.getLast().getText()).isEqualTo("Cảm ơn");
+            assertThat(messages.subList(1, messages.size()))
+                    .extracting(org.springframework.ai.chat.messages.Message::getText)
+                    .containsExactly("Previous raw prompt", "Previous response", "Cảm ơn");
             return "Mình luôn sẵn sàng hỗ trợ bạn.";
         });
 

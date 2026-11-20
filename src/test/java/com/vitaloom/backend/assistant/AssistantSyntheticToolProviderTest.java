@@ -1,9 +1,12 @@
 package com.vitaloom.backend.assistant;
 
 import com.google.genai.Client;
+import com.google.genai.errors.GenAiIOException;
 import com.google.genai.types.HttpOptions;
+import com.google.genai.types.HttpRetryOptions;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -34,6 +37,7 @@ class AssistantSyntheticToolProviderTest {
     private volatile String firstParts;
     private volatile String finalParts = "{\"text\":\"423\"}";
     private volatile String finishReason = "STOP";
+    private volatile List<Integer> unavailableRequests = List.of();
     private HttpServer server;
     private GeminiAssistantProvider provider;
 
@@ -49,18 +53,22 @@ class AssistantSyntheticToolProviderTest {
                     requests.add(request);
                     index = requests.size();
                 }
+                boolean unavailable = unavailableRequests.contains(index);
                 String parts = index == 1 ? firstParts : finalParts;
-                response = ("{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[" + parts
+                response = (unavailable
+                        ? "{\"error\":{\"code\":503,\"status\":\"UNAVAILABLE\",\"message\":\"Synthetic overload\"}}"
+                        : "{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[" + parts
                         + "]},\"finishReason\":\"" + finishReason + "\"}],\"modelVersion\":\"gemini-3.1-flash-lite\"}")
                         .getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
-                exchange.sendResponseHeaders(200, response.length);
+                exchange.sendResponseHeaders(unavailable ? 503 : 200, response.length);
                 exchange.getResponseBody().write(response);
             }
         });
         server.start();
         var client = Client.builder().vertexAI(false).apiKey("synthetic-test-key")
-                .httpOptions(HttpOptions.builder().baseUrl("http://127.0.0.1:" + server.getAddress().getPort()).build())
+                .httpOptions(HttpOptions.builder().baseUrl("http://127.0.0.1:" + server.getAddress().getPort())
+                        .retryOptions(HttpRetryOptions.builder().attempts(1)).build())
                 .build();
         provider = new GeminiAssistantProvider(client, "gemini-3.1-flash-lite");
     }
@@ -108,6 +116,68 @@ class AssistantSyntheticToolProviderTest {
                 .isEqualTo("Chào bạn!");
         assertThat(tool.calls).isZero();
         assertThat(requests).hasSize(1);
+    }
+
+    @Test
+    void retriesTheOverloadedModelRoundWithoutRepeatingTheRead() {
+        firstParts = """
+                {"functionCall":{"name":"readExample","args":{"amountMl":250}},"thoughtSignature":"dGVzdA=="}
+                """;
+        finalParts = "{\"text\":\"Nhật ký có 250 ml.\"}";
+        unavailableRequests = List.of(2);
+        var tool = new ExampleRead();
+
+        assertThat(provider.converse(List.of(new UserMessage("Hôm nay tôi đã uống bao nhiêu nước?")),
+                List.of(ToolCallbacks.from(tool)), () -> true, calls -> {})).isEqualTo("Nhật ký có 250 ml.");
+
+        assertThat(tool.calls).isEqualTo(1);
+        assertThat(requests).hasSize(3);
+        assertThat(requests.get(2)).isEqualTo(requests.get(1));
+    }
+
+    @Test
+    void retriesAnOverloadedPolicyRequestOnce() {
+        finalParts = new Document("text", AssistantScriptedChat.ALLOW).toJson();
+        unavailableRequests = List.of(1);
+
+        assertThat(provider.checkPolicy(List.of(new UserMessage("Check synthetic read")), () -> true))
+                .isEqualTo(AssistantScriptedChat.ALLOW);
+
+        assertThat(requests).hasSize(2);
+        assertThat(requests.getLast()).isEqualTo(requests.getFirst());
+        assertThat(requests.getLast()).doesNotContainKey("tools");
+    }
+
+    @Test
+    void stopsAfterTwoOverloadResponses() {
+        unavailableRequests = List.of(1, 2);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                provider.checkPolicy(List.of(new UserMessage("Check synthetic read")), () -> true))
+                .hasRootCauseInstanceOf(com.google.genai.errors.ServerException.class);
+        assertThat(requests).hasSize(2);
+    }
+
+    @Test
+    void rechecksAccessBeforeRetryingTheProvider() {
+        unavailableRequests = List.of(1);
+        var allowedChecks = new AtomicInteger();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> provider.checkPolicy(
+                List.of(new UserMessage("Check synthetic read")), () -> allowedChecks.incrementAndGet() == 1))
+                .isInstanceOf(AssistantNativeChat.AccessChanged.class);
+        assertThat(requests).hasSize(1);
+    }
+
+    @Test
+    void retriesTheSdkCallTimeout() {
+        var attempts = new AtomicInteger();
+        String result = GeminiAssistantProvider.requestWithTransientRetry(() -> true, () -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new GenAiIOException("Failed to execute HTTP request.", new InterruptedIOException("timeout"));
+            }
+            return "Recovered";
+        });
+        assertThat(result).isEqualTo("Recovered");
+        assertThat(attempts.get()).isEqualTo(2);
     }
 
     private static final class ExampleRead {

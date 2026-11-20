@@ -80,8 +80,8 @@ final class AssistantNativeChat {
 
         @Override
         public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
-            requireCurrent(current);
-            var result = chain.nextCall(request);
+            var result = GeminiAssistantProvider.requestWithTransientRetry(current,
+                    () -> chain.copy(this).nextCall(request));
             requireCurrent(current);
             var response = result.chatResponse();
             verifyResponse(response);

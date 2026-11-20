@@ -5,8 +5,11 @@ import com.google.genai.errors.ApiException;
 import com.google.genai.types.EmbedContentConfig;
 import com.google.genai.types.HttpOptions;
 import com.google.genai.types.HttpRetryOptions;
+import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -89,13 +92,46 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
 
     @Override
     public String checkPolicy(List<Message> messages, BooleanSupplier current) {
-        AssistantNativeChat.requireCurrent(current);
         var options = GoogleGenAiChatOptions.builder().model(chatModel).candidateCount(1)
                 .maxOutputTokens(768).googleSearchRetrieval(false).responseMimeType("application/json")
                 .toolChoice(new ToolChoice(ToolChoice.Mode.NONE, List.of())).build();
-        var response = call(() -> model.call(new Prompt(messages, options)));
+        var response = call(() -> requestWithTransientRetry(current, () -> model.call(new Prompt(messages, options))));
         AssistantNativeChat.requireCurrent(current);
         return AssistantNativeChat.visibleText(response);
+    }
+
+    // Retry a single provider request so the tool advisor never re-executes a callback.
+    static <T> T requestWithTransientRetry(BooleanSupplier current, Supplier<T> request) {
+        AssistantNativeChat.requireCurrent(current);
+        try {
+            return request.get();
+        } catch (RuntimeException failure) {
+            if (apiStatus(failure) != 503 && !requestTimedOut(failure)) throw failure;
+            try {
+                Thread.sleep(ThreadLocalRandom.current().nextLong(750, 1251));
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw failure;
+            }
+            AssistantNativeChat.requireCurrent(current);
+            return request.get();
+        }
+    }
+
+    private static int apiStatus(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ApiException api) return api.code();
+        }
+        return 0;
+    }
+
+    private static boolean requestTimedOut(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            // OkHttp's whole-call deadline uses InterruptedIOException rather than SocketTimeoutException.
+            if (cause instanceof SocketTimeoutException
+                    || (cause instanceof InterruptedIOException && "timeout".equals(cause.getMessage()))) return true;
+        }
+        return false;
     }
 
     @Override
@@ -175,12 +211,16 @@ final class GeminiAssistantProvider implements AssistantProvider, AutoCloseable 
         try {
             return request.get();
         } catch (RuntimeException failure) {
-            for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-                if (cause instanceof ApiException api && api.code() == 429) {
-                    LoggerFactory.getLogger(GeminiAssistantProvider.class)
-                            .warn("Assistant Gemini quota exhausted (HTTP 429). Request stopped.");
-                    break;
-                }
+            int status = apiStatus(failure);
+            if (status == 429) {
+                LoggerFactory.getLogger(GeminiAssistantProvider.class)
+                        .warn("Assistant Gemini quota exhausted (HTTP 429). Request stopped.");
+            } else if (status == 503) {
+                LoggerFactory.getLogger(GeminiAssistantProvider.class)
+                        .warn("Assistant Gemini unavailable (HTTP 503). Request stopped.");
+            } else if (requestTimedOut(failure)) {
+                LoggerFactory.getLogger(GeminiAssistantProvider.class)
+                        .warn("Assistant Gemini request timed out. Request stopped.");
             }
             throw failure;
         }

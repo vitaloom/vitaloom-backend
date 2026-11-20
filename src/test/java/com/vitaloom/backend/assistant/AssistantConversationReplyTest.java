@@ -189,7 +189,8 @@ class AssistantConversationReplyTest {
     }
 
     private AssistantCourseAnswers.Answer ask(String text, BooleanSupplier current) {
-        return answers.answer(OWNER, text, UUID.randomUUID(), NOW, List.of(), List.of(), true, current, null, null);
+        return answers.answer(OWNER, text, UUID.randomUUID(), NOW, List.of(), List.of(), List.of(),
+                true, current, null, null);
     }
 
     private static String verdict(String verdict, String sources) {
