@@ -4,8 +4,11 @@ import com.vitaloom.backend.heartrate.model.HeartRateMeasurement;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Stream;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.BulkOperationException;
+import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.index.IndexOperations;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -27,6 +30,22 @@ public class HeartRateRepository {
     }
 
     public void insert(HeartRateMeasurement measurement) { mongo.insert(measurement); }
+
+    public Set<Integer> insertAll(List<HeartRateMeasurement> measurements) {
+        BulkOperations bulk = mongo.bulkOps(BulkOperations.BulkMode.UNORDERED, HeartRateMeasurement.class);
+        measurements.forEach(bulk::insert);
+        try {
+            bulk.execute();
+            return Set.of();
+        } catch (BulkOperationException exception) {
+            if (exception.getErrors().isEmpty()
+                    || exception.getErrors().stream().anyMatch(error -> error.getCode() != 11000)) {
+                throw exception;
+            }
+            return exception.getErrors().stream().map(error -> error.getIndex())
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        }
+    }
 
     public Optional<HeartRateMeasurement> findIdentity(String accountId, String deviceId, String eventId) {
         Query query = Query.query(Criteria.where("account_id").is(accountId).and("device_id").is(deviceId)

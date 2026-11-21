@@ -14,11 +14,13 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import lombok.RequiredArgsConstructor;
 
@@ -34,44 +36,59 @@ public class HeartRateServiceImpl implements HeartRateService, HeartRateReadQuer
             throw new InvalidHeartRateRequestException("INVALID_BATCH", "Batch requires deviceId, runId, and 1 to 500 events.");
         }
         Instant receivedAt = clock.instant();
-        int accepted = 0, duplicates = 0, rejected = 0;
-        List<HeartRateBatchResponse.Result> results = new ArrayList<>();
+        List<HeartRateBatchResponse.Result> results = new ArrayList<>(
+                java.util.Collections.nCopies(request.events().size(), null));
+        Map<String, List<Pending>> byEventId = new LinkedHashMap<>();
         for (int i = 0; i < request.events().size(); i++) {
             var event = request.events().get(i);
             String error = validate(event, receivedAt);
             if (error != null) {
-                rejected++;
-                results.add(result(i, event == null ? null : event.eventId(), "REJECTED", error));
+                results.set(i, result(i, event == null ? null : event.eventId(), "REJECTED", error));
                 continue;
             }
             Instant occurredAt;
             try { occurredAt = Instant.parse(event.occurredAt()).truncatedTo(ChronoUnit.MILLIS); }
             catch (DateTimeParseException ex) {
-                rejected++;
-                results.add(result(i, event.eventId(), "REJECTED", "INVALID_OCCURRED_AT"));
+                results.set(i, result(i, event.eventId(), "REJECTED", "INVALID_OCCURRED_AT"));
                 continue;
             }
             var measurement = new HeartRateMeasurement(accountId, request.deviceId(), event.eventId(),
                     event.heartRateBpm(), occurredAt, receivedAt);
-            try {
-                repository.insert(measurement);
-                accepted++;
-                results.add(result(i, event.eventId(), "ACCEPTED", null));
-            } catch (DuplicateKeyException duplicate) {
-                var existing = repository.findIdentity(accountId, request.deviceId(), event.eventId())
-                        .orElseThrow(() -> duplicate);
-                if (existing.getHeartRateBpm() == measurement.getHeartRateBpm()
-                        && existing.getOccurredAt().equals(measurement.getOccurredAt())) {
-                    duplicates++;
-                    results.add(result(i, event.eventId(), "DUPLICATE", null));
-                } else {
-                    rejected++;
-                    results.add(result(i, event.eventId(), "REJECTED", "EVENT_ID_CONFLICT"));
-                }
+            byEventId.computeIfAbsent(event.eventId(), ignored -> new ArrayList<>())
+                    .add(new Pending(i, event.eventId(), measurement));
+        }
+
+        List<Pending> canonical = byEventId.values().stream().map(group -> group.get(0)).toList();
+        Set<Integer> duplicateWriteIndexes = canonical.isEmpty() ? Set.of()
+                : repository.insertAll(canonical.stream().map(Pending::measurement).toList());
+        for (int bulkIndex = 0; bulkIndex < canonical.size(); bulkIndex++) {
+            List<Pending> group = byEventId.get(canonical.get(bulkIndex).eventId());
+            HeartRateMeasurement existing = duplicateWriteIndexes.contains(bulkIndex)
+                    ? repository.findIdentity(accountId, request.deviceId(), canonical.get(bulkIndex).eventId())
+                            .orElseThrow(() -> new IllegalStateException("Duplicate Heart Rate identity was not found after bulk insert."))
+                    : canonical.get(bulkIndex).measurement();
+            for (int memberIndex = 0; memberIndex < group.size(); memberIndex++) {
+                Pending pending = group.get(memberIndex);
+                boolean same = samePayload(existing, pending.measurement());
+                String status = duplicateWriteIndexes.contains(bulkIndex) || memberIndex > 0
+                        ? (same ? "DUPLICATE" : "REJECTED")
+                        : "ACCEPTED";
+                String error = "REJECTED".equals(status) ? "EVENT_ID_CONFLICT" : null;
+                results.set(pending.index(), result(pending.index(), pending.eventId(), status, error));
             }
         }
+        int accepted = (int) results.stream().filter(item -> "ACCEPTED".equals(item.status())).count();
+        int duplicates = (int) results.stream().filter(item -> "DUPLICATE".equals(item.status())).count();
+        int rejected = results.size() - accepted - duplicates;
         return new HeartRateBatchResponse(request.runId(), request.events().size(), accepted, duplicates, rejected, results);
     }
+
+    private static boolean samePayload(HeartRateMeasurement left, HeartRateMeasurement right) {
+        return left.getHeartRateBpm() == right.getHeartRateBpm()
+                && left.getOccurredAt().equals(right.getOccurredAt());
+    }
+
+    private record Pending(int index, String eventId, HeartRateMeasurement measurement) { }
 
     public Optional<HeartRateSample> findLatestSample(String accountId) {
         return repository.latest(accountId)

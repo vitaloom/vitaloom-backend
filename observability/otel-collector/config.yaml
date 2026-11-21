@@ -58,7 +58,7 @@ receivers:
     include_file_name: false
     operators:
       - type: regex_parser
-        regex: '^(?P<rejected>[01]) [0-9]+\.[0-9]+ [0-9]+$'
+        regex: '^(?P<rejected>[01]) (?P<status>[0-9]{3})? ?[0-9]+\.[0-9]+ [0-9]+$'
 
 extensions:
   file_storage:
@@ -72,8 +72,34 @@ connectors:
         sum:
           value: Int(attributes["rejected"])
           monotonic: true
+      - name: nginx.gateway.errors.499
+        description: Nginx client-closed requests
+        sum:
+          value: Int(attributes["gateway_error_499"])
+          monotonic: true
+      - name: nginx.gateway.errors.502
+        description: Nginx bad-gateway responses
+        sum:
+          value: Int(attributes["gateway_error_502"])
+          monotonic: true
+      - name: nginx.gateway.errors.504
+        description: Nginx gateway-timeout responses
+        sum:
+          value: Int(attributes["gateway_error_504"])
+          monotonic: true
 
 processors:
+  transform/nginx_gateway_errors:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["gateway_error_499"], "0")
+          - set(attributes["gateway_error_499"], "1") where attributes["status"] == "499"
+          - set(attributes["gateway_error_502"], "0")
+          - set(attributes["gateway_error_502"], "1") where attributes["status"] == "502"
+          - set(attributes["gateway_error_504"], "0")
+          - set(attributes["gateway_error_504"], "1") where attributes["status"] == "504"
   deltatocumulative:
   filter/mongodb:
     error_mode: ignore
@@ -107,6 +133,7 @@ service:
       exporters: [prometheus]
     logs/nginx_rate_limit:
       receivers: [filelog/nginx_rate_limit]
+      processors: [transform/nginx_gateway_errors]
       exporters: [signal_to_metrics]
     metrics/nginx_rate_limit:
       receivers: [signal_to_metrics]
